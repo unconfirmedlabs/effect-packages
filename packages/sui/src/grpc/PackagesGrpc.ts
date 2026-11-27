@@ -5,6 +5,7 @@ import * as RequestResolver from "effect/RequestResolver"
 import { type FunctionTarget, type MoveFunction, Packages, type Parameter, type Reference } from "../Packages.ts"
 import type { RpcError } from "../RpcError.ts"
 import type * as P from "./generated/proto.ts"
+import { convert } from "./convert.ts"
 import * as Rpc from "./generated/rpc.ts"
 import { successByKey } from "./cache.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
@@ -33,14 +34,18 @@ const typeString = (b: P.OpenSignatureBody | undefined): string | undefined => {
 }
 
 const parameter = (p: P.OpenSignature): Parameter => {
-  const out = { reference: REFERENCE[p.reference ?? 0] ?? "Value", typeName: p.body?.type_name } as const
+  const type = typeString(p.body)
+  const out = { reference: REFERENCE[p.reference ?? 0] ?? "Value", typeName: p.body?.type_name, ...(type !== undefined && { type }) } as const
   const inst = p.body?.type === 10 ? p.body.type_parameter_instantiation ?? [] : []
   if (inst.length === 0) return out
   const typeArguments = inst.map(typeString)
   return typeArguments.every((a) => a !== undefined) ? { ...out, typeArguments: typeArguments as Array<string> } : out
 }
 
-/** `Packages` over gRPC. Function signatures are immutable; successful reads are cached for the layer's lifetime. */
+/**
+ * `Packages` over gRPC. Function signatures are immutable; successful reads are
+ * cached for the layer's lifetime, and concurrent reads of one target share a request.
+ */
 export const layer: Layer.Layer<Packages, never, GrpcWeb> = Layer.effect(
   Packages,
   Effect.gen(function*() {
@@ -53,10 +58,12 @@ export const layer: Layer.Layer<Packages, never, GrpcWeb> = Layer.effect(
           name: request.function
         })
         .pipe(
-          Effect.map((r): MoveFunction => ({
-            isEntry: r.function?.is_entry ?? false,
-            parameters: (r.function?.parameters ?? []).map(parameter)
-          }))
+          Effect.flatMap((r) =>
+            convert(Rpc.MovePackageService_GetFunction.path, (): MoveFunction => {
+              if (r.function === undefined) throw new Error("no function")
+              return { isEntry: r.function.is_entry ?? false, parameters: (r.function.parameters ?? []).map(parameter) }
+            })
+          )
         )
     )
     // Successes only: a transient failure must not poison the target for the layer's lifetime.

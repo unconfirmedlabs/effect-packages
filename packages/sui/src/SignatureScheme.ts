@@ -35,12 +35,12 @@ export const toSuiBytes = (pk: PublicKey): Uint8Array => {
   return out
 }
 
-export class InvalidSignature extends Schema.TaggedError<InvalidSignature>()("InvalidSignature", {
+export class InvalidSignature extends /* @__PURE__ */ Schema.TaggedError<InvalidSignature>()("InvalidSignature", {
   scheme: Schema.String,
   reason: Schema.String
 }) {}
 
-export class UnsupportedScheme extends Schema.TaggedError<UnsupportedScheme>()("UnsupportedScheme", {
+export class UnsupportedScheme extends /* @__PURE__ */ Schema.TaggedError<UnsupportedScheme>()("UnsupportedScheme", {
   flag: Schema.Number
 }) {
   override get message() {
@@ -53,7 +53,7 @@ export class UnsupportedScheme extends Schema.TaggedError<UnsupportedScheme>()("
  * asks a node) couldn't reach it. Not a verdict on the signature; retry when
  * `retryable`.
  */
-export class VerificationUnavailable extends Schema.TaggedError<VerificationUnavailable>()("VerificationUnavailable", {
+export class VerificationUnavailable extends /* @__PURE__ */ Schema.TaggedError<VerificationUnavailable>()("VerificationUnavailable", {
   scheme: Schema.String,
   reason: Schema.String,
   retryable: Schema.Boolean
@@ -110,7 +110,7 @@ type Requirements<S extends ReadonlyArray<SignatureScheme<any>>> = [S[number]] e
   : S[number] extends SignatureScheme<infer R> ? R
   : never
 
-export class SignatureSchemes extends Context.Service<SignatureSchemes, Registry>()(
+export class SignatureSchemes extends /* @__PURE__ */ Context.Service<SignatureSchemes, Registry>()(
   "@unconfirmed/sui/SignatureSchemes"
 ) {
   /**

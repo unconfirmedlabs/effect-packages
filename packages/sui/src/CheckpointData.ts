@@ -30,17 +30,17 @@ export interface Checkpoint {
   readonly transactions: ReadonlyArray<CheckpointTransaction>
 }
 
-export class CheckpointNotFound extends Schema.TaggedError<CheckpointNotFound>()("CheckpointNotFound", {
+export class CheckpointNotFound extends /* @__PURE__ */ Schema.TaggedError<CheckpointNotFound>()("CheckpointNotFound", {
   sequenceNumber: Schema.BigInt
 }) {}
 
 /** `follow` could not list a gap between history and the live subscription in time. */
-export class CheckpointGap extends Schema.TaggedError<CheckpointGap>()("CheckpointGap", {
+export class CheckpointGap extends /* @__PURE__ */ Schema.TaggedError<CheckpointGap>()("CheckpointGap", {
   from: Schema.BigInt,
   to: Schema.BigInt
 }) {}
 
-export class CheckpointData extends Context.Service<CheckpointData, {
+export class CheckpointData extends /* @__PURE__ */ Context.Service<CheckpointData, {
   readonly get: (sequenceNumber: bigint) => Effect.Effect<Checkpoint, CheckpointNotFound | RpcError>
   /** History in order, `start` inclusive to `end` exclusive (default: the tip at the time of the call, pinned for the whole scan). */
   readonly list: (options?: { readonly start?: bigint; readonly end?: bigint }) => Stream.Stream<Checkpoint, RpcError>

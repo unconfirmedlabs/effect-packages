@@ -99,11 +99,17 @@ export const get = <A, E>(objectId: string, schema: Schema.Codec<A, E>) =>
  * dropped whole by every bundler (esbuild keeps unannotated nested calls).
  */
 export const datatype = <F extends TypeFn, S extends Schema.Top>(type: F, schema: () => S): S & { readonly type: F } =>
-  Object.assign(schema(), { type })
+  Object.assign(copy(schema()), { type })
 
-/** Attach `get(objectId)` to a `key` struct's schema. */
+/**
+ * A shallow copy of a schema (same prototype, same AST), so attaching `type` or
+ * `get` never rewrites a schema shared elsewhere (`Move.Table` is also `Bag`).
+ */
+const copy = <S extends Schema.Top>(schema: S): S => Object.assign(Object.create(Object.getPrototypeOf(schema)), schema)
+
+/** Attach `get(objectId)` to a `key` struct's schema (a copy; the given schema is unchanged). */
 export const withGet = <S extends Schema.Top>(schema: S): S & { readonly get: Get<S["Type"]> } =>
-  Object.assign(schema, { get: (objectId: string) => get(objectId, schema as unknown as Schema.Codec<S["Type"]>) })
+  Object.assign(copy(schema), { get: (objectId: string) => get(objectId, schema as unknown as Schema.Codec<S["Type"]>) })
 
 /** A `key` struct: `Thing.type()` and `Thing.get(objectId)`. */
 export const object = <F extends TypeFn, S extends Schema.Top>(
@@ -118,7 +124,7 @@ export const object = <F extends TypeFn, S extends Schema.Top>(
 export const generic = <F extends TypeFn, Make extends (...schemas: ReadonlyArray<any>) => Schema.Top>(
   type: F,
   make: Make
-): Make & { readonly type: F } => Object.assign(make, { type })
+): Make & { readonly type: F } => Object.assign(((...schemas: ReadonlyArray<any>) => make(...schemas)) as Make, { type })
 
 /** The decoded type of a schema: `Move.TypeOf<typeof Pair<Schema.Codec<number>, ...>>`. */
 export type TypeOf<F> = F extends (...args: ReadonlyArray<any>) => infer S ? S extends Schema.Top ? S["Type"] : never
@@ -163,7 +169,7 @@ export const isArgument = (u: unknown): u is Argument =>
 export const isTuple = <A>(a: A): a is Extract<A, ReadonlyArray<unknown>> => Array.isArray(a)
 
 /** An object parameter. An id becomes an object input the resolver looks up. */
-export const obj = (input: ObjectInput): Arg => isArgument(input) ? Effect.succeed(input) : Ptb.object(input)
+export const obj = (input: ObjectInput): Arg<Ptb.InvalidPureValue> => isArgument(input) ? Effect.succeed(input) : Ptb.object(input)
 
 /** A pure parameter, encoded by its schema. */
 export const pure = <A, E>(schema: Schema.Codec<A, E>, input: A | Argument): Arg<Ptb.InvalidPureValue> =>
@@ -226,7 +232,13 @@ export const pureSchemaOf = (tag: TypeTag.TypeTag): Schema.Top | undefined => {
 export const param = (typeArgument: string, input: GenericInput): Arg<Ptb.InvalidPureValue> =>
   Effect.suspend(() => {
     if (isArgument(input)) return Effect.succeed(input)
-    const schema = pureSchemaOf(TypeTag.parse(typeArgument))
+    let tag: TypeTag.TypeTag
+    try {
+      tag = TypeTag.parse(typeArgument)
+    } catch (e) {
+      return Effect.fail(new Ptb.InvalidPureValue({ issue: e instanceof Error ? e.message : String(e) }))
+    }
+    const schema = pureSchemaOf(tag)
     if (schema !== undefined) {
       const isOption = schema !== undefined && Bcs.layoutOf(schema)._tag === "option"
       const value = isOption && !Option.isOption(input)
@@ -249,25 +261,25 @@ const DENY_LIST = /* @__PURE__ */ Address.normalize("0x403")
 const ACCUMULATOR_ROOT = /* @__PURE__ */ Address.normalize("0xacc")
 
 /** A shared object whose initial shared version is known, deduplicated by id like `Ptb.object`. */
-export const shared = (objectId: string, initialSharedVersion: bigint, mutable: boolean): Arg =>
+export const shared = (objectId: string, initialSharedVersion: bigint, mutable: boolean): Arg<Ptb.InvalidPureValue> =>
   Ptb.sharedObject(objectId, initialSharedVersion, mutable)
 
 /** `&Clock` (0x6): shared, initial version 1, immutable. */
-export const clock = (input?: ObjectInput): Arg => input === undefined ? shared(CLOCK, 1n, false) : obj(input)
+export const clock = (input?: ObjectInput): Arg<Ptb.InvalidPureValue> => input === undefined ? shared(CLOCK, 1n, false) : obj(input)
 
 /** `&Random` (0x8): immutable; its initial version is looked up. */
-export const random = (input?: ObjectInput): Arg =>
+export const random = (input?: ObjectInput): Arg<Ptb.InvalidPureValue> =>
   input === undefined ? Ptb.object(RANDOM, { mutable: false }) : obj(input)
 
 /** `&DenyList` / `&mut DenyList` (0x403): mutability from the function signature. */
-export const denyList = (input?: ObjectInput): Arg => input === undefined ? Ptb.object(DENY_LIST) : obj(input)
+export const denyList = (input?: ObjectInput): Arg<Ptb.InvalidPureValue> => input === undefined ? Ptb.object(DENY_LIST) : obj(input)
 
 /** `&SuiSystemState` / `&mut SuiSystemState` (0x5): shared, initial version 1. */
-export const system = (mutable: boolean, input?: ObjectInput): Arg =>
+export const system = (mutable: boolean, input?: ObjectInput): Arg<Ptb.InvalidPureValue> =>
   input === undefined ? shared(SYSTEM_STATE, 1n, mutable) : obj(input)
 
 /** `&AccumulatorRoot` (0xacc). */
-export const accumulatorRoot = (input?: ObjectInput): Arg =>
+export const accumulatorRoot = (input?: ObjectInput): Arg<Ptb.InvalidPureValue> =>
   input === undefined ? Ptb.object(ACCUMULATOR_ROOT) : obj(input)
 
 // -----------------------------------------------------------------------------
@@ -290,7 +302,7 @@ export const call = <const N extends number, E = never>(
   typeArguments: ReadonlyArray<string>,
   args: ReadonlyArray<Effect.Effect<Argument, E, Ptb.PtbBuilder>>,
   returns: N
-): Effect.Effect<Results<N>, E, Ptb.PtbBuilder> =>
+): Effect.Effect<Results<N>, E | Ptb.InvalidPureValue, Ptb.PtbBuilder> =>
   Effect.gen(function*() {
     const id = yield* pkg
     const resolved: Array<Argument> = []

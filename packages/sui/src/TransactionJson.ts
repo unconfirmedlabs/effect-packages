@@ -944,7 +944,7 @@ export const toPlan = (tx: Unresolved, sender?: Address.Address): Effect.Effect<
 }
 
 /** The `TransactionData` of a transaction that is already fully resolved (no network). */
-export const toTransactionData = (tx: Unresolved): Effect.Effect<T.TransactionData, Resolve.Incomplete> =>
+export const toTransactionData = (tx: Unresolved): Effect.Effect<T.TransactionData, Resolve.Incomplete | Resolve.InvalidTransaction> =>
   Effect.flatMap(toPlan(tx), Resolve.finish)
 
 /**

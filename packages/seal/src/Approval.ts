@@ -137,7 +137,7 @@ export const fromRecipe = <A, E, R>(
   recipe: Effect.Effect<A, E, R>
 ): Effect.Effect<
   Approval,
-  E | InvalidApproval | Objects.ObjectNotFound | RpcError,
+  E | InvalidApproval | Objects.ObjectNotFound | Resolve.InvalidTransaction | RpcError,
   Exclude<R, Ptb.PtbBuilder> | Objects.Objects | Packages.Packages
 > =>
   Ptb.build(recipe).pipe(

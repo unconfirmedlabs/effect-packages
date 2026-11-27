@@ -10,7 +10,7 @@ export interface CheckpointSummary {
   readonly digest: string
 }
 
-export class Checkpoints extends Context.Service<Checkpoints, {
+export class Checkpoints extends /* @__PURE__ */ Context.Service<Checkpoints, {
   /** History from `start` (default: the oldest the node keeps), in order. */
   readonly list: (options?: { readonly start?: bigint; readonly end?: bigint }) => Stream.Stream<CheckpointSummary, RpcError>
   /** New checkpoints as they are certified. */

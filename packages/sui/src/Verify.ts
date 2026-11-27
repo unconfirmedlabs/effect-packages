@@ -16,7 +16,7 @@ export interface Verified {
 }
 
 /** Verify a serialized signature over an intent message; answer who signed. */
-export const signature = Effect.fn("Verify.signature")(function*(serialized: Uint8Array, intentMessage: Uint8Array) {
+export const signature = /* @__PURE__ */ Effect.fn("Verify.signature")(function*(serialized: Uint8Array, intentMessage: Uint8Array) {
   const registry = yield* SignatureSchemes
   if (serialized.length === 0) return yield* new InvalidSignature({ scheme: "unknown", reason: "empty signature" })
   const scheme = yield* registry.get(serialized[0]!)

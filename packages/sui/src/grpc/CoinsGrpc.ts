@@ -6,6 +6,7 @@ import type { Address } from "../Address.ts"
 import { Coins } from "../Coins.ts"
 import { Objects } from "../Objects.ts"
 import * as TypeTag from "../TypeTag.ts"
+import { convert } from "./convert.ts"
 import * as Rpc from "./generated/rpc.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
@@ -30,11 +31,13 @@ export const layer: Layer.Layer<Coins, never, GrpcWeb | Objects> = Layer.effect(
         ),
       list: (owner: Address, coinType = TypeTag.SUI) =>
         objects.listOwned(owner, { type: `0x2::coin::Coin<${TypeTag.normalizeString(coinType)}>` }).pipe(
-          Stream.map((o) => ({
-            ref: { objectId: o.objectId, version: o.version, digest: o.digest },
-            coinType,
-            balance: decodeCoin(o.contents).balance
-          }))
+          Stream.mapEffect((o) =>
+            convert(Rpc.StateService_ListOwnedObjects.path, () => ({
+              ref: { objectId: o.objectId, version: o.version, digest: o.digest },
+              coinType,
+              balance: decodeCoin(o.contents).balance
+            }))
+          )
         )
     })
   })

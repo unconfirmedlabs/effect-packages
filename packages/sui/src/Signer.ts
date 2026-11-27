@@ -14,13 +14,13 @@ import * as Hash from "./Hash.ts"
 import type { PublicKey } from "./SignatureScheme.ts"
 import type { TransactionData } from "./TransactionData.ts"
 
-export class SigningError extends Schema.TaggedError<SigningError>()("SigningError", {
+export class SigningError extends /* @__PURE__ */ Schema.TaggedError<SigningError>()("SigningError", {
   reason: Schema.Literals(["rejected", "unavailable", "failed"]),
   message: Schema.String
 }) {}
 
 /** A secret key, mnemonic or public key that was refused. */
-export class InvalidKey extends Schema.TaggedError<InvalidKey>()("InvalidKey", {
+export class InvalidKey extends /* @__PURE__ */ Schema.TaggedError<InvalidKey>()("InvalidKey", {
   scheme: Schema.String,
   reason: Schema.String
 }) {}

@@ -26,7 +26,27 @@ export type Status =
     readonly description: string
     readonly command: number | undefined
     readonly abortCode: bigint | undefined
+    /** Where a Move abort happened, when the transport reports it. */
+    readonly location?: AbortLocation
+    /** A clever error's decoded fields (`#[error] const E: vector<u8> = ...`), when the transport reports them. */
+    readonly cleverError?: CleverError
   }
+
+export interface AbortLocation {
+  readonly package: Address
+  readonly module: string
+  readonly function: string | undefined
+  readonly instruction: number | undefined
+}
+
+export interface CleverError {
+  readonly errorCode: bigint | undefined
+  readonly lineNumber: bigint | undefined
+  readonly constantName: string | undefined
+  readonly constantType: string | undefined
+  /** The constant's value rendered as text, when the node could render it. */
+  readonly rendered: string | undefined
+}
 
 export interface ChangedObject {
   readonly objectId: Address
@@ -54,11 +74,11 @@ export interface Simulation {
   readonly returnValues: ReadonlyArray<ReadonlyArray<Uint8Array>>
 }
 
-export class TransactionNotFound extends Schema.TaggedError<TransactionNotFound>()("TransactionNotFound", {
+export class TransactionNotFound extends /* @__PURE__ */ Schema.TaggedError<TransactionNotFound>()("TransactionNotFound", {
   digest: Schema.String
 }) {}
 
-export class Transactions extends Context.Service<Transactions, {
+export class Transactions extends /* @__PURE__ */ Context.Service<Transactions, {
   /** Run without committing. `checks: false` skips signature/ownership checks (dev-inspect). */
   readonly simulate: (txBytes: Uint8Array, options?: { readonly checks?: boolean }) => Effect.Effect<Simulation, RpcError>
   /** Submit signed bytes. A Move abort is a successful submission with a `Failure` status. */
@@ -67,7 +87,7 @@ export class Transactions extends Context.Service<Transactions, {
 }>()("@unconfirmed/sui/Transactions") {}
 
 /** `waitFor` gave up: the transaction wasn't visible within the timeout. */
-export class TransactionWaitTimeout extends Schema.TaggedError<TransactionWaitTimeout>()("TransactionWaitTimeout", {
+export class TransactionWaitTimeout extends /* @__PURE__ */ Schema.TaggedError<TransactionWaitTimeout>()("TransactionWaitTimeout", {
   digest: Schema.String,
   timeoutMillis: Schema.Number
 }) {}

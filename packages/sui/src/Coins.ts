@@ -22,7 +22,7 @@ export interface Coin {
   readonly balance: bigint
 }
 
-export class Coins extends Context.Service<Coins, {
+export class Coins extends /* @__PURE__ */ Context.Service<Coins, {
   readonly getBalance: (owner: Address, coinType?: string) => Effect.Effect<Balance, RpcError>
   readonly list: (owner: Address, coinType?: string) => Stream.Stream<Coin, RpcError>
 }>()("@unconfirmed/sui/Coins") {}

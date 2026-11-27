@@ -65,8 +65,54 @@ export const layoutOf = (schema: Schema.Top): Layout => {
   return layout
 }
 
-const withLayout = <S extends Schema.Top>(schema: S, layout: Layout): S =>
-  schema.annotate({ [BCS]: layout } as any) as S
+/**
+ * The schemas built by this module, with the schemas they are made of. For
+ * those (unmodified: a `.check` or `.annotate` makes a new AST) the reader's
+ * output already is the decoded value, and a value the writer accepts is one
+ * the schema accepts, so `decode`/`encode` skip the schema pass when every
+ * schema in the tree is registered. `transform` and user-modified schemas are
+ * not, and keep the schema pass.
+ */
+const nodes = /* @__PURE__ */ new WeakMap<SchemaAST.AST, () => ReadonlyArray<Schema.Top>>()
+const LEAF = () => []
+
+const withLayout = <S extends Schema.Top>(schema: S, layout: Layout, children?: () => ReadonlyArray<Schema.Top>): S => {
+  const out = schema.annotate({ [BCS]: layout } as any) as S
+  if (children) nodes.set(out.ast, children)
+  return out
+}
+
+const trust = /* @__PURE__ */ new WeakMap<SchemaAST.AST, boolean>()
+
+/** Is every schema in this tree one of ours? (Only whole-tree answers are cached: a cycle's inner answers are provisional.) */
+const trusted = (schema: Schema.Top): boolean => {
+  const known = trust.get(schema.ast)
+  if (known !== undefined) return known
+  const visiting = new Set<SchemaAST.AST>()
+  const walk = (s: Schema.Top): boolean => {
+    if (visiting.has(s.ast)) return true
+    const children = nodes.get(s.ast)
+    if (!children) return false
+    visiting.add(s.ast)
+    return children().every(walk)
+  }
+  const ok = walk(schema)
+  trust.set(schema.ast, ok)
+  return ok
+}
+
+/** `f`, evaluated once. */
+const once = <A>(f: () => A): () => A => {
+  let done = false
+  let value: A
+  return () => {
+    if (!done) {
+      value = f()
+      done = true
+    }
+    return value
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Primitives
@@ -75,51 +121,68 @@ const withLayout = <S extends Schema.Top>(schema: S, layout: Layout): S =>
 const uint = (bytes: 1 | 2 | 4) =>
   withLayout(
     Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 2 ** (bytes * 8) - 1 })),
-    { _tag: "uint", bytes }
+    { _tag: "uint", bytes },
+    LEAF
   )
 const ubig = (bytes: 8 | 16 | 32) =>
   withLayout(
     Schema.BigInt.check(Schema.isBetweenBigInt({ minimum: 0n, maximum: (1n << BigInt(bytes * 8)) - 1n })),
-    { _tag: "ubig", bytes }
+    { _tag: "ubig", bytes },
+    LEAF
   )
 
-export const bool = withLayout(Schema.Boolean, { _tag: "bool" })
-export const u8 = uint(1)
-export const u16 = uint(2)
-export const u32 = uint(4)
-export const u64 = ubig(8)
-export const u128 = ubig(16)
-export const u256 = ubig(32)
-export const uleb128 = withLayout(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 2 ** 32 - 1 })), {
-  _tag: "uleb128"
-})
-export const string = withLayout(Schema.String, { _tag: "string" })
-export const byteVector = withLayout(Schema.Uint8Array, { _tag: "byteVector" })
+/** A UTF-16 surrogate without its pair: not encodable as UTF-8 (`TextEncoder` would write U+FFFD). */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
+export const bool = /* @__PURE__ */ withLayout(Schema.Boolean, { _tag: "bool" }, LEAF)
+export const u8 = /* @__PURE__ */ uint(1)
+export const u16 = /* @__PURE__ */ uint(2)
+export const u32 = /* @__PURE__ */ uint(4)
+export const u64 = /* @__PURE__ */ ubig(8)
+export const u128 = /* @__PURE__ */ ubig(16)
+export const u256 = /* @__PURE__ */ ubig(32)
+export const uleb128 = /* @__PURE__ */ withLayout(
+  /* @__PURE__ */ Schema.Int.check(/* @__PURE__ */ Schema.isBetween({ minimum: 0, maximum: 2 ** 32 - 1 })),
+  { _tag: "uleb128" },
+  LEAF
+)
+/** A UTF-8 string. A lone surrogate is refused (it has no UTF-8 encoding). */
+export const string = /* @__PURE__ */ withLayout(
+  /* @__PURE__ */ Schema.String.check(/* @__PURE__ */ Schema.makeFilter((s) => !LONE_SURROGATE.test(s) || "lone UTF-16 surrogate (not encodable as UTF-8)")),
+  { _tag: "string" },
+  LEAF
+)
+export const byteVector = /* @__PURE__ */ withLayout(Schema.Uint8Array, { _tag: "byteVector" }, LEAF)
 export const bytes = (length: number) =>
   withLayout(
     Schema.Uint8Array.check(Schema.makeFilter((u) => u.length === length || `expected ${length} bytes`)),
-    { _tag: "bytes", length }
+    { _tag: "bytes", length },
+    LEAF
   )
 
+const ADDRESS = /^0x[0-9a-f]{64}$/
+
 /** A 32-byte account address / object id, as normalized `0x` + 64 lowercase hex. */
-export const Address = withLayout(
-  Schema.String.check(Schema.isPattern(/^0x[0-9a-f]{64}$/)).pipe(Schema.brand("SuiAddress")),
-  { _tag: "address" }
+export const Address = /* @__PURE__ */ withLayout(
+  /* @__PURE__ */ Schema.String.check(/* @__PURE__ */ Schema.isPattern(ADDRESS)).pipe(/* @__PURE__ */ Schema.brand("SuiAddress")),
+  { _tag: "address" },
+  LEAF
 )
 export type Address = typeof Address.Type
 
+const isDigest = (s: string) => {
+  try {
+    return base58.decode(s).length === 32 || "expected a 32-byte base58 digest"
+  } catch {
+    return "invalid base58"
+  }
+}
+
 /** A 32-byte digest shown as base58 (object/transaction digests, chain ids). */
-export const Digest = withLayout(
-  Schema.String.check(
-    Schema.makeFilter((s) => {
-      try {
-        return base58.decode(s).length === 32 || "expected a 32-byte base58 digest"
-      } catch {
-        return "invalid base58"
-      }
-    })
-  ).pipe(Schema.brand("Digest")),
-  { _tag: "base58" }
+export const Digest = /* @__PURE__ */ withLayout(
+  /* @__PURE__ */ Schema.String.check(/* @__PURE__ */ Schema.makeFilter(isDigest)).pipe(/* @__PURE__ */ Schema.brand("Digest")),
+  { _tag: "base58" },
+  LEAF
 )
 export type Digest = typeof Digest.Type
 
@@ -128,29 +191,30 @@ export type Digest = typeof Digest.Type
 // -----------------------------------------------------------------------------
 
 export const vector = <S extends Schema.Top>(item: S) =>
-  withLayout(Schema.Array(item), { _tag: "vector", item: () => layoutOf(item) })
+  withLayout(Schema.Array(item), { _tag: "vector", item: once(() => layoutOf(item)) }, () => [item])
 
 export const fixedArray = <S extends Schema.Top>(length: number, item: S) =>
   withLayout(
     Schema.Array(item).check(Schema.makeFilter((a) => a.length === length || `expected ${length} items`)),
-    { _tag: "fixedArray", length, item: () => layoutOf(item) }
+    { _tag: "fixedArray", length, item: once(() => layoutOf(item)) },
+    () => [item]
   )
 
 export const option = <S extends Schema.Top>(item: S) =>
-  withLayout(Schema.Option(item), { _tag: "option", item: () => layoutOf(item) })
+  withLayout(Schema.Option(item), { _tag: "option", item: once(() => layoutOf(item)) }, () => [item])
 
 export const tuple = <const Items extends ReadonlyArray<Schema.Top>>(items: Items) =>
-  withLayout(Schema.Tuple(items), { _tag: "tuple", items: items.map((i) => () => layoutOf(i)) })
+  withLayout(Schema.Tuple(items), { _tag: "tuple", items: items.map((i) => once(() => layoutOf(i))) }, () => items)
 
 export const struct = <const Fields extends Schema.Struct.Fields>(fields: Fields) =>
   withLayout(Schema.Struct(fields), {
     _tag: "struct",
-    fields: Object.entries(fields).map(([k, s]) => [k, () => layoutOf(s as Schema.Top)] as const)
-  })
+    fields: Object.entries(fields).map(([k, s]) => [k, once(() => layoutOf(s as Schema.Top))] as const)
+  }, () => Object.values(fields) as unknown as ReadonlyArray<Schema.Top>)
 
 /** Recursive types: `Bcs.lazy(() => TypeTag)`. */
 export const lazy = <S extends Schema.Top>(f: () => S) =>
-  withLayout(Schema.suspend(f), lazyLayout(() => layoutOf(f())))
+  withLayout(Schema.suspend(f), lazyLayout(() => layoutOf(f())), () => [f()])
 const lazyLayout = (f: () => Layout): Layout => {
   // A layout proxy that defers to the real layout on first access.
   let cached: Layout | undefined
@@ -186,22 +250,22 @@ const isStructSchema = (s: Schema.Top): s is Schema.Struct<Schema.Struct.Fields>
  * index), so `Bcs.enum({ None: null, Some: T })` encodes None as 0.
  */
 export const enum_ = <const V extends EnumVariants>(variants: V): BcsSchema<EnumType<V>, EnumEncoded<V>> => {
-  const members = Object.entries(variants).map(([name, payload]) => {
-    if (payload === null) return Schema.TaggedStruct(name, {})
-    if (isStructSchema(payload)) return Schema.TaggedStruct(name, payload.fields)
-    return Schema.TaggedStruct(name, { value: payload })
+  const entries = Object.entries(variants)
+  const kinds = entries.map(([name, payload]) => ({
+    name,
+    payload: payload === null ? "unit" as const : isStructSchema(payload) ? "flat" as const : "value" as const,
+    schema: payload ?? undefined
+  }))
+  const members = kinds.map(({ name, payload, schema }) => {
+    if (payload === "unit") return Schema.TaggedStruct(name, {})
+    if (payload === "flat") return Schema.TaggedStruct(name, (schema as Schema.Struct<Schema.Struct.Fields>).fields)
+    return Schema.TaggedStruct(name, { value: schema! })
   })
   const layout: Layout = {
     _tag: "enum",
-    variants: Object.entries(variants).map(([name, payload]) =>
-      payload === null
-        ? { name, payload: "unit" as const, layout: undefined }
-        : isStructSchema(payload)
-        ? { name, payload: "flat" as const, layout: () => layoutOf(payload) }
-        : { name, payload: "value" as const, layout: () => layoutOf(payload) }
-    )
+    variants: kinds.map(({ name, payload, schema }) => ({ name, payload, layout: schema && once(() => layoutOf(schema)) }))
   }
-  return withLayout(Schema.Union(members), layout) as any
+  return withLayout(Schema.Union(members), layout, () => kinds.flatMap((k) => (k.schema ? [k.schema] : []))) as any
 }
 export { enum_ as enum }
 
@@ -262,6 +326,11 @@ class Writer {
   }
   ubig(v: bigint, bytes: 8 | 16 | 32) {
     this.ensure(bytes)
+    if (bytes === 8) {
+      this.view.setBigUint64(this.pos, v, true)
+      this.pos += 8
+      return
+    }
     for (let i = 0; i < bytes; i++) {
       this.buf[this.pos++] = Number(v & 0xffn)
       v >>= 8n
@@ -274,6 +343,8 @@ class Writer {
 
 class Reader {
   pos = 0
+  /** Set when the bytes parse but some value fails its schema's own check (a digest that isn't 32 bytes). */
+  suspect = false
   readonly view: DataView
   constructor(readonly buf: Uint8Array) {
     this.view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
@@ -320,6 +391,11 @@ class Reader {
   }
   ubig(bytes: 8 | 16 | 32) {
     this.need(bytes)
+    if (bytes === 8) {
+      const v = this.view.getBigUint64(this.pos, true)
+      this.pos += 8
+      return v
+    }
     let v = 0n
     for (let i = bytes - 1; i >= 0; i--) v = (v << 8n) | BigInt(this.buf[this.pos + i]!)
     this.pos += bytes
@@ -327,66 +403,150 @@ class Reader {
   }
 }
 
-const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("")
+/**
+ * Longest vector of zero-size elements (`tuple([])`, `struct({})`, `bytes(0)`)
+ * that decoding accepts. Such elements consume no input, so the input cannot
+ * bound their count; Move has no zero-size types, so this only stops a 5-byte
+ * length prefix from allocating billions of entries.
+ */
+export const MAX_ZERO_SIZE_ITEMS = 1 << 16
+
+const sizes = /* @__PURE__ */ new WeakMap<Layout, number>()
+/** The fewest bytes a value of this layout can take (a lower bound; recursion counts as 0). */
+const minSize = (l: Layout): number => {
+  const known = sizes.get(l)
+  if (known !== undefined) return known
+  sizes.set(l, 0)
+  const n = ((): number => {
+    switch (l._tag) {
+      case "uint":
+      case "ubig":
+        return l.bytes
+      case "bytes":
+        return l.length
+      case "address":
+        return 32
+      case "fixedArray":
+        return l.length * minSize(l.item())
+      case "tuple":
+        return l.items.reduce((sum, i) => sum + minSize(i()), 0)
+      case "struct":
+        return l.fields.reduce((sum, [, f]) => sum + minSize(f()), 0)
+      default:
+        // bool, uleb128, length-prefixed values, option and enum tags: at least one byte.
+        return 1
+    }
+  })()
+  sizes.set(l, n)
+  return n
+}
+
+/** Refuse a vector length the remaining input cannot hold, before allocating anything. */
+const checkLength = (r: Reader, n: number, min: number) => {
+  if (min > 0 ? n * min > r.buf.length - r.pos : n > MAX_ZERO_SIZE_ITEMS) {
+    throw new BcsDecodeError({
+      message: min > 0
+        ? `vector length ${n} exceeds the remaining input (${r.buf.length - r.pos} bytes)`
+        : `vector of ${n} zero-size elements exceeds ${MAX_ZERO_SIZE_ITEMS}`,
+      offset: r.pos
+    })
+  }
+}
+
+const HEX = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"))
+const hex = (b: Uint8Array) => {
+  let out = ""
+  for (let i = 0; i < b.length; i++) out += HEX[b[i]!]
+  return out
+}
 const unhex = (s: string) => {
   const out = new Uint8Array(s.length / 2)
   for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16)
   return out
 }
-const utf8e = new TextEncoder()
+const utf8e = /* @__PURE__ */ new TextEncoder()
 // ignoreBOM: keep a leading U+FEFF as data, so decoding never changes the string's bytes.
-const utf8d = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+const utf8d = /* @__PURE__ */ new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 
+/** A value the writer can't take for this layout: `encode` then defers to the schema. */
+class Invalid {}
+const invalid = (ok: boolean) => {
+  if (!ok) throw new Invalid()
+}
+const isRecord = (v: unknown): v is Record<string, any> => typeof v === "object" && v !== null && !Array.isArray(v)
+const isUint = (v: unknown, max: number) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= max
+
+/**
+ * Write `v` as `l`, checking it as the layout's own schema would (ranges,
+ * lengths, address form, digest length, well-formed strings, tags); anything
+ * else throws `Invalid`.
+ */
 const write = (w: Writer, l: Layout, v: any): void => {
   switch (l._tag) {
     case "bool":
+      invalid(typeof v === "boolean")
       return w.u8(v ? 1 : 0)
     case "uint":
+      invalid(isUint(v, 2 ** (l.bytes * 8) - 1))
       return w.uint(v, l.bytes)
     case "ubig":
+      invalid(typeof v === "bigint" && v >= 0n && v < 1n << BigInt(l.bytes * 8))
       return w.ubig(v, l.bytes)
     case "uleb128":
+      invalid(isUint(v, 0xffffffff))
       return w.uleb(v)
     case "string": {
+      invalid(typeof v === "string" && !LONE_SURROGATE.test(v))
       const b = utf8e.encode(v)
       w.uleb(b.length)
       return w.raw(b)
     }
     case "bytes":
+      invalid(v instanceof Uint8Array && v.length === l.length)
       return w.raw(v)
     case "byteVector":
+      invalid(v instanceof Uint8Array)
       w.uleb(v.length)
       return w.raw(v)
     case "address":
+      invalid(typeof v === "string" && ADDRESS.test(v))
       return w.raw(unhex(v.slice(2)))
     case "base58": {
+      invalid(typeof v === "string")
       const b = base58.decode(v)
+      invalid(b.length === 32)
       w.uleb(b.length)
       return w.raw(b)
     }
     case "vector": {
+      invalid(Array.isArray(v))
       w.uleb(v.length)
       const item = l.item()
       for (const x of v) write(w, item, x)
       return
     }
     case "fixedArray": {
+      invalid(Array.isArray(v) && v.length === l.length)
       const item = l.item()
       for (const x of v) write(w, item, x)
       return
     }
     case "option":
+      invalid(Option.isOption(v))
       if (Option.isNone(v)) return w.u8(0)
       w.u8(1)
       return write(w, l.item(), v.value)
     case "tuple":
+      invalid(Array.isArray(v) && v.length === l.items.length)
       return l.items.forEach((item, i) => write(w, item(), v[i]))
     case "struct":
+      invalid(isRecord(v))
       for (const [k, f] of l.fields) write(w, f(), v[k])
       return
     case "enum": {
+      invalid(isRecord(v))
       const idx = l.variants.findIndex((x) => x.name === v._tag)
-      if (idx < 0) throw new Error(`unknown variant ${v._tag}`)
+      invalid(idx >= 0)
       const variant = l.variants[idx]!
       w.uleb(idx)
       if (variant.payload === "flat") return write(w, variant.layout!(), v)
@@ -417,18 +577,25 @@ const read = (r: Reader, l: Layout): any => {
       return r.raw(r.uleb())
     case "address":
       return "0x" + hex(r.raw(32))
-    case "base58":
-      return base58.encode(r.raw(r.uleb()))
+    case "base58": {
+      const b = r.raw(r.uleb())
+      // Not a digest: the schema pass reports it.
+      if (b.length !== 32) r.suspect = true
+      return base58.encode(b)
+    }
     case "vector": {
       const n = r.uleb()
       const item = l.item()
-      const out = new Array(n)
-      for (let i = 0; i < n; i++) out[i] = read(r, item)
+      checkLength(r, n, minSize(item))
+      const out: Array<unknown> = []
+      for (let i = 0; i < n; i++) out.push(read(r, item))
       return out
     }
     case "fixedArray": {
       const item = l.item()
-      return Array.from({ length: l.length }, () => read(r, item))
+      const out: Array<unknown> = []
+      for (let i = 0; i < l.length; i++) out.push(read(r, item))
+      return out
     }
     case "option": {
       const tag = r.u8()
@@ -458,7 +625,7 @@ const read = (r: Reader, l: Layout): any => {
 // Public codec API
 // -----------------------------------------------------------------------------
 
-export class BcsDecodeError extends Data.TaggedError("BcsDecodeError")<{
+export class BcsDecodeError extends /* @__PURE__ */ Data.TaggedError("BcsDecodeError")<{
   readonly message: string
   readonly offset: number
 }> {}
@@ -466,17 +633,39 @@ export class BcsDecodeError extends Data.TaggedError("BcsDecodeError")<{
 /**
  * Serialize the *encoded* side of a BCS schema. Pure and synchronous: BCS of a
  * valid value cannot fail. Validates first, so an out-of-range u8 is a typed
- * failure rather than silently-truncated bytes.
+ * failure rather than silently-truncated bytes; a value too deeply nested to
+ * encode is a failure too, not a throw.
+ *
+ * A schema made only of this module's schemas is validated by the writer
+ * itself; anything the writer refuses goes through the schema, so failures
+ * are the schema's.
  */
 export const encode = <T, E>(schema: Schema.Codec<T, E>) => {
   const layout = layoutOf(schema)
   const encodeSchema = Schema.encodeResult(schema as any)
-  return (value: T): Result.Result<Uint8Array, Schema.SchemaError> =>
-    Result.map(encodeSchema(value) as Result.Result<E, Schema.SchemaError>, (e) => {
-      const w = new Writer()
-      write(w, layout, e)
-      return w.result()
-    })
+  let fast: boolean | undefined
+  return (value: T): Result.Result<Uint8Array, Schema.SchemaError> => {
+    if (fast ??= trusted(schema)) {
+      try {
+        const w = new Writer()
+        write(w, layout, value)
+        return Result.succeed(w.result())
+      } catch {
+        // refused (or too deep): the schema pass decides
+      }
+    }
+    try {
+      return Result.map(encodeSchema(value) as Result.Result<E, Schema.SchemaError>, (e) => {
+        const w = new Writer()
+        write(w, layout, e)
+        return w.result()
+      })
+    } catch (e) {
+      return Result.fail(
+        new Schema.SchemaError(new SchemaIssue.InvalidValue({ message: `cannot encode: ${e instanceof Error ? e.message : String(e)}` }))
+      )
+    }
+  }
 }
 
 export const encodeSync = <T, E>(schema: Schema.Codec<T, E>) => {
@@ -484,14 +673,19 @@ export const encodeSync = <T, E>(schema: Schema.Codec<T, E>) => {
   return (value: T): Uint8Array => Result.getOrThrow(f(value))
 }
 
-/** Parse bytes, rejecting trailing bytes, then decode through the schema. */
+/**
+ * Parse bytes, rejecting trailing bytes, then decode through the schema. A
+ * schema made only of this module's schemas skips the schema pass: the reader
+ * already checks what it would.
+ */
 export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
   const layout = layoutOf(schema)
   const decodeSchema = Schema.decodeUnknownResult(schema as any)
+  let fast: boolean | undefined
   return (bytes: Uint8Array): Result.Result<T, BcsDecodeError | Schema.SchemaError> => {
     let raw: unknown
+    const r = new Reader(bytes)
     try {
-      const r = new Reader(bytes)
       raw = read(r, layout)
       if (r.pos !== bytes.length) {
         return Result.fail(new BcsDecodeError({ message: `${bytes.length - r.pos} trailing bytes`, offset: r.pos }))
@@ -500,6 +694,7 @@ export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
       if (e instanceof BcsDecodeError) return Result.fail(e)
       return Result.fail(new BcsDecodeError({ message: String(e), offset: -1 }))
     }
+    if ((fast ??= trusted(schema)) && !r.suspect) return Result.succeed(raw as T)
     return decodeSchema(raw) as Result.Result<T, Schema.SchemaError>
   }
 }

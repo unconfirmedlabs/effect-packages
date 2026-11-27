@@ -79,9 +79,10 @@ const runEvents = <A, E>(f: (e: Events.Events["Service"]) => Effect.Effect<A, E>
 }
 
 describe("Events.list (review A1-A5)", () => {
-  test("A1: descending without start pins start at the pruning floor and ends cleanly on OUT_OF_RANGE", async () => {
+  test("A1: descending without start pins start at the pruning floor and ends cleanly once the floor passes the watermark", async () => {
     const { r, requests } = await runEvents((e) => e.list({ descending: true }).pipe(Stream.runCollect), {
-      unary: () => Effect.succeed(SERVICE_INFO),
+      // The floor moves from 400 to 998 while the scan runs.
+      unary: (_m, _req, n) => Effect.succeed(n === 0 ? SERVICE_INFO : { ...SERVICE_INFO, lowest_available_checkpoint: 998n }),
       stream: (_m, _req, n) =>
         n === 0
           ? Stream.make(ev(999n, 0n, 0), { ...ev(998n, 0n, 0), end: ITEM_LIMIT })
@@ -132,7 +133,7 @@ describe("checkpoint scans (review A2/A3)", () => {
   test("Checkpoints.list and CheckpointData.list ask for 50 per call and pin the tip", async () => {
     const g = fakeGrpc({
       unary: () => Effect.succeed(SERVICE_INFO),
-      stream: () => Stream.make({ checkpoint: { sequence_number: 999n }, watermark: { cursor: new Uint8Array([1]), cursor_position: { checkpoint: 1000n } }, end: TIP })
+      stream: () => Stream.make({ checkpoint: { sequence_number: 999n, digest: "c" }, watermark: { cursor: new Uint8Array([1]), cursor_position: { checkpoint: 1000n } }, end: TIP })
     })
     await Effect.runPromise(Effect.gen(function*() {
       yield* Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) => c.list({ start: 999n }).pipe(Stream.runCollect))
@@ -242,7 +243,7 @@ describe("evidence fields (review B10, 17)", () => {
   test("ChainInfo: an unreported floor is undefined (not 0n); the epoch's first checkpoint is reported", async () => {
     const g = fakeGrpc({
       unary: (m) =>
-        Effect.succeed(m === "GetServiceInfo" ? { chain_id: "x", epoch: 7n, checkpoint_height: 10n } : { epoch: { epoch: 7n, first_checkpoint: 3n } })
+        Effect.succeed(m === "GetServiceInfo" ? { chain_id: "x", epoch: 7n, checkpoint_height: 10n } : { epoch: { epoch: 7n, first_checkpoint: 3n, reference_gas_price: 1000n } })
     })
     const info = await Effect.runPromise(Effect.flatMap(Effect.service(Chain.Chain), (c) => c.info).pipe(
       Effect.provide(ChainGrpc.layer.pipe(Layer.provide(g.layer)))
@@ -274,20 +275,19 @@ describe("success-only caches (review 16)", () => {
   test("Chain.info and referenceGasPrice: a transient failure is not cached", async () => {
     let gasCalls = 0
     const g = fakeGrpc({
-      unary: (m, req, n) => {
+      unary: (m, _req, n) => {
         if (m === "GetServiceInfo") return n === 0 ? Effect.fail(unavailable(m)) : Effect.succeed(SERVICE_INFO)
-        if (req.read_mask.paths.includes("reference_gas_price")) {
-          return gasCalls++ === 0 ? Effect.fail(unavailable(m)) : Effect.succeed({ epoch: { epoch: 7n, reference_gas_price: 750n } })
-        }
-        return Effect.succeed({ epoch: { epoch: 7n, first_checkpoint: 1n } })
+        return gasCalls++ === 0
+          ? Effect.fail(unavailable(m))
+          : Effect.succeed({ epoch: { epoch: 7n, first_checkpoint: 1n, reference_gas_price: 750n } })
       }
     })
     const r = await Effect.runPromise(Effect.gen(function*() {
       const c = yield* Chain.Chain
-      const e1 = yield* Effect.flip(c.info)
-      const i2 = yield* c.info
       const g1 = yield* Effect.flip(c.referenceGasPrice)
       const g2 = yield* c.referenceGasPrice
+      const e1 = yield* Effect.flip(c.info)
+      const i2 = yield* c.info
       return { e1, i2, g1, g2 }
     }).pipe(Effect.provide(ChainGrpc.layer.pipe(Layer.provide(g.layer)))))
     expect(r.e1.code).toBe("UNAVAILABLE")
@@ -359,10 +359,15 @@ describe("Packages.getFunction type arguments", () => {
       )
     )
     expect(f.parameters).toEqual([
-      { reference: "Mutable", typeName: `${A("0x2")}::coin::Coin`, typeArguments: [WAL] },
+      { reference: "Mutable", typeName: `${A("0x2")}::coin::Coin`, typeArguments: [WAL], type: `${A("0x2")}::coin::Coin<${WAL}>` },
       { reference: "Value", typeName: `${A("0x2")}::coin::Coin` },
-      { reference: "Value", typeName: `${A("0x2")}::vec_map::VecMap`, typeArguments: ["address", "vector<u16>"] },
-      { reference: "Value", typeName: undefined }
+      {
+        reference: "Value",
+        typeName: `${A("0x2")}::vec_map::VecMap`,
+        typeArguments: ["address", "vector<u16>"],
+        type: `${A("0x2")}::vec_map::VecMap<address, vector<u16>>`
+      },
+      { reference: "Value", typeName: undefined, type: "u64" }
     ])
   })
 })

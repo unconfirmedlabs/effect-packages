@@ -18,6 +18,12 @@ export interface Parameter {
    * datatype has none, or when an argument is a function type parameter.
    */
   readonly typeArguments?: ReadonlyArray<string>
+  /**
+   * The full parameter type as a type string, without the reference
+   * (`u64`, `vector<u8>`, `0x…2::coin::Coin<0x…2::sui::SUI>`). Absent when it
+   * mentions a function type parameter, or when the transport doesn't report it.
+   */
+  readonly type?: string
 }
 
 export interface MoveFunction {
@@ -31,6 +37,6 @@ export interface FunctionTarget {
   readonly function: string
 }
 
-export class Packages extends Context.Service<Packages, {
+export class Packages extends /* @__PURE__ */ Context.Service<Packages, {
   readonly getFunction: (target: FunctionTarget) => Effect.Effect<MoveFunction, RpcError>
 }>()("@unconfirmed/sui/Packages") {}
