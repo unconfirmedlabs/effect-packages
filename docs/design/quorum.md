@@ -48,7 +48,7 @@ interface Common<M, A, E, R> {
   /** Retry only these errors (default: all). A `false` makes the failure final at once. */
   readonly while?: (error: E) => boolean
   /** Attempts in flight at once. Default `"unbounded"`. */
-  readonly concurrency?: number | "unbounded"
+  readonly concurrency?: number | "unbounded" | ((progress: Progress) => number)   // a function: asked when a slot may open (as built)
   /** Start order. Default `"given"`. */
   readonly order?: Order
 }
@@ -226,6 +226,7 @@ Terms: `total` is the sum of all member weights. At any moment `reached` is the 
 | `weight(m) === 0` | The member is dropped: never started, absent from every result list, not counted in `total`. |
 | Fractional weights | Allowed; integers are recommended, because sums of floats are compared with `>=`. |
 | `threshold` (or `quorum`) is `NaN` or infinite; `concurrency` is `< 1`, `NaN` or not an integer | **Defect**. |
+| `concurrency` is a function returning anything but a positive integer or `Infinity` | **Defect**, when it is asked (at the start and after each settlement). |
 | `threshold <= 0` | **Success at once** with no successes; nothing is started. (Seal: every share was cached.) For `agree`: the same rule is a defect, because there is no winner to return. |
 | `threshold > total` (for `agree`: `max(threshold, quorum) > total`), which includes an empty member list with `threshold > 0` | **Typed failure** `reason: "insufficientWeight"`; nothing is started; every member is listed in `unsettled` with `started: false`. This is data-dependent (a small committee, a misconfigured Seal threshold), so it is not a defect. |
 | Duplicate members | Not detected. Each element of the input is its own member, identified by `index`; equal values each run and each count. Callers that need distinct members deduplicate first. (Seal lists a server once per unit of weight, `seal/dist/client.mjs:152`; with this package it passes each server once with its weight.) |
@@ -263,7 +264,8 @@ Without `linger`, the run ends the moment the threshold is reached. With it:
 
 1. Let `elapsed` be the time from the start of the run to the moment the threshold was reached (measured with `Clock`, so `TestClock` controls it), and `d = linger(elapsed)`.
 2. The run continues exactly as before (in-flight members keep going, queued members still start as slots free up) until every member has settled or `d` has passed, whichever is first. Then the rest are interrupted.
-3. Successes and failures that arrive during the window are included in the result. The result is a success whatever happens in the window; fail-fast no longer applies.
+3. Successes and failures that arrive during the window are included in the result. The result is a success whatever happens in the window; fail-fast no longer applies. A member that dies or interrupts itself in the window ends the window (the rest are interrupted) and is logged at warning level; it does not discard the reached quorum.
+4. Settlements already queued when the deciding one is taken (members that finished in the same turn) are folded in before the run returns, with or without a window.
 
 A non-positive `d` means no window.
 
@@ -278,7 +280,7 @@ After every success, with `responded` the weight of all successes and `best` the
 
 ### 3.6 Defects and interruption
 
-- **A defect in a member's `run` is not a member failure.** It fails the whole call with that defect, after interrupting the other attempts. Defects are bugs; folding them into the failure set hides them (`seal/dist/client.mjs:220` logs an invalid key with `console.warn` and carries on). A consumer that expects a throwable (a decode, a WASM call) turns it into a typed error inside `run`.
+- **A defect in a member's `run` is not a member failure.** Before the threshold is reached it fails the whole call with that defect, after interrupting the other attempts (after it, see §3.4 point 3). Defects are bugs; folding them into the failure set hides them (`seal/dist/client.mjs:220` logs an invalid key with `console.warn` and carries on). A consumer that expects a throwable (a decode, a WASM call) turns it into a typed error inside `run`.
 - **Interrupting the caller** interrupts every attempt and waits for them; no result is produced.
 - **A member that interrupts itself** (its exit is interruption while the run is not shutting down) interrupts the whole call. Interruption is not a typed failure.
 - **Timeouts are not built in.** A per-attempt timeout belongs in `run` (`Effect.timeoutOrElse` to a typed error, which is then retryable or not like any other). An overall deadline wraps the call (`Effect.timeout`); interruption does the cleanup.
@@ -386,3 +388,4 @@ Differences from the draft above (the sections have been updated to match):
 - **Linger keeps starting queued members** during the window (as §3.4 says), including the ones whose slots freed up before the threshold was reached.
 - **`giveUp` (Q3)**, added after Q1/Q2 as designed in `seal.md` §5, with three calls the design left open: the counted weight is checked with `>=`; during the grace window, the threshold becoming unreachable ends the call at once, as `gaveUp` (nothing in the window can change the outcome, and the give-up came first); validation runs even when `threshold <= 0`. The engine change is a fourth decision (`gaveUp`) and the linger loop generalised to take an optional check. `Quorum.ts` alone (esbuild, minified, `effect` external) went from 6121 / 2459 to 6775 / 2722 bytes (+0.26 KB gzip).
 - **Tests** record events in plain arrays rather than `Ref`s (they run in one fiber per member under `TestClock`, so order is deterministic); helpers live in `test/world.ts`.
+- **Review fixes (`docs/review/walrus.md`).** (1) `concurrency` may be a function of `Progress { succeeded, failed, reachedWeight, failedWeight }`, asked whenever a slot may open, so a window can widen as members fail (`(p) => 3 + p.failed`, Walrus metadata); lowering it never interrupts a running member. (2) QRM-1: a defect or self-interruption after the threshold is reached (linger window) ends the window and is logged; the call succeeds (§3.4 point 3). During a `giveUp` grace no quorum was reached, so a defect still fails the call. (3) QRM-2: settlements queued with the deciding one are drained without waiting (`Queue.poll`). The drain does not yield: a yield lets members forked but not yet started send requests that are then interrupted (seen in Walrus's read tests). Under `TestClock`, members whose sleeps end at the same virtual instant still settle in separate turns, so only same-turn settlements are kept. `Quorum.ts` alone: 6775 / 2722 → 7538 / 2992 bytes (minified / gzip).

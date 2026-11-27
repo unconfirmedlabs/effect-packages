@@ -27,12 +27,21 @@ The lag grows linearly for as long as the stream runs, so `CheckpointData.follow
 
 Fix: `Stream.mapEffect(getIndexed, { concurrency: 8+ })` in `subscribe` (it stays ordered), raise `LIST_CONCURRENCY` to 16, and consider a lighter first query (50 tx × 50 changes × 50 events is the slow part). Add a live test that asserts the lag stays bounded. Effort S.
 
+**Resolution:** fixed. `subscribe` and `list` now run `getIndexed` 16 at a time, still delivered in order. `list` no longer pages `ListCheckpointNumbers`: it enumerates the consecutive numbers, and its open ends come from one `Tip` query (the tip and the retention floor). Measured with `sub.ts` from this machine, against the light `Checkpoints.subscribe`. Before: mainnet 79 and testnet 53 behind after 30 s, still growing. After: 5 behind on both after 30 s, and after 60 s 7 behind on mainnet (240 delivered, 249 produced) and 5 on testnet, so the lag no longer grows. A lighter first query was not needed. New live test: `CheckpointData.subscribe keeps up with the chain` (20 s on testnet; asserts no gaps and fewer than 20 behind). New offline test: concurrent, in-order fetching.
+
 ### CT-2 · medium · correctness · CONFIRMED — one undecodable `entry:` key disables the durable journal
 `packages/sui-lifecycle/src/JournalKeyValueStore.ts:64-72`, `:120-135`, `:136`, `:193`
 
 `listUnresolved` reads every unmarked entry with `readEntry`, which fails on a value that does not decode or does not match its key, and `Effect.forEach` fails the whole listing. `reconcileAll`, `pruneSettled` and `layer({ onUnresolved: "fail" })` then all fail with `JournalError`, and every other unresolved submission is stranded. Reproduced (`lifecycle1.test.ts` A): one valid `Signed` entry plus `entry:somethingElse = {"v":0}` → all three fail. Ways to get there: a truncated write, a store shared without `prefix` that has its own `entry:*` keys, or any future change to `JournalEntry` (entries carry no version). The corrupt-entry branch in `reconcileAll` (`Lifecycle.ts:711-721`) is unreachable with this journal.
 
 Fix: decode per entry into a `Result`; return the good ones and surface the bad ones (a `corrupt` list, or a log plus skip); add a version field to the stored JSON. Effort S/M.
+
+**Resolution:** fixed. Each entry is decoded on its own.
+- `Journal.listUnresolved` now returns `{ entries, corrupt }`, where `corrupt` is `CorruptEntry { key, reason }`, and logs a warning when `corrupt` is non-empty.
+- `reconcileAll` reports each unreadable entry as `Reconciled { _tag: "Corrupt" }`. `pruneSettled` skips them. `onUnresolved: "fail"` names them. The new `Journal.remove` deletes them.
+- Stored JSON now carries `"v": 1` (`JournalKeyValueStore.VERSION`). An entry without `v` is read as version 1. Any other version is reported as corrupt ("unknown journal schema version").
+- Breaking change: custom `JournalService` implementations must return the new listing shape and implement `remove`.
+- Test: `journal.test.ts` "unreadable entries are reported, never strand the others; unversioned entries still read".
 
 ### CT-3 · medium · correctness · PLAUSIBLE (rule confirmed against the stub) — `expired` joins observations nothing ties to one node
 `packages/sui-lifecycle/src/Lifecycle.ts:232-237`, `:245-260`, `:289-300`, `:313-318`
@@ -41,12 +50,25 @@ Fix: decode per entry into a `Result`; return the good ones and surface the bad 
 
 Fix: let one provider vouch for the whole observation, e.g. `Evidence.absent(digest, window)` that reads the tip epoch, the lookup and the retention floor from the same backend (one GraphQL query can do this at one checkpoint), and document that `Evidence` must be the backend of `Transactions`. Effort M.
 
+**Resolution:** fixed.
+- `EvidenceService` is now a single method, `observe(digest, fromEpoch)`. It returns one backend's `{ epoch, found, gap }`, read in a consistent order: epoch, then lookup, then retention floor. `EvidenceGraphQL` reads all of it in one query at one checkpoint.
+- `expired` now requires both rounds (around the recheck) to see a `Transactions.get` miss *and* an `Evidence` observation that is past the window and missing the digest, with its history covering the window. `Chain.info` is only a cheap gate before the rounds.
+- When the evidence backend serves the digest but `Transactions` does not yet, or the backend is still inside the window, the result is `SubmissionUnknown` with that reason.
+- The reviewer's `mixed.test.ts` scenario now gives `SubmissionUnknown`: test "a lagging Transactions index never turns a late landing into expired". Further tests cover a backend still inside the window and an unreported history.
+- `EvidenceGrpc` makes separate calls. Behind a load balancer, `expiryEvidence: "never"` is still the answer; this is documented.
+
 ### CT-4 · medium · api · CONFIRMED — the expiry rule is off in every default wiring, and unresolved entries can never be dropped
 `packages/sui-lifecycle/src/Evidence.ts:32-40`, `src/Journal.ts:22-27`, `README.md:13`
 
 `Evidence` defaults to "cannot tell"; `SuiGrpc.layer` cannot include `EvidenceGrpc`; there is no GraphQL implementation (the data is there: `serviceConfig.availableRange`, `epoch.checkpoints`); the README never mentions it. So `Lifecycle.run`'s default transactions (address-balance gas, nothing pinned, `ValidDuring` "so the expiry rule can settle the bytes") can never settle `NotApplied`: one that never reached the network stays `Signed`/`Unknown` forever. `pruneSettled` never deletes unresolved entries and the journal has no other removal, so each one is re-polled by every `reconcileAll` (CT-5).
 
 Fix: ship `EvidenceGraphQL`, document `EvidenceGrpc.layer` next to the lifecycle in the README, and add an explicit `Journal.abandon(digest)` (or let `pruneSettled` take `{ unresolvedOlderThan }` for entries whose window closed long ago). Effort M.
+
+**Resolution:** fixed on the package side.
+- Added `EvidenceGraphQL` (`@unconfirmed/sui-lifecycle/EvidenceGraphQL`; `sui-lifecycle` now depends on `sui-graphql` for that subpath only).
+- Added `Journal.remove(digest)`, which drops any entry: unresolved, settled or corrupt.
+- `Evidence.ts`, the README (new section "6. Crash-safe submission") and the `SubmissionUnknown` reason ("no Evidence service is provided, so the expiry rule is off") now say that the expiry rule is off without an `Evidence` layer, and show the wiring.
+- Not changed: the default wiring. `SuiGrpc.layer` lives in core, and core cannot depend on the lifecycle. Including `Evidence` by default would need the lifecycle to ship its own transport bundle, e.g. a `Lifecycle.layerGrpc({ baseUrl })`. I did not add that, to keep one way of wiring.
 
 ### CT-5 · medium · performance · CONFIRMED — `reconcileAll` is sequential and polls the full `lookupTimeout` per missing entry
 `packages/sui-lifecycle/src/Lifecycle.ts:704-732`, `:285`
@@ -55,12 +77,20 @@ Each entry runs `recover`, which polls `Transactions.get` every `lookupInterval`
 
 Fix: `reconcileAll({ concurrency })` (bounded, default ~8) and a single lookup per entry there (`lookupTimeout: 0`). Effort S.
 
+**Resolution:** fixed. `reconcileAll({ concurrency })` (default 8) runs each entry with `lookupTimeout: 0`, so one lookup instead of 5 s of polling; the recheck now overlaps across entries. Test: 20 missing entries under the default config make 20 lookups and finish well under 2 s. Before, this took about 100 s.
+
 ### CT-6 · medium · correctness · CONFIRMED — local packages get `0x0` type strings; `packageId` only redirects calls
 `packages/sui-codegen/src/Summary.ts:155`, `:163`, `:271-279`; `src/Config.ts:28-29`; `README.md:347-352`
 
 For a package generated from `sui move summary`, a datatype's origin is the summary address, which is `0x0` until the summaries carry a published address. `Thing.type()` is then `0x000…0::fixture::Thing` (golden output, `parity.test.ts:133`), and `packageId` changes only `$package.ts` (`v.test.ts` V1: default `0x…999`, type origin `0x…0`). There is no option to give the original id, and `.type()` is synchronous so `Layer.succeed(Package, id)` cannot help. The README example (`{ path: "./move/counter" }`, then `counter.Counter.type() // "0x<defining id>::…"`) does not produce what the comment says; type arguments and `listOwned({ type })` built from it fail on chain. The live test works around it with `` `${pkg}::fixture::Thing` ``. A local package that was upgraded has the same problem for types added later (local summaries have no type origins). `@mysten/codegen` resolves the name at build time instead.
 
 Fix: `LocalPackage.originalId` (default: `packageId`) used as the address and default origin when the summary says `0x0`, plus optional `typeOrigins`; say in the README what local packages get. Effort M.
+
+**Resolution:** fixed.
+- New `LocalPackage.originalId` (default `packageId`) is used as the address and default type origin of a root that the summaries list at `0x0`, so `.type()` returns the published id.
+- Optional `typeOrigins: { "module::Type": id }` covers types added by an upgrade.
+- An `originalId` that contradicts a published address in the summaries is a `CodegenError`.
+- The README comment and `Config` docs are corrected. The live test now asserts `Thing.type()` against the published id instead of working around it.
 
 ### CT-7 · medium · correctness · CONFIRMED — one config cannot hold two unpublished local packages, or one with an unpublished local dependency
 `packages/sui-codegen/src/Generate.ts:49-54`, `:70-73`; `src/Summary.ts:248-256`
@@ -69,12 +99,16 @@ Unpublished packages all resolve to `0x0`. Two config entries → `CodegenError:
 
 Fix: give unpublished packages a synthetic identity (the label) in the model and keep `0x0` only as the rendered address; fixed together with CT-6. Effort M.
 
+**Resolution:** fixed. In the model, an unpublished package has the synthetic identity `unpublished:<label>` (`M.unpublished`); it still renders as `0x0`. Several can coexist, in one config or in one summary directory, and their dependencies go to `deps/<label>/`. Tests are in `edge.test.ts`.
+
 ### CT-8 · medium · correctness · CONFIRMED — a configured root that an earlier entry loaded as a dependency loses its `name` and `packageId`
 `packages/sui-codegen/src/Generate.ts:49-54`
 
 `merge` keeps the first copy of each package. `codegen1.ts` E2: `[{ path }, { path, package: "sui", name: "framework", packageId: "0x999", modules: ["clock"] }]` writes `sui/$package.ts` with default `0x…2`; reversing the two entries writes `framework/$package.ts` with `0x…999`. Calls silently go to the wrong id depending on entry order. Two on-chain roots that link different versions of a shared dependency are also resolved by order.
 
 Fix: in `merge`, a model's root copy wins over a dependency copy. Effort S.
+
+**Resolution:** fixed. In `Generate.merge`, a model's root copy wins over any dependency copy, whatever the entry order. Between two dependency copies, the one with more datatypes wins, then config order. Tested in both entry orders.
 
 ### CT-9 · medium · correctness · CONFIRMED — argument keys collide: a value parameter named like an auto-filled object, or two names with one camelCase form
 `packages/sui-codegen/src/Render.ts:623-626`, `:648-655`, `:687-688`
@@ -92,12 +126,24 @@ Move.random(Move.isTuple(a) ? undefined : a.random)   // the u64 is passed as th
 
 Fix: compute the final keys (camelCased values plus auto names), and on any duplicate fall back to positional arguments or suffix the later key. Effort S.
 
+**Resolution:** fixed. Keys are now computed after camelCasing, and the auto-filled objects keep their documented names. When a value's key is already taken, it keeps its Move name if that differs, otherwise it gets a numeric suffix:
+- `random: u64` next to `&Random` becomes `random2`;
+- `foo_bar` with `fooBar` gives `fooBar` and `fooBar2`.
+
+Two parameters of the same auto type share one key. Tests build the generated calls.
+
 ### CT-10 · low · correctness · CONFIRMED — `JournalError` from `submit` is classified `not_applied` even when the bytes are already out
 `packages/sui-lifecycle/src/Lifecycle.ts:625-634`, `src/Outcome.ts` (taxonomy comment)
 
 `submit` passes `firstSend: true`, so a failed `Journal.get` is a `JournalError`. `submit` documents that it may be called on bytes the journal already holds; if that second call hits a journal read failure the caller gets `JournalError`, `outcome()` says `not_applied`, and the taxonomy says rebuild, while the first send can still land (`lifecycle1.test.ts` C). True for `run` (fresh bytes), not for `submit`.
 
 Fix: make a read failure in `submit` a `SubmissionUnknown` unless the caller says the bytes are new (`run` does), or narrow the doc to `run`. Effort S.
+
+**Resolution:** fixed.
+- In `submit`, a journal read failure is now `SubmissionUnknown`: nothing is sent, and the bytes may have been sent before.
+- `run`, whose bytes are fresh, still gets `JournalError` (internal `submitFresh`).
+- The `JournalError` and taxonomy docs are narrowed to match.
+- Test: "submit with an unreadable journal is SubmissionUnknown and sends nothing".
 
 ### CT-11 · low · correctness · PLAUSIBLE — `NotApplied{refused}` is a heuristic recorded as proof
 `packages/sui-lifecycle/src/Lifecycle.ts:486`, `:590-595`, `:640-641`
@@ -106,6 +152,13 @@ Any `INVALID_ARGUMENT` on a first send becomes terminal `NotApplied`. Refusals a
 
 Fix: check the chain id before the first send; document `refused` as "this process will not send them again" rather than a chain proof; let `resubmit` override a `refused` entry on request. Effort S.
 
+**Resolution:** fixed.
+- The first send now checks the chain id: bytes for another chain are not sent and are not journalled, giving `SubmissionUnknown` with "nothing was sent".
+- `NotApplied{refused}` is documented as "this process will not send them again", not as proof from the chain.
+- New `resubmit(signed, { retryRefused: true })` re-sends a `refused` entry, writing `Signed` over it first.
+- The lock-conflict regex is unchanged; it is the only signal the node gives.
+- Tests: wrong chain then right chain (one send), and `retryRefused`.
+
 ### CT-12 · low · api · CONFIRMED — `Checkpoints.list()` without `end` is not pinned to the tip over GraphQL
 `packages/sui-graphql/src/CheckpointsGraphQL.ts:66-79`
 
@@ -113,12 +166,16 @@ gRPC pins the open end before the first request (`grpc/scan.ts` `pinned`); `Even
 
 Fix: pin with `Tip` as the other two do (and share one `Tip` operation; it is declared twice). Effort S.
 
+**Resolution:** fixed. `Checkpoints.list` pins an open end with `Tip`. There is now one shared `Tip` operation (`src/tip.ts`), used by Checkpoints, Events and CheckpointData. A tip of null is `UNAVAILABLE`; before, it ended the listing at 1. There is an offline test.
+
 ### CT-13 · low · correctness · CONFIRMED — `Chain` over GraphQL invents values when the indexer answers null
 `packages/sui-graphql/src/ChainGraphQL.ts:56-57`, `:66`; `src/CheckpointDataGraphQL.ts:154`
 
 `epoch ?? 0n`, `checkpointHeight ?? 0n`, `referenceGasPrice ?? 1000n`, checkpoint `epoch ?? 0n`. A null `epoch` yields a `ValidDuring{0,1}` expiration and a 1000 MIST gas price: the build succeeds and the node refuses it. These should be `RpcError` (`UNAVAILABLE`), not data. gRPC does the same in `ChainGrpc.ts`.
 
 Effort S.
+
+**Resolution:** fixed for GraphQL. In `ChainGraphQL`, a null epoch, checkpoint or gas price is now `RpcError` `UNAVAILABLE`. In `CheckpointData.get`, a null epoch is `DATA_LOSS`. There are offline tests for both. Not changed: `ChainGrpc` in core (`epoch ?? 0n`, `checkpoint_height ?? 0n`, `reference_gas_price ?? 1000n`). Core change needed: fail with `RpcError` `UNAVAILABLE` when those fields are absent.
 
 ### CT-14 · low · correctness · CONFIRMED — throws that escape as defects in the GraphQL layers
 - `CoinsGraphQL.ts:58`: `TypeTag.normalizeString(coinType)` runs eagerly; `coins.list(owner, "0x2::sui::SUI<")` is a defect (`v.test.ts` V2: `Die`). `:62` `decodeCoin` throws inside `Stream.map`.
@@ -128,12 +185,22 @@ Effort S.
 
 Fix: `Effect.try` to `RpcError` (`INVALID_ARGUMENT` for caller input, `DATA_LOSS` for responses). `CoinsGraphQL` and `CoinsGrpc` are the same code over `Objects`; one `Coins.fromObjects` in core fixes both. Effort S.
 
+**Resolution:** fixed for every GraphQL site:
+- Coins: a malformed coin type is `INVALID_ARGUMENT`; an undecodable coin is `DATA_LOSS`.
+- CheckpointData: an unparsable timestamp is `DATA_LOSS`.
+- DynamicFields: a short object-field value is `DATA_LOSS`.
+- Events: an invalid sender address is rejected in `plan` as `INVALID_ARGUMENT`, before any request.
+
+There are offline tests. Not changed: `CoinsGrpc` in core has the same two throws. Core change needed: add `Coins.fromObjects(objects)` in core, which normalizes the coin type with `Effect.try` → `INVALID_ARGUMENT` and decodes with `Effect.try` → `DATA_LOSS`, and use it from both `CoinsGrpc` and `CoinsGraphQL`.
+
 ### CT-15 · low · correctness · PLAUSIBLE — GraphQL `execute` can fail after the transaction executed
 `packages/sui-graphql/src/TransactionsGraphQL.ts:77-82`, `:115`
 
 For a transaction with more than 1024 object changes, `execute` pages the rest by digest after the mutation returned. If that paging fails (20 s of "not indexed", or a transport error) the whole call fails with `OUT_OF_RANGE`/`UNAVAILABLE` and no digest. Under the lifecycle this reconciles; under `Tx.execute` it reads as a failed submission of a transaction that landed.
 
 Fix: put the digest in the error message at least; better, a distinct typed failure the core can map to "executed, effects incomplete". Effort S.
+
+**Resolution:** partly fixed. The failure after the mutation now says `transaction <digest> executed, but its object changes could not be read: …`, and keeps its code. Not changed: a distinct typed failure needs core. Core change needed: add an error to `Transactions.execute`'s channel, for example `ExecutedEffectsIncomplete { digest }`, that `Tx.execute` maps to "executed, reconcile by digest" instead of a failed submission.
 
 ### CT-16 · low · performance · CONFIRMED — `inputEvidence` reads pinned objects one at a time
 `packages/sui-lifecycle/src/Lifecycle.ts:200-205`
@@ -142,12 +209,20 @@ The loop awaits each `Objects.get`, so the batching resolver never sees two at o
 
 Fix: fetch all pinned objects with `Effect.forEach(..., { concurrency: "unbounded" })` (one `BatchGetObjects`), then walk the results. Effort S.
 
+**Resolution:** fixed. All pinned objects are fetched with `Effect.forEach(..., { concurrency: "unbounded" })` before the walk. Test: two pinned refs are read concurrently.
+
 ### CT-17 · low · performance · CONFIRMED — 8 store operations per successful submit with the KeyValueStore journal
 `packages/sui-lifecycle/src/JournalKeyValueStore.ts:74-78`, `:107-118`; `src/Lifecycle.ts:509-514`, `:625`
 
 Counted (`lifecycle1.test.ts` E): 3 `get`, 3 `set`, 2 `has`. `sendConsultingJournal` and `journalBeforeSend` read the same entry back to back; `clearMarker` does `has` then `remove` twice where a bare `remove` of a missing key is a no-op. Five operations would do.
 
 Effort S.
+
+**Resolution:** fixed, at 7 operations (2 `get`, 3 `set`, 2 `remove`; no `has`) instead of 8. The send path passes the entry it just read to the `Signed` write, and the marker is cleared with a bare `remove`, which is a no-op on a missing key in every `KeyValueStore`. The remaining two are kept on purpose:
+- the marker clear before the unresolved write (crash safety when overwriting a settled entry);
+- the re-read after the settled marker (the race described in the module doc).
+
+Getting to 5 would need compare-and-set. There is a test that counts the operations.
 
 ### CT-18 · low · api · CONFIRMED — `reconcile(digest)` ignores signed bytes the journal holds for that digest
 `packages/sui-lifecycle/src/Lifecycle.ts:404-416`, `:425-442`
@@ -156,12 +231,18 @@ With a `Signed` entry in the journal, `reconcile(signed.digest)` answers "the si
 
 Fix: on a bare digest, load the unresolved entry and use its `signed`. Effort S.
 
+**Resolution:** fixed. A bare digest, and a `SubmissionUnknown` without bytes in `reconcile` and `resubmit`, now use the signed bytes of the journal's unresolved entry, after checking their digest. Test: `reconcile(signed.digest)` proves `NotApplied{expired}`.
+
 ### CT-19 · low · performance · CONFIRMED — the in-memory defaults grow without bound
 `packages/sui-lifecycle/src/SenderLock.ts:31-37`, `src/Journal.ts:35-55`
 
 `SenderLock.makeMemory` keeps one `Semaphore` per address forever; the default `Journal` keeps every `Executed` entry until someone calls `pruneSettled`, and nothing does. Both are process-wide defaults, so a long-lived service leaks per sender and per transaction.
 
 Fix: delete a lock when it has no holder or waiter; cap or auto-prune the memory journal's settled entries. Effort S.
+
+**Resolution:** fixed.
+- `SenderLock.makeMemory` counts the users of each address and deletes the semaphore when nobody holds or waits for it. Test: `size()` is 0 after concurrent runs.
+- The memory journal keeps every unresolved entry and the latest 10 000 settled ones (`makeMemory({ maxSettled })`); the oldest settled are dropped. There is a test.
 
 ### CT-20 · low · correctness · CONFIRMED — legal Move that aborts the whole generation
 `packages/sui-codegen/src/Render.ts:310-312`, `:592-594`, `:712-716`
@@ -170,11 +251,15 @@ A struct named `Move`, `Bcs` or `Package` (`Option` and `Schema` are aliased, th
 
 Fix: alias the runtime imports on a clash, keep the snake_case name for the second function, skip an unsupported function with a comment. Effort S.
 
+**Resolution:** fixed. A struct named `Move`, `Bcs` or `Package` is bound as `Move_` and exported under its own name. In a module that exports a type named `Package`, the module no longer re-exports the `Package` reference; it is still in `$package.ts`. Of two functions that camelCase alike, the one already in camelCase keeps the name and the other keeps its Move name. A function with a `signer` or other unsupported parameter is skipped with a comment, instead of failing the run. Tests in `edge.test.ts` import and call the generated module.
+
 ### CT-21 · low · correctness · CONFIRMED — codegen throws that surface as defects
 - `packages/sui-codegen/src/Summary.ts:232` → `Model.ts:115-119`: any directory in the summaries that is not in `address_mapping.json` (a stray `.cache`) makes `normalizeAddress` throw inside `Effect.gen`: `Die`, and the CLI prints a fiber failure instead of `CodegenError: …` (`codegen1.ts` E5).
 - `packages/sui/src/Move.ts:229`: `Move.param` calls `TypeTag.parse(typeArgument)`, which throws on a malformed type argument, inside a function typed to fail with `InvalidPureValue` (E6: `Die`).
 
 Fix: `Effect.try` at both sites; ignore unmapped directories in `Summary.load`. Effort S.
+
+**Resolution:** codegen part fixed. Summary directories that are neither in `address_mapping.json` nor an address are ignored. Address parsing and model conversion run under `Effect.try`, so bad input is a `CodegenError`, not a defect. Not changed: `Move.param` in core. Core change needed in `packages/sui/src/Move.ts` (`Move.param`): wrap `TypeTag.parse(typeArgument)` in `Effect.try` and fail with `InvalidPureValue` carrying the parse message.
 
 ### CT-22 · low · correctness · CONFIRMED (from code; E9 run) — `Generate.write` deletes directories it does not own, and same-named roots overwrite each other
 `packages/sui-codegen/src/Generate.ts:86-89`; `src/Render.ts:239`
@@ -182,6 +267,8 @@ Fix: `Effect.try` at both sites; ignore unmapped directories in `Summary.load`. 
 `write` runs `rm -rf <output>/<top>` for every top-level directory it is about to write (package names and `deps`) with no check that the contents are generated: `output: "./src"` with a Move package named `app` or `utils` removes `./src/app`. Two roots with the same `name` render to the same paths (E9: `pkg/$package.ts` twice) and the later one silently wins. Directories of packages removed from the config are left behind.
 
 Fix: delete only files that start with the generated header (or refuse when a directory holds anything else); fail on duplicate output paths. Effort S.
+
+**Resolution:** fixed. `write` refuses, and writes nothing, when a directory it would replace holds a file that does not start with the generated header (`Render.HEADER`). Two outputs at one path fail in both `render` and `write`. A root name that is not a safe directory name also fails. Not changed: directories of packages removed from the config are left in place, by design, since the generator cannot know they were its own.
 
 ### CT-23 · low · performance · CONFIRMED — avoidable requests and dead selections in the GraphQL layers
 - `ChainGraphQL.ts:16-17`, `:30-33`: `ChainInfo` and `ReferenceGasPrice` are two queries over the same `epoch` (both appear in the live devnet trace of one `Tx.run`); one query can feed both caches.
@@ -192,10 +279,19 @@ Fix: delete only files that start with the generated header (or refuse when a di
 
 Effort S each.
 
+**Resolution:** fixed except the dead `ChainInfo` fields.
+- `ChainInfo` now also selects `referenceGasPrice`, and one query feeds both caches (30 s for info, 1 min for the gas price); `ReferenceGasPrice` is removed. Test: two failures then one success serve both members.
+- `CheckpointData.list` enumerates numbers (CT-1): 0 listing requests where there were 2 per 100.
+- `GetMoveFunction` no longer selects `object(address)`. A separate `ObjectExists` query runs only when there is no package.
+- `MultiGetObjects` batches 200, which is `maxMultiGetSize` on mainnet and testnet, checked live.
+- Not changed: `lowestAvailableCheckpoint` and `epochFirstCheckpoint` are still selected, because they are fields of core's `Chain.ChainInfo`. The lifecycle now uses `Evidence.observe` instead of them. Core change needed: drop both fields from `Chain.ChainInfo` and the extra `GetEpoch` from `ChainGrpc`; `ChainGraphQL` can then drop `epoch.checkpoints(first:1)` and `serviceConfig.availableRange`.
+
 ### CT-24 · nit · performance · CONFIRMED — codegen does serial work it could share
 `packages/sui-codegen/src/Generate.ts:23-29`, `:67`; `src/FromGrpc.ts:90-102`
 
 `sui move summary` runs once per config entry even for the same path (the README's own example runs it twice; ~1 s each with warm dependencies). Config entries, and an on-chain package's dependencies, are loaded one after another.
+
+**Resolution:** fixed. `sui move summary` runs once per directory, however many entries read it. Config entries load 4 at a time, keeping order. Each dependency level of an on-chain package is fetched 8 at a time.
 
 ### CT-25 · nit · simplification
 - `packages/sui/src/Move.ts:181-189`: `PURE_STRUCTS` has computed keys that call `Address.normalize` at module scope, so it, `pureSchemaOf` and `address` stay in every bundle that imports `Move` (0.7 KB min, plus 0.3 KB of `Address`), even for one schema. Build the table lazily.
@@ -203,9 +299,26 @@ Effort S each.
 - `packages/sui-graphql/src/merge.ts:35-48`: `mergeSorted` emits one-item chunks.
 - `packages/sui-lifecycle/src/Lifecycle.ts:469-475`: every `reconcileAll` rewrites an `Unknown` entry's `at` and `lastError`, losing when it was first sent and why.
 
+**Resolution:** three of the four bullets fixed; the `Move.ts` one is core.
+- `safeKey`: fixed. `__proto__` is emitted as the computed key `["__proto__"]`, because the plain and the quoted forms both set the prototype. However, `Bcs.struct` itself cannot round-trip a field named `__proto__` ("Missing key"). Change needed in `@unconfirmed/bcs` (not core): use own-property access (`Object.hasOwn`, `Object.defineProperty`) in the struct encoder and decoder.
+- `mergeSorted`: fixed. It emits the run of the leading source that sorts no later than every other head as one chunk. There is a test.
+- `reconcileAll` and `at` / `lastError`: fixed. An `Unknown` entry keeps its first `at`, and its `lastError` when the round has none (CT-25 test).
+- `PURE_STRUCTS` in `packages/sui/src/Move.ts`: not changed (core). Core change needed: build the table lazily, e.g. a memoised function, instead of computed keys calling `Address.normalize` at module scope.
+
 ### CT-26 · nit · tests
 - `scripts/bundle-report.ts` has no program for a generated call, the GraphQL layers or the lifecycle, though the README quotes "~2.6 KB min / 0.8 KB gzip" for a generated call.
 - No test for: subscribe throughput (CT-1), a journal listing with a foreign or corrupt key (CT-2), `Checkpoints.list()` with an open end (CT-12), codegen key and name collisions (CT-9, CT-20), two local packages or root-versus-dependency merging (CT-7, CT-8).
+
+**Resolution:** fixed.
+- `scripts/bundle-report.ts` gains programs for a hand-written `moveCall`, one generated call (Walrus `blob.burn`), `Tx.run` over GraphQL, and `Lifecycle.run` with the KeyValueStore journal. Rows are added to the README; a generated call adds 2.6 KB min / 1.0 KB gzip, and the README now says 1.0.
+- Tests added for every case listed:
+  - subscribe throughput: offline, plus a live lag test;
+  - a corrupt or foreign journal key;
+  - `Checkpoints.list()` with an open end;
+  - codegen key and name collisions;
+  - two local packages;
+  - root-versus-dependency merging.
+- One existing live test changed: the GraphQL `CheckpointData` parity check now compares failure statuses without their abort text. gRPC sends the node's debug form and GraphQL sends a sentence; the command and abort code are still compared. It failed on a testnet checkpoint containing an aborted transaction.
 
 ## Optimizations and measurements
 

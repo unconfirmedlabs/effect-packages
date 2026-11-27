@@ -12,6 +12,7 @@
  * Time comes from `Clock`, so `TestClock` drives creation and expiry.
  */
 import { ed25519 } from "@noble/curves/ed25519.js"
+import { bytesToHex } from "@noble/hashes/utils.js"
 import { base64 } from "@scure/base"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import type { Address } from "@unconfirmed/sui/Address"
@@ -28,7 +29,9 @@ import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import * as Entropy from "./Entropy.ts"
+import { utf8 } from "./bytes.ts"
 import { InvalidSessionKey, SessionKeyExpired, SignatureRequired } from "./Errors.ts"
+import { strictId } from "./ids.ts"
 import type { Certificate } from "./KeyServerApi.ts"
 
 // -----------------------------------------------------------------------------
@@ -78,7 +81,7 @@ export const personalMessage = (o: {
   readonly sessionVk: Uint8Array
 }): Uint8Array => {
   const time = new Date(Math.floor(o.creationTime / 1000) * 1000).toISOString().slice(0, 19).replace("T", " ")
-  return new TextEncoder().encode(
+  return utf8(
     `Accessing keys of package ${o.packageName} for ${o.ttlMin} mins from ${time} UTC, session key ${
       base64.encode(o.sessionVk)
     }`
@@ -99,16 +102,16 @@ export const requestMessage = (ptb: Uint8Array, encKey: Uint8Array, encVerificat
 // Validation
 // -----------------------------------------------------------------------------
 
-const ID = /^0x[0-9a-fA-F]{64}$/
-
 /**
  * Strict: `0x` followed by exactly 64 hex digits, either case; answers the
  * canonical lower-case form (item 14). Short and unprefixed forms are refused.
  */
-export const normalizeId = (what: string, s: string): Effect.Effect<Address, InvalidSessionKey> =>
-  ID.test(s)
-    ? Effect.succeed(s.toLowerCase() as Address)
+export const normalizeId = (what: string, s: string): Effect.Effect<Address, InvalidSessionKey> => {
+  const id = strictId(s)
+  return id !== undefined
+    ? Effect.succeed(id)
     : Effect.fail(new InvalidSessionKey({ reason: `${what} must be 0x followed by 64 hex digits, got ${JSON.stringify(s)}` }))
+}
 
 const SIGNATURE_LENGTHS: Readonly<Record<number, number | undefined>> = {
   0x00: 97, // Ed25519
@@ -167,7 +170,10 @@ export interface Options {
   readonly mvrName?: string
   /** Whole minutes, 1 to 30 (R2). Default 10 minutes. */
   readonly ttl?: Duration.Input
-  /** Date the certificate this far in the past, so a client clock that runs ahead does not invalidate it (R2). Default 10 seconds. */
+  /**
+   * Date the certificate this far in the past, so a client clock that runs ahead does not invalidate it (R2). Default 10
+   * seconds. Must leave the session usable: `clockSkew + 10 s` (the expiry margin) below `ttl`.
+   */
   readonly clockSkew?: Duration.Input
   /** Derived keys kept for this session. Default 1024. */
   readonly cacheCapacity?: number
@@ -293,6 +299,11 @@ export const make = (options: Options): Effect.Effect<SessionKey, InvalidSession
     const skew = options.clockSkew === undefined
       ? DEFAULT_CLOCK_SKEW_MS
       : yield* nonNegativeMillis("clockSkew", options.clockSkew)
+    if (skew + EXPIRY_MARGIN_MS >= ttlMin * 60_000) {
+      return yield* new InvalidSessionKey({
+        reason: `clockSkew (${skew} ms) plus the ${EXPIRY_MARGIN_MS / 1000} s expiry margin must be shorter than ttl (${ttlMin} min)`
+      })
+    }
     const capacity = yield* positiveInt("cacheCapacity", options.cacheCapacity ?? DEFAULT_CACHE_CAPACITY)
     const now = yield* Clock.currentTimeMillis
     const createdAt = now - skew
@@ -306,7 +317,7 @@ export const make = (options: Options): Effect.Effect<SessionKey, InvalidSession
       secret,
       signer: options.signer,
       signature: undefined,
-      cache: new CacheState(address, packageId, capacity)
+      cache: new CacheState(capacity)
     })
   })
 
@@ -458,7 +469,7 @@ export const fromExported = (
       secret: Redacted.make(key.secretKey, { label: "session key" }),
       signer: options?.signer,
       signature,
-      cache: new CacheState(address, packageId, capacity)
+      cache: new CacheState(capacity)
     })
   })
 
@@ -473,20 +484,18 @@ export interface CachedKey {
   readonly key: Uint8Array
 }
 
-const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("")
-
 class CacheState {
   readonly entries = new Map<string, CachedKey>()
-  constructor(readonly owner: Address, readonly packageId: Address, readonly capacity: number) {}
+  constructor(readonly capacity: number) {}
 }
 
 /**
  * @internal The session's derived-key cache, for `Keys`.
  *
  * Every operation checks the session first: expired (with the 10 s margin) →
- * `SessionKeyExpired`, and the cache is emptied; a cache that does not belong
- * to this session's owner and package is a defect. Only then is anything read
- * or written. A full id of another package is never in the cache (`get` and
+ * `SessionKeyExpired`, and the cache is emptied. Only then is anything read or
+ * written. The cache is created with the session and shared only by sessions
+ * with the same owner and package (`withSignature`). A full id of another package is never in the cache (`get` and
  * `lookup` find nothing) and storing one is a defect. Bounded: least recently
  * used entries go first. Keys are copied in and out.
  */
@@ -512,14 +521,11 @@ export const keyCache = (session: SessionKey): KeyCache => {
         cache.entries.clear()
         return yield* Effect.failCause(live.cause)
       }
-      if (cache.owner !== session.address || cache.packageId !== session.packageId) {
-        return yield* Effect.die(new Error("session key cache does not belong to this session's owner and package"))
-      }
       return f(cache)
     })
   const prefix = (session: SessionKey) => session.packageId.slice(2)
-  const inPackage = (fullId: Uint8Array) => fullId.length >= 32 && hexOf(fullId.subarray(0, 32)) === prefix(session)
-  const keyOf = (fullId: Uint8Array, server: Address) => `${hexOf(fullId)}:${server}`
+  const inPackage = (fullId: Uint8Array) => fullId.length >= 32 && bytesToHex(fullId.subarray(0, 32)) === prefix(session)
+  const keyOf = (fullId: Uint8Array, server: Address) => `${bytesToHex(fullId)}:${server}`
   return {
     get: (fullId, server) =>
       guarded((c) => {
@@ -534,7 +540,7 @@ export const keyCache = (session: SessionKey): KeyCache => {
     lookup: (fullId) =>
       guarded((c) => {
         if (!inPackage(fullId)) return []
-        const p = `${hexOf(fullId)}:`
+        const p = `${bytesToHex(fullId)}:`
         const out: Array<CachedKey> = []
         for (const [k, v] of c.entries) {
           if (k.startsWith(p)) out.push({ server: v.server, fullId: v.fullId.slice(), key: v.key.slice() })

@@ -67,7 +67,13 @@ export const patch = (id: string, options: QuiltReadOptions = {}): Effect.Effect
     return yield* readPatch(source, parsed.startIndex, parsed.endIndex)
   })
 
-/** One patch by its identifier: the index, then that patch's columns. */
+/**
+ * One patch by its identifier: the index, then that patch's columns. The
+ * index is decoded before it is verified (only to find the patch), then the
+ * index and patch columns are verified together in one `sliverRoots` call;
+ * anything unexpected (a mismatch, an index that does not decode, no such
+ * identifier) takes the verified path: the index first, then the patch.
+ */
 export const byIdentifier = (
   quiltId: BlobId,
   identifier: string,
@@ -75,10 +81,36 @@ export const byIdentifier = (
 ): Effect.Effect<QuiltFile, QuiltReadError, ReadServices> =>
   Effect.gen(function*() {
     const source = yield* open(quiltId, options)
+    const fast = yield* findAndVerifyAtOnce(source, identifier)
+    if (fast !== undefined) return yield* readPatch(source, fast.startIndex, fast.endIndex)
     const patches = yield* readIndex(source)
     const found = patches.find((p) => p.identifier === identifier)
     if (!found) return yield* new QuiltError({ reason: `no patch with identifier ${JSON.stringify(identifier)}` })
     return yield* readPatch(source, found.startIndex, found.endIndex)
+  })
+
+/**
+ * The patch named `identifier`, with the index columns and the patch's columns verified in one go, or
+ * `undefined` when the caller should take the verified path (no `check` on this source, or anything
+ * unexpected). An unverified index is only used to choose which columns to fetch: nothing it says is
+ * returned until its columns have passed the Merkle check.
+ */
+const findAndVerifyAtOnce = (source: Source, identifier: string): Effect.Effect<QuiltPatch | undefined, QuiltReadError> =>
+  Effect.gen(function*() {
+    const check = source.check
+    if (check === undefined) return undefined
+    const l = source.layout
+    const spans = Quilt.indexColumns(yield* source.columns(0, 1, false), l)
+    if (Result.isFailure(spans)) return undefined
+    const count = spans.success
+    const index = Quilt.decodeIndex(yield* source.columns(0, count, false), l)
+    if (Result.isFailure(index)) return undefined
+    const found = index.success.find((p) => p.identifier === identifier)
+    if (!found || !(found.startIndex < found.endIndex) || found.endIndex > l.columns) return undefined
+    yield* source.columns(found.startIndex, found.endIndex, false)
+    const ok = yield* check([[0, count], [found.startIndex, found.endIndex]])
+    // Verified: the index decoded above came from exactly these bytes.
+    return ok ? found : undefined
   })
 
 // -----------------------------------------------------------------------------
@@ -94,6 +126,11 @@ interface Source {
    * column has passed the Merkle check (or comes from a verified full read).
    */
   readonly columns: (start: number, end: number, checked?: boolean) => Effect.Effect<Uint8Array, QuiltReadError>
+  /**
+   * Merkle-check every fetched, unchecked column in these `[start, end)` ranges in as few `sliverRoots`
+   * calls as possible; `false` if any differs. Absent when every column is verified on arrival.
+   */
+  readonly check?: (ranges: ReadonlyArray<readonly [number, number]>) => Effect.Effect<boolean, QuiltReadError>
 }
 
 const readIndex = (source: Source): Effect.Effect<ReadonlyArray<QuiltPatch>, QuiltReadError> =>
@@ -194,10 +231,10 @@ const sliverSource = (
         )
       })
 
-    /** Merkle-check the pending columns in `[start, end)`; false if any differs from the metadata. */
-    const check = (start: number, end: number): Effect.Effect<boolean, QuiltReadError> =>
+    /** Merkle-check the pending columns in the ranges; false if any differs from the metadata. */
+    const checkRanges = (ranges: ReadonlyArray<readonly [number, number]>): Effect.Effect<boolean, QuiltReadError> =>
       Effect.gen(function*() {
-        const todo = [...pending.keys()].filter((s) => s >= start && s < end).sort((a, b) => a - b)
+        const todo = [...pending.keys()].filter((s) => ranges.some(([start, end]) => s >= start && s < end)).sort((a, b) => a - b)
         const ok = yield* sliverRootsMatch(encoder, n, layout, metadata, todo.map((s) => ({ s, bytes: pending.get(s)!.bytes })))
         if (!ok) return false
         for (const s of todo) {
@@ -223,7 +260,7 @@ const sliverSource = (
         if (Result.isFailure(fetched)) {
           return yield* (yield* useBlob(`column fetch failed: ${fetched.failure.message}`)).columns(start, end)
         }
-        if (checked && !(yield* check(start, end))) {
+        if (checked && !(yield* checkRanges([[start, end]]))) {
           return yield* (yield* useBlob("a column does not match the metadata")).columns(start, end)
         }
         const out = new Uint8Array((end - start) * layout.columnSize)
@@ -231,7 +268,15 @@ const sliverSource = (
         return out
       })
 
-    return { layout, columns }
+    const check: Source["check"] = (ranges) =>
+      Effect.suspend(() => {
+        if (fallback || !verify) return Effect.succeed(true)
+        // A column that is not fetched yet cannot be checked: the verified path fetches and checks it.
+        for (const [start, end] of ranges) for (let s = start; s < end; s++) if (!verified.has(s) && !pending.has(s)) return Effect.succeed(false)
+        return checkRanges(ranges)
+      })
+
+    return { layout, columns, check }
   })
 
 /** Sliver bytes in flight at once (the read path's budget). */

@@ -85,7 +85,7 @@ const failure = <A, E>(exit: Exit.Exit<A, E>): E => {
 
 const relayLayer = (route: (req: Recorded) => Outcome, options: Partial<UploadRelay.UploadRelayOptions> = {}) => {
   const http = scripted(route)
-  return { layer: UploadRelay.layer({ host: HOST, ...options }).pipe(Layer.provide(http.layer)), requests: http.requests }
+  return { layer: UploadRelay.layer({ host: HOST, maxTip: 1_000_000n, ...options }).pipe(Layer.provide(http.layer)), requests: http.requests }
 }
 const withRelay = <A, E>(layer: Layer.Layer<UploadRelay.UploadRelay>, f: (r: UploadRelay.UploadRelayService) => Effect.Effect<A, E>) =>
   Effect.runPromise(Effect.exit(Effect.provide(Effect.flatMap(Effect.service(UploadRelay.UploadRelay), f), layer)))
@@ -348,6 +348,29 @@ describe("authAndTip", () => {
       ))
     )
     expect(e).toMatchObject({ _tag: "TipTooHigh", tip: 105n, max: 104n })
+  })
+
+  const authWith = async (layer: Layer.Layer<UploadRelay.UploadRelay>) =>
+    Effect.runPromise(Effect.exit(
+      Ptb.build(UploadRelay.authAndTip({ blob: BLOB, nonce: NONCE })).pipe(Effect.provide(Layer.merge(layer, systemLayer())))
+    ))
+
+  test("an untyped caller without maxTip pays no tip at all (TipTooHigh, max 0)", async () => {
+    const unbounded = scripted(() => ({ body: CONST_TIP }))
+    const layer = UploadRelay.layer({ host: HOST } as UploadRelay.UploadRelayOptions).pipe(Layer.provide(unbounded.layer))
+    expect(failure(await authWith(layer))).toMatchObject({ _tag: "TipTooHigh", tip: 105n, max: 0n })
+    // maxTip 0n still works with a relay that wants no tip.
+    const free = relayLayer(() => ({ body: JSON.stringify("no_tip") }), { maxTip: 0n })
+    value(await authWith(free.layer))
+  })
+
+  test("tipAddress pins the recipient: another address in the tip config is a RelayError", async () => {
+    const other = relayLayer(() => ({ body: CONST_TIP }), { tipAddress: "0xbad" })
+    const e = failure(await authWith(other.layer))
+    expect(e).toMatchObject({ _tag: "RelayError" })
+    expect(String((e as { message: string }).message)).toContain("differs")
+    const same = relayLayer(() => ({ body: CONST_TIP }), { tipAddress: TIP_ADDRESS.replace(/^0x0+/, "0x") })
+    value(await authWith(same.layer))
   })
 })
 

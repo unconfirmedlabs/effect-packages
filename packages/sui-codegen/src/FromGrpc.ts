@@ -90,13 +90,20 @@ export const load = (
     let queue = [...referenced(root, true)]
     while (queue.length > 0) {
       const next: Array<string> = []
-      for (const address of queue) {
+      // One level at a time, its packages fetched concurrently and registered in order.
+      const level = [...new Set(queue.filter((address) => !aliases.has(address)))]
+      const fetched = yield* Effect.forEach(level, (address) =>
+        Effect.gen(function*() {
+          const p = yield* fetch(linkage.get(address) ?? address)
+          const original = M.normalizeAddress(p.original_id ?? p.storage_id!)
+          const upgraded = linkage.get(original)
+          return upgraded !== undefined && upgraded !== M.normalizeAddress(p.storage_id!) ? yield* fetch(upgraded) : p
+        }), { concurrency: 8 })
+      for (let i = 0; i < level.length; i++) {
+        const address = level[i]!
         if (aliases.has(address)) continue
-        let p = yield* fetch(linkage.get(address) ?? address)
-        const original = M.normalizeAddress(p.original_id ?? p.storage_id!)
-        const upgraded = linkage.get(original)
-        if (upgraded !== undefined && upgraded !== M.normalizeAddress(p.storage_id!)) p = yield* fetch(upgraded)
-        register(p)
+        const p = fetched[i]!
+        const original = register(p)
         aliases.set(address, original)
         next.push(...referenced(p, false))
       }

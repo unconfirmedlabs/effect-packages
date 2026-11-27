@@ -30,9 +30,7 @@ const isDatatype = Schema.is(Datatype)
 
 export const GetMoveFunction = GraphQL.query("GetMoveFunction", {
   document: "query GetMoveFunction($package:SuiAddress!,$module:String!,$function:String!){" +
-    "package(address:$package){module(name:$module){function(name:$function){isEntry parameters{signature}}}} " +
-    // Tells "no such package" (NOT_FOUND) from "an object, not a package" (INVALID_ARGUMENT).
-    "object(address:$package){address}}",
+    "package(address:$package){module(name:$module){function(name:$function){isEntry parameters{signature}}}}}",
   variables: { package: Schema.String, module: Schema.String, function: Schema.String },
   result: Schema.Struct({
     package: Schema.NullOr(Schema.Struct({
@@ -42,12 +40,18 @@ export const GetMoveFunction = GraphQL.query("GetMoveFunction", {
           parameters: Schema.NullOr(Schema.Array(Schema.Struct({ signature: Signature })))
         }))
       }))
-    })),
-    object: Schema.NullOr(Schema.Struct({ address: Schema.String }))
+    }))
   })
 })
 
-export const group = GraphQLGroup.make(GetMoveFunction)
+/** Asked only when there is no package: tells "no such package" (NOT_FOUND) from "an object, not a package" (INVALID_ARGUMENT). */
+export const ObjectExists = GraphQL.query("ObjectExists", {
+  document: "query ObjectExists($address:SuiAddress!){object(address:$address){address}}",
+  variables: { address: Schema.String },
+  result: Schema.Struct({ object: Schema.NullOr(Schema.Struct({ address: Schema.String })) })
+})
+
+export const group = GraphQLGroup.make(GetMoveFunction, ObjectExists)
 
 const PRIMITIVES = new Set(["address", "bool", "u8", "u16", "u32", "u64", "u128", "u256"])
 
@@ -106,7 +110,12 @@ export const layer: Layer.Layer<Packages.Packages, never, GraphQLProtocol.GraphQ
         call,
         Effect.flatMap((r): Effect.Effect<Packages.MoveFunction, RpcError> => {
           if (r.package === null) {
-            return r.object === null ? fail("NOT_FOUND", `package ${pkg} not found`) : fail("INVALID_ARGUMENT", "object is not a package")
+            return client.ObjectExists({ address: pkg }).pipe(
+              call,
+              Effect.flatMap((o) =>
+                o.object === null ? fail("NOT_FOUND", `package ${pkg} not found`) : fail("INVALID_ARGUMENT", "object is not a package")
+              )
+            )
           }
           if (r.package.module === null) return fail("NOT_FOUND", `Module not found: ${pkg}::${module}`)
           const f = r.package.module.function

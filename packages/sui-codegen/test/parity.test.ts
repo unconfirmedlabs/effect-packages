@@ -176,7 +176,7 @@ const objectsLayer = Layer.succeed(Objects.Objects, {
 })
 
 const findFunction = (pkg: string, module: string, name: string) => {
-  const p = model.packages.find((p) => p.address === (pkg === PKG ? A("0x0") : pkg))!
+  const p = model.packages.find((p) => p.address === (pkg === PKG ? model.root : pkg))!
   return p.modules.find((m) => m.name === module)!.functions.find((f) => f.name === name)!
 }
 const typeName = (t: M.Type): string | undefined => {

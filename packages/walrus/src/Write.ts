@@ -143,7 +143,11 @@ export interface WriteOptions<E, R, E2 = never, R2 = never, V extends Via = "nod
   readonly epochs: number
   readonly deletable: boolean
   readonly executor: Executor<E, R>
-  /** Who receives the `Blob`. Default: the executor's sender. */
+  /**
+   * Who receives the `Blob`. Default: the executor's sender. The sender keeps the `Blob` until it is
+   * certified (only an object's owner can use it in a transaction) and the certify transaction transfers
+   * it, as the Rust client's `PostStoreAction::TransferTo` does.
+   */
   readonly owner?: Address.Address
   readonly attributes?: Readonly<Record<string, string>>
   /** Default `"nodes"`; `"relay"` needs an `UploadRelay` layer (and ignores `linger`, `retry` and `maxInFlightBytes`). */
@@ -209,10 +213,18 @@ const decodeBlob = /* @__PURE__ */ Objects.decode(blob.Blob)
 const decodeBlobBytes = /* @__PURE__ */ Bcs.decode(blob.Blob)
 
 /** The `Blob` object, or `undefined` when it no longer exists. */
-const readBlob = (blobObjectId: Address.Address) =>
+const readBlob = (blobObjectId: Address.Address) => Effect.map(readOwnedBlob(blobObjectId), (r) => r?.blob)
+
+/** The `Blob` object and its owner, or `undefined` when it no longer exists. */
+const readOwnedBlob = (blobObjectId: Address.Address) =>
   Effect.flatMap(Effect.service(Objects.Objects), (objects) =>
     objects.get(blobObjectId).pipe(
-      Effect.flatMap((o) => Effect.map(decodeBlob(o), (b): OnChainBlob | undefined => b)),
+      Effect.flatMap((o) =>
+        Effect.map(decodeBlob(o), (blob): { readonly blob: OnChainBlob; readonly owner: Objects.Owner } | undefined => ({
+          blob,
+          owner: o.owner
+        }))
+      ),
       Effect.catchTag("ObjectNotFound", () => Effect.succeed(undefined))
     ))
 
@@ -337,23 +349,24 @@ export const findRegistration = (
     const objects = yield* Effect.service(Objects.Objects)
     const id = BlobId.toU256(encoded.blobId)
     const size = BigInt(encoded.unencodedLength)
-    const owned = yield* Stream.runCollect(objects.listOwned(owner, { type }))
-    for (const object of owned) {
+    // Stops at the first match instead of collecting every owned `Blob` first.
+    const found = yield* Stream.runHead(Stream.filterMap(objects.listOwned(owner, { type }), (object) => {
       const decoded = decodeBlobBytes(object.contents)
-      if (Result.isFailure(decoded)) continue
+      if (Result.isFailure(decoded)) return Result.failVoid
       const b = decoded.success
-      if (
-        b.blob_id === id && b.size === size && b.deletable === o.deletable && Option.isNone(b.certified_epoch) &&
-        b.storage.end_epoch >= o.minEndEpoch
-      ) return b
-    }
-    return undefined
+      return b.blob_id === id && b.size === size && b.deletable === o.deletable && Option.isNone(b.certified_epoch) &&
+          b.storage.end_epoch >= o.minEndEpoch
+        ? Result.succeed(b)
+        : Result.failVoid
+    }))
+    return Option.getOrUndefined(found)
   })
 
 /**
- * Ensure the blob is registered: reuse an owned registration (see
- * `findRegistration`), else execute `registerBlob` and transfer the `Blob` to
- * the owner.
+ * Ensure the blob is registered: reuse a registration the executor's sender
+ * owns (see `findRegistration`), else execute `registerBlob`. The `Blob` stays
+ * with the sender (certify needs it there); `certify` transfers it to `owner`.
+ * A reused registration gets `attributes` set in a small transaction.
  */
 export const register = <E, R, V extends Via = "nodes">(
   encoded: Encoded,
@@ -384,40 +397,65 @@ const registerWith = <E, R>(
       encoded = { ...encoded, relayNonce: nonce }
       if (yield* wantsTip(relay)) auth = { blob, nonce }
     }
-    const owner = Address.normalize(o.owner ?? o.executor.sender)
-    const state = yield* systemState
-    const existing = yield* findRegistration(owner, encoded, { deletable: o.deletable, minEndEpoch: state.epoch + o.epochs })
-    if (existing !== undefined) {
-      const digest = relay !== undefined && auth !== undefined ? yield* sendAuth(relay, o.executor, auth.blob, auth.nonce) : undefined
-      return registeredOf(encoded, existing, digest)
-    }
+    const sender = Address.normalize(o.executor.sender)
+    for (let attempt = 0;; attempt++) {
+      const state = yield* systemState
+      const existing = yield* findRegistration(sender, encoded, { deletable: o.deletable, minEndEpoch: state.epoch + o.epochs })
+      if (existing !== undefined) {
+        const attributes = o.attributes
+        const tipped = relay !== undefined && auth !== undefined
+        const extra = tipped || (attributes !== undefined && Object.keys(attributes).length > 0)
+        const digest = extra
+          ? (yield* o.executor.execute(Effect.gen(function*() {
+            // Input 0 (R3) when the relay wants a tip; the attributes are idempotent (`insert_or_update`).
+            if (relay !== undefined && auth !== undefined) yield* authAndTipWith(relay, auth)
+            if (attributes !== undefined) yield* Recipes.setAttributes({ blobObjectId: Address.normalize(existing.id), attributes })
+          }))).digest
+          : undefined
+        return registeredOf(encoded, existing, tipped ? digest : undefined)
+      }
 
-    const effects = yield* o.executor.execute(Effect.gen(function*() {
-      // Input 0 (R3): before anything else touches the builder.
-      if (relay !== undefined && auth !== undefined) yield* authAndTipWith(relay, auth)
-      const registered = yield* Recipes.registerBlob({
-        blobId: encoded.blobId,
-        rootHash: encoded.rootHash,
-        unencodedLength: encoded.unencodedLength,
-        epochs: o.epochs,
-        deletable: o.deletable,
-        ...(o.attributes !== undefined && { attributes: o.attributes })
-      })
-      yield* Ptb.transferObjects([registered], yield* Ptb.address(owner))
-    }))
-    const blobObjectId = yield* createdBlob(effects)
-    if (blobObjectId === undefined) {
-      return yield* new RegistrationFailed({
-        blobObjectId: Address.normalize("0x0"),
-        reason: `transaction ${effects.digest} created no Blob`
-      })
+      const executed = yield* Effect.result(o.executor.execute(Effect.gen(function*() {
+        // Input 0 (R3): before anything else touches the builder.
+        if (relay !== undefined && auth !== undefined) yield* authAndTipWith(relay, auth)
+        const registered = yield* Recipes.registerBlob({
+          blobId: encoded.blobId,
+          rootHash: encoded.rootHash,
+          unencodedLength: encoded.unencodedLength,
+          epochs: o.epochs,
+          deletable: o.deletable,
+          ...(o.attributes !== undefined && { attributes: o.attributes })
+        })
+        yield* Ptb.transferObjects([registered], yield* Ptb.address(sender))
+      })))
+      if (Result.isFailure(executed)) {
+        // The payment is exact for the prices the recipe read, and calls go to the package id it read: a
+        // price change or an upgrade aborts. When the system object now says otherwise, rebuild once.
+        if (attempt >= 1) return yield* Effect.fail(executed.failure)
+        const fresh = yield* Effect.result(refreshedState)
+        if (Result.isFailure(fresh) || !stateMoved(state, fresh.success)) return yield* Effect.fail(executed.failure)
+        continue
+      }
+      const effects = executed.success
+      const blobObjectId = yield* createdBlob(effects)
+      if (blobObjectId === undefined) {
+        return yield* new RegistrationFailed({
+          blobObjectId: Address.normalize("0x0"),
+          reason: `transaction ${effects.digest} created no Blob`
+        })
+      }
+      const b = yield* readCreatedBlob(blobObjectId).pipe(
+        Effect.catchTag("ObjectNotFound", () =>
+          Effect.fail(new RegistrationFailed({ blobObjectId, reason: `created by ${effects.digest} but not readable` })))
+      )
+      return registeredOf(encoded, b, effects.digest)
     }
-    const b = yield* readCreatedBlob(blobObjectId).pipe(
-      Effect.catchTag("ObjectNotFound", () =>
-        Effect.fail(new RegistrationFailed({ blobObjectId, reason: `created by ${effects.digest} but not readable` })))
-    )
-    return registeredOf(encoded, b, effects.digest)
   })
+
+/** What a register transaction depends on changed: prices, the package calls go to, the epoch or the shard count. */
+const stateMoved = (a: SystemState, b: SystemState): boolean =>
+  a.storagePrice !== b.storagePrice || a.writePrice !== b.writePrice || a.packageId !== b.packageId ||
+  a.epoch !== b.epoch || a.nShards !== b.nShards || a.initialSharedVersion !== b.initialSharedVersion
 
 /** The `Blob` a transaction created: by type in the effects, else by reading the created objects. */
 const createdBlob = (effects: Transactions.Effects) =>
@@ -477,21 +515,27 @@ const uploadOnce = (
     const global = yield* Semaphore.make(permits)
     const newerEpoch = yield* Ref.make<number | undefined>(undefined)
 
+    // The bytes that can be in flight at once, shared by every `PUT` on the same uplink: what a `PUT`'s
+    // timeout has to allow for (`StorageNode.scaledTimeout`).
+    const totalBytes = (encoded.primary[0]?.length ?? 0) * 2 * n
+    const sharedBytes = Math.min(totalBytes, permits * sliverBytes)
+
+    // The global permit is taken per attempt, so a node in backoff does not hold bytes it is not sending.
     const putSliver = (node: CommitteeNode, pair: number, axis: "primary" | "secondary", checkFirst: boolean) => {
       const sliver = (axis === "primary" ? encoded.primary : encoded.secondary)[pair]!
-      const put = withRetry(nodes.putSliver(node, blobId, pair, axis, sliver))
+      const put = withRetry(Semaphore.withPermit(global)(nodes.putSliver(node, blobId, pair, axis, sliver, { sharedBytes })))
       const guarded = checkFirst && sliver.length >= STATUS_CHECK_MIN_BYTES
         ? Effect.flatMap(
           nodes.sliverStatus(node, blobId, pair, axis).pipe(Effect.orElseSucceed(() => "nonexistent" as const)),
           (s) => s === "nonexistent" ? put : Effect.void
         )
         : put
-      return Semaphore.withPermit(global)(Effect.asVoid(guarded))
+      return Effect.asVoid(guarded)
     }
 
     const store = (node: CommitteeNode): Effect.Effect<Confirmed, NodeError> =>
       Effect.gen(function*() {
-        const metadata = yield* withRetry(nodes.putMetadata(node, blobId, encoded.metadata))
+        const metadata = yield* withRetry(nodes.putMetadata(node, blobId, encoded.metadata, { sharedBytes }))
         const checkFirst = metadata === "alreadyStored"
         const puts = node.shards.flatMap((shard) => {
           const pair = Encoding.pairOfShard(shard, blobId, n)
@@ -527,21 +571,19 @@ const uploadOnce = (
       linger: o.linger ?? defaultLinger
     }).pipe(
       Effect.catchTag("QuorumFailed", (e) =>
-        Effect.flatMap(Ref.get(newerEpoch), (epoch) =>
-          Effect.fail(
-            epoch !== undefined ? { _tag: "EpochMoved" as const, epoch } : new NotEnoughConfirmations({
-              blobId,
-              weight: e.weight,
-              required,
-              failures: e.failures.map((f) => ({
-                node: f.member.url,
-                weight: f.weight,
-                kind: f.error.kind,
-                message: f.error.message
-              }))
-            })
+        Effect.flatMap(Ref.get(newerEpoch), (epoch) => {
+          const failures = e.failures.map((f) => ({
+            node: f.member.url,
+            weight: f.weight,
+            kind: f.error.kind,
+            message: f.error.message
+          }))
+          return Effect.fail(
+            epoch !== undefined
+              ? { _tag: "EpochMoved" as const, epoch, weight: e.weight, failures }
+              : new NotEnoughConfirmations({ blobId, weight: e.weight, required, failures })
           )
-        ))
+        }))
     )
     const signers = [...reached.successes].sort((a, b) => a.value.node.index - b.value.node.index)
     const signature = yield* encoder.blsAggregate(signers.map((s) => s.value.signature))
@@ -580,11 +622,12 @@ export const upload = (
       )
       if (result._tag === "Done") return result.u
       if (round >= 1) {
+        // The second round's own failures (the nodes that confirmed for a newer epoch among them).
         return yield* new NotEnoughConfirmations({
           blobId: registered.blobId,
-          weight: 0,
+          weight: result.weight,
           required: Bft.minCorrect(committee.nShards),
-          failures: [{ node: "", weight: 0, kind: "EpochMoved", message: `nodes confirm for epoch ${result.epoch}` }]
+          failures: result.failures
         })
       }
       yield* refreshedState
@@ -657,16 +700,30 @@ export const uploadViaRelay = (
 /**
  * Ensure the blob is certified: done if the `Blob` already is; a certificate
  * from another epoch is `CertificateStale` (M4; `run` then uploads again);
- * otherwise execute `certifyBlob`.
+ * otherwise execute `certifyBlob`, and, when `owner` is not the executor's
+ * sender, transfer the `Blob` to `owner` in the same transaction. A certified
+ * `Blob` the sender still holds (a write certified without `owner`) is
+ * transferred on its own.
  */
 export const certify = <E, R>(
   uploaded: Uploaded,
-  o: { readonly executor: Executor<E, R> }
+  o: { readonly executor: Executor<E, R>; readonly owner?: Address.Address }
 ): Effect.Effect<Certified, WriteError | E, System | Objects.Objects | R> =>
   Effect.gen(function*() {
-    const b = yield* readBlob(uploaded.blobObjectId)
-    if (b === undefined) return yield* new RegistrationFailed({ blobObjectId: uploaded.blobObjectId, reason: "the Blob no longer exists" })
-    if (Option.isSome(b.certified_epoch)) return certifiedOf(uploaded, b.certified_epoch.value, b.storage.end_epoch)
+    const read = yield* readOwnedBlob(uploaded.blobObjectId)
+    if (read === undefined) return yield* new RegistrationFailed({ blobObjectId: uploaded.blobObjectId, reason: "the Blob no longer exists" })
+    const b = read.blob
+    const sender = Address.normalize(o.executor.sender)
+    const owner = o.owner === undefined ? sender : Address.normalize(o.owner)
+    const transfer = owner !== sender
+      ? Effect.flatMap(Ptb.object(uploaded.blobObjectId), (blob) =>
+        Effect.flatMap(Ptb.address(owner), (to) => Ptb.transferObjects([blob], to)))
+      : Effect.void
+    if (Option.isSome(b.certified_epoch)) {
+      const held = read.owner._tag === "AddressOwner" && read.owner.address === sender
+      const digest = held && owner !== sender ? (yield* o.executor.execute(transfer)).digest : undefined
+      return certifiedOf(uploaded, b.certified_epoch.value, b.storage.end_epoch, digest)
+    }
     const state = yield* refreshedState
     if (uploaded.certificate.epoch !== state.epoch) {
       return yield* new CertificateStale({ certificateEpoch: uploaded.certificate.epoch, epoch: state.epoch })
@@ -675,7 +732,7 @@ export const certify = <E, R>(
       return yield* new RegistrationFailed({ blobObjectId: uploaded.blobObjectId, reason: `storage ended at epoch ${b.storage.end_epoch}` })
     }
     const effects = yield* o.executor.execute(
-      Recipes.certifyBlob({ blobObjectId: uploaded.blobObjectId, certificate: uploaded.certificate })
+      Effect.andThen(Recipes.certifyBlob({ blobObjectId: uploaded.blobObjectId, certificate: uploaded.certificate }), transfer)
     )
     // `certify_blob` sets `certified_epoch` to the current epoch, which it checked equals the certificate's (M4).
     return certifiedOf(uploaded, uploaded.certificate.epoch, b.storage.end_epoch, effects.digest)
@@ -692,6 +749,8 @@ interface Machine {
   readonly checked: boolean
   /** Relay path: `step.digest` is an auth transaction sent by this run (a resumed one may be too old for the relay). */
   readonly fresh: boolean
+  /** `step` is a `Registered` this run just produced: the chain was read for it a moment ago. */
+  readonly registeredHere?: boolean
   readonly stale: number
 }
 
@@ -757,24 +816,25 @@ const advance = <E, R>(bytes: Uint8Array, options: AdvanceOptions<E, R>) => {
           if (relay !== undefined) {
             yield* checkedFor(machine, step.blobId)
             const registered = yield* registerWith(relay, step, { ...options, blob: bytes })
-            return { ...machine, checked: true, fresh: true, step: registered }
+            return { ...machine, checked: true, fresh: true, registeredHere: true, step: registered }
           }
           const encoded = yield* encodedFor(machine, step.blobId)
-          return { ...machine, encoded, step: yield* registerWith(undefined, step, options) }
+          return { ...machine, encoded, registeredHere: true, step: yield* registerWith(undefined, step, options) }
         }
         case "Registered": {
           if (relay !== undefined) {
             yield* checkedFor(machine, step.blobId)
-            const done = yield* checkRegistered(step)
+            // A registration made (or found) by this run was just read: skip the re-read (certify reads it again).
+            const done = machine.registeredHere ? undefined : yield* checkRegistered(step)
             if (done !== undefined) return { ...machine, checked: true, step: done }
             const authed = yield* freshAuth(relay, step, machine.fresh)
             const uploaded = yield* uploadViaRelayWith(relay, bytes, authed, authed.digest)
-            return { ...machine, checked: true, fresh: true, step: uploaded }
+            return { ...machine, checked: true, fresh: true, registeredHere: false, step: uploaded }
           }
           const encoded = yield* encodedFor(machine, step.blobId)
-          const done = yield* checkRegistered(step)
+          const done = machine.registeredHere ? undefined : yield* checkRegistered(step)
           if (done !== undefined) return { ...machine, encoded, step: done }
-          return { ...machine, encoded, step: yield* upload(encoded, step, options) }
+          return { ...machine, encoded, registeredHere: false, step: yield* upload(encoded, step, options) }
         }
         case "Uploaded": {
           // Checks resumed bytes, and is what a stale certificate needs anyway.

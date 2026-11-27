@@ -42,6 +42,14 @@ export interface Unsettled<M> {
 
 export type Order = "given" | "shuffle" | "weightedShuffle"
 
+/** What a function-valued `concurrency` sees: members settled so far (counts) and the weight they carry. */
+export interface Progress {
+  readonly succeeded: number
+  readonly failed: number
+  readonly reachedWeight: number
+  readonly failedWeight: number
+}
+
 interface Common<M, A, E, R> {
   readonly weight: (member: M) => number
   /** One attempt at one member. Typed failures count against the member; defects fail the whole call. */
@@ -50,8 +58,13 @@ interface Common<M, A, E, R> {
   readonly schedule?: Schedule.Schedule<unknown, E>
   /** Retry only these errors (default: all). A `false` makes the failure final at once. */
   readonly while?: (error: E) => boolean
-  /** Attempts in flight at once; a retrying member keeps its slot. Default `"unbounded"`. */
-  readonly concurrency?: number | "unbounded"
+  /**
+   * Attempts in flight at once; a retrying member keeps its slot. Default `"unbounded"`. A function is
+   * asked again whenever a slot may open (at the start and after every settlement), so the window can
+   * widen as members fail, e.g. `(p) => 3 + p.failed`. It must return a positive integer or `Infinity`;
+   * anything else is a defect. Lowering it never interrupts a running member.
+   */
+  readonly concurrency?: number | "unbounded" | ((progress: Progress) => number)
   /** Start order. Default `"given"`. */
   readonly order?: Order
 }
@@ -247,7 +260,7 @@ const prepare = <M, A, E, R>(
       if (!isFiniteNumber(numbers[name])) return invalid(`${name} must be a finite number, got ${numbers[name]}`)
     }
     const c = common.concurrency
-    if (c !== undefined && c !== "unbounded" && !(Number.isInteger(c) && c >= 1)) {
+    if (c !== undefined && c !== "unbounded" && typeof c !== "function" && !(Number.isInteger(c) && c >= 1)) {
       return invalid(`concurrency must be a positive integer or "unbounded", got ${c}`)
     }
     const entries: Array<Entry<M>> = []
@@ -288,10 +301,10 @@ interface Settled<A, E> {
 
 /**
  * Runs `entries` (already ordered) at most `concurrency` at a time, folding each settlement into the
- * tally and asking `decide` after each one. Ends on `done`, `fail` or `gaveUp`; after `done`, `lingerFor`
- * may keep the run going for a window, and after `gaveUp`, `grace` (ms) may, ending early on `done` (a
- * success) or `fail` (still gave up). Every attempt still in flight is interrupted, and awaited, before it
- * returns.
+ * tally and asking `decide` after each one. Ends on `done`, `fail` or `gaveUp`; after `done`, settlements
+ * already queued are folded in, then `lingerFor` may keep the run going for a window, and after `gaveUp`,
+ * `grace` (ms) may, ending early on `done` (a success) or `fail` (still gave up). Every attempt still in
+ * flight is interrupted, and awaited, before it returns.
  */
 const drive = <M, A, E, R>(
   entries: Array<Entry<M>>,
@@ -307,9 +320,19 @@ const drive = <M, A, E, R>(
       const scope = yield* Scope.make("parallel")
       const queue = yield* Queue.unbounded<Settled<A, E>>()
       const tally: Tally<M, A, E> = { total, reached: 0, failed: 0, successes: [], failures: [] }
-      const limit = common.concurrency === undefined || common.concurrency === "unbounded"
-        ? Infinity
-        : common.concurrency
+      const c = common.concurrency
+      const limit = (): number => {
+        if (c === undefined || c === "unbounded") return Infinity
+        if (typeof c !== "function") return c
+        const n = c({
+          succeeded: tally.successes.length,
+          failed: tally.failures.length,
+          reachedWeight: tally.reached,
+          failedWeight: tally.failed
+        })
+        if (n === Infinity || (Number.isInteger(n) && n >= 1)) return n
+        throw new Cause.IllegalArgumentError(`Quorum: concurrency must return a positive integer or Infinity, got ${n}`)
+      }
       const state: Array<"queued" | "running" | "settled"> = entries.map(() => "queued")
       const { schedule, while: retryWhile } = common
       let next = 0
@@ -319,7 +342,7 @@ const drive = <M, A, E, R>(
         schedule ? Effect.retry(common.run(member), { schedule, while: retryWhile }) : common.run(member)
 
       const fill = Effect.gen(function*() {
-        while (running < limit && next < entries.length) {
+        while (next < entries.length && running < (yield* Effect.try({ try: limit, catch: (e) => e }).pipe(Effect.orDie))) {
           const slot = next++
           running++
           state[slot] = "running"
@@ -330,8 +353,11 @@ const drive = <M, A, E, R>(
         }
       })
 
-      /** Takes one settlement and folds it in. A defect or self-interruption ends the call. */
-      const settle = (settled: Settled<A, E>): Effect.Effect<Success<M, A> | undefined> => {
+      /**
+       * Folds one settlement in. A success returns it; a typed failure returns `undefined`; a defect or a
+       * self-interruption returns the effect that ends the call with it.
+       */
+      const settle = (settled: Settled<A, E>): Success<M, A> | undefined | { readonly end: Effect.Effect<never> } => {
         const { slot, exit } = settled
         const entry = entries[slot]!
         running--
@@ -340,24 +366,39 @@ const drive = <M, A, E, R>(
           const success = { member: entry.member, index: entry.index, weight: entry.weight, value: exit.value }
           tally.successes.push(success)
           tally.reached += entry.weight
-          return Effect.succeed(success)
+          return success
         }
         const cause = exit.cause
-        if (Cause.hasDies(cause)) return Effect.failCause(Cause.fromReasons(cause.reasons.filter(Cause.isDieReason))) as never
+        if (Cause.hasDies(cause)) return { end: Effect.failCause(Cause.fromReasons(cause.reasons.filter(Cause.isDieReason))) }
         const error = Cause.findErrorOption(cause)
-        if (Option.isNone(error)) return Effect.interrupt as never
+        if (Option.isNone(error)) return { end: Effect.interrupt }
         tally.failures.push({ member: entry.member, index: entry.index, weight: entry.weight, error: error.value })
         tally.failed += entry.weight
-        return Effect.succeed(undefined)
+        return undefined
       }
+
+      const isEnd = (r: ReturnType<typeof settle>): r is { readonly end: Effect.Effect<never> } =>
+        r !== undefined && "end" in r
+
+      // After the threshold is reached the call is a success whatever else happens (§3.4): a member that
+      // dies or interrupts itself then is logged and ends the window, it does not discard the result.
+      const afterSuccess = (end: Effect.Effect<never>) =>
+        Effect.flatMap(
+          Effect.exit(end),
+          (exit) =>
+            Exit.isFailure(exit)
+              ? Effect.logWarning("Quorum: a member died or was interrupted after the threshold was reached", exit.cause)
+              : Effect.void
+        )
 
       const allSettled = () => tally.successes.length + tally.failures.length === entries.length
 
       const race = Effect.gen(function*() {
         yield* fill
         while (true) {
-          const success = yield* settle(yield* Queue.take(queue))
-          let decision = decide(tally, success)
+          const result = settle(yield* Queue.take(queue))
+          if (isEnd(result)) return yield* result.end
+          let decision = decide(tally, result)
           if (decision === "continue" && allSettled()) decision = "fail"
           if (decision !== "continue") return decision
           yield* fill
@@ -365,8 +406,26 @@ const drive = <M, A, E, R>(
       })
 
       /**
+       * Folds in, without waiting, the settlements queued in the same turn as the deciding one. It does not
+       * yield: that would let attempts forked but not yet started send their requests, only to be interrupted.
+       */
+      const drain = Effect.gen(function*() {
+        while (true) {
+          const settled = yield* Queue.poll(queue)
+          if (Option.isNone(settled)) return true
+          const result = settle(settled.value)
+          if (isEnd(result)) {
+            yield* afterSuccess(result.end)
+            return false
+          }
+          decide(tally, result)
+        }
+      })
+
+      /**
        * Keeps settling (and starting queued members) for `window` ms or until everything has settled.
        * `check`, when given, may end it early with its decision; otherwise the result is "continue".
+       * Without `check` (the linger window) a defect ends the window instead of the call.
        */
       const extend = (window: number, check?: (success: Success<M, A> | undefined) => Decision) =>
         Effect.gen(function*() {
@@ -380,21 +439,30 @@ const drive = <M, A, E, R>(
               ? Option.some(yield* Queue.take(queue))
               : yield* Effect.timeoutOption(Queue.take(queue), left)
             if (Option.isNone(settled)) break
-            const success = yield* settle(settled.value)
-            const decision = check ? check(success) : "continue"
+            const result = settle(settled.value)
+            if (isEnd(result)) {
+              if (check) return yield* result.end
+              yield* afterSuccess(result.end)
+              break
+            }
+            const decision = check ? check(result) : "continue"
             if (decision !== "continue") return decision
             yield* fill
           }
           return "continue"
         })
 
-      // After `done`: the linger window, still a success. After `gaveUp`: the grace window, a success if the
-      // threshold is reached in it, otherwise (window over, all settled, or unreachable) still `gaveUp`.
+      // After `done`: what is already queued, then the linger window, still a success. After `gaveUp`: the
+      // grace window, a success if the threshold is reached in it, otherwise (window over, all settled, or
+      // unreachable) still `gaveUp`.
       const after = (decision: Exclude<Decision, "continue">): Effect.Effect<Exclude<Decision, "continue">, never, R> =>
-        decision === "done" && lingerFor
+        decision === "done"
           ? Effect.as(
-            Effect.flatMap(Clock.currentTimeMillis, (now) =>
-              extend(Duration.toMillis(lingerFor(Duration.millis(now - startedAt))))),
+            Effect.flatMap(drain, (more) =>
+              more && lingerFor
+                ? Effect.flatMap(Clock.currentTimeMillis, (now) =>
+                  extend(Duration.toMillis(lingerFor(Duration.millis(now - startedAt)))))
+                : Effect.void),
             decision
           )
           : decision === "gaveUp"

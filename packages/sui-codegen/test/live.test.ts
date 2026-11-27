@@ -10,7 +10,6 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schedule from "effect/Schedule"
-import * as Address from "@unconfirmed/sui/Address"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
 import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
 import * as Rpc from "@unconfirmed/sui/grpc/generated/rpc"
@@ -162,11 +161,13 @@ suite("devnet", () => {
     expect(vault.kind.name).toBe(`${"0".repeat(63)}2::sui::SUI`)
     expect(vault.versioned.version).toBe(1n)
 
-    // Same output from gRPC as from summaries, apart from addresses and what bytecode lacks.
-    const local = await Effect.runPromise(Summary.load(fixtureDir))
-    const zero = Address.normalize("0x0")
+    // Same output from gRPC as from the (unpublished) summaries given the published id, apart from
+    // what bytecode lacks: `packageId` reaches type strings, so the types match the chain's.
+    const local = await Effect.runPromise(Summary.load(fixtureDir, { packageId: pkg }))
+    const localThing = Render.render(local.packages, [{ address: local.root }]).find((f) => f.path === "fixture/fixture.ts")!
+    expect(localThing.contents).toContain(`"${pkg}::fixture::Thing"`)
+    expect(result.created.changedObjects.some((o) => o.type === `${pkg}::fixture::Thing`)).toBe(true)
     const fromSummaries = Render.render(bytecodeView(local.packages), [{ address: local.root }], { docs: false })
-      .map((f) => ({ ...f, contents: f.contents.replaceAll(zero, pkg) }))
     const fromGrpc = Render.render(result.onChain.packages, [{ address: result.onChain.root }], { docs: false })
     expect(fromGrpc.map((f) => f.path)).toEqual(fromSummaries.map((f) => f.path))
     for (let i = 0; i < fromGrpc.length; i++) expect(fromGrpc[i]!.contents).toBe(fromSummaries[i]!.contents)

@@ -3,7 +3,9 @@
  * nodes (`test/support.ts`) that sign confirmations with `@noble/curves` BLS
  * keys, a fake chain behind a fake `Executor` that applies `register_blob` and
  * `certify_blob` as the contracts do (including the shard-weighted quorum and
- * epoch checks of M4 and T2), and the real WASM encoder at `n = 10`.
+ * epoch checks of M4 and T2, the exact WAL payment at the current prices, and
+ * Sui's rule that only an object's owner can use it), and the real WASM
+ * encoder at `n = 10`. `System` caches its state like the real layer.
  */
 import { bls12_381 } from "@noble/curves/bls12-381.js"
 import { describe, expect, test } from "bun:test"
@@ -62,8 +64,14 @@ interface NodeSpec {
 type OnChainBlob = blob.Blob
 const encodeBlob = Bcs.encodeSync(blob.Blob)
 
-const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: number; readonly putDelay?: Duration.Input } = {}) => {
+const makeWorld = (
+  specs: ReadonlyArray<NodeSpec>,
+  options: { readonly epoch?: number; readonly putDelay?: Duration.Input; readonly sender?: Address.Address } = {}
+) => {
   let epoch = options.epoch ?? 5
+  let storagePrice = 10n
+  let writePrice = 20n
+  const sender = options.sender ?? OWNER
   const fakes = specs.map((spec, i) =>
     fakeNode({
       url: `https://node-${i}.test:9185`,
@@ -95,14 +103,16 @@ const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: n
     nShards: N,
     packageId: Address.normalize("0xfeed"),
     typeOrigin: TYPE_ORIGIN,
-    storagePrice: 10n,
-    writePrice: 20n,
+    storagePrice,
+    writePrice,
     members: nodes.map((n) => ({ nodeId: n.nodeId, weight: n.shards.length, publicKey: n.publicKey }))
   })
 
   // Chain: Blob objects by id.
-  const chain = new Map<string, { owner: Address.Address; blob: OnChainBlob }>()
+  const chain = new Map<string, { owner: Address.Address; blob: OnChainBlob; attributes?: Record<string, string> }>()
   const executed: Array<string> = []
+  /** Every transaction's draft, in order (aborted ones included). */
+  const drafts: Array<Ptb.Draft> = []
   let nextId = 0x1000
 
   const suiObject = (id: string): Objects.SuiObject => {
@@ -150,11 +160,31 @@ const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: n
   const apply = (draft: Ptb.Draft): Transactions.ChangedObject[] | Aborted => {
     const calls = draft.commands.filter((c): c is Extract<T.Command, { _tag: "MoveCall" }> => c._tag === "MoveCall")
     const created: Array<Transactions.ChangedObject> = []
+    // Sui: an address-owned object is an input only of transactions its owner sends.
+    for (const input of draft.inputs) {
+      const id = (input as { readonly objectId?: string }).objectId
+      if (input._tag !== "UnresolvedObject" || id === undefined) continue
+      const entry = chain.get(Address.normalize(id))
+      if (entry && entry.owner !== sender) return new Aborted({ reason: `object ${id} is owned by ${entry.owner}, not the sender` })
+    }
     const reserve = calls.find((c) => c.function === "reserve_space")
     const register = calls.find((c) => c.function === "register_blob")
     if (register) {
       const epochs = Bcs.decodeSync(Bcs.u32)(pure(draft, reserve!.arguments[2]))
-      const transfer = draft.commands.find((c) => c._tag === "TransferObjects") as Extract<T.Command, { _tag: "TransferObjects" }>
+      const size = Bcs.decodeSync(Bcs.u64)(pure(draft, register.arguments[4]))
+      // The contract splits the current prices from the coin; the rest must be exactly zero (`destroy_zero`).
+      const units = BigInt(Encoding.storageUnits(Encoding.encodedLength(Number(size), N)))
+      const due = units * storagePrice * BigInt(epochs) + units * writePrice
+      const paid = draft.commands.find((c): c is Extract<Ptb.Command, { _tag: "BalanceIntent" }> =>
+        c._tag === "BalanceIntent" && c.coinType.endsWith("::wal::WAL")
+      )?.amount
+      if (paid !== due) return new Aborted({ reason: `paid ${paid} WAL, the prices ask ${due}` })
+      const registerIndex = draft.commands.indexOf(register)
+      const transfer = draft.commands.find((c): c is Extract<T.Command, { _tag: "TransferObjects" }> =>
+        c._tag === "TransferObjects" &&
+        c.objects.some((o) => (o._tag === "NestedResult" && o.value[0] === registerIndex) || (o._tag === "Result" && o.value === registerIndex))
+      )
+      if (!transfer) return new Aborted({ reason: "the Blob is neither transferred nor consumed" })
       const owner = Bcs.decodeSync(Bcs.Address)(pure(draft, transfer.address))
       const id = Address.normalize(`0x${(nextId++).toString(16)}`)
       const blobId = Bcs.decodeSync(Bcs.u256)(pure(draft, register.arguments[2]))
@@ -164,7 +194,7 @@ const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: n
           id,
           registered_epoch: epoch,
           blob_id: blobId,
-          size: Bcs.decodeSync(Bcs.u64)(pure(draft, register.arguments[4])),
+          size,
           encoding_type: 1,
           certified_epoch: Option.none(),
           storage: { id: Address.normalize(`0x${(nextId++).toString(16)}`), start_epoch: epoch, end_epoch: epoch + epochs, storage_size: 1n },
@@ -202,16 +232,43 @@ const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: n
       if (!sigs.verify(sigs.Signature.fromBytes(signature), sigs.hash(message), aggregateKey)) return new Aborted({ reason: "bad signature" })
       chain.set(id, { ...entry, blob: { ...entry.blob, certified_epoch: Option.some(epoch) } })
     }
+    for (const c of calls.filter((c) => c.function === "insert_or_update_metadata_pair")) {
+      const id = objectId(draft, c.arguments[0])
+      const entry = chain.get(id)
+      if (!entry) return new Aborted({ reason: "no such blob" })
+      const key = Bcs.decodeSync(Bcs.string)(pure(draft, c.arguments[1]))
+      entry.attributes = { ...entry.attributes, [key]: Bcs.decodeSync(Bcs.string)(pure(draft, c.arguments[2])) }
+    }
+    // Transfers of existing objects (inputs), e.g. the Blob to its owner after certify.
+    for (const c of draft.commands) {
+      if (c._tag !== "TransferObjects") continue
+      for (const o of c.objects) {
+        if (o._tag !== "Input" || (draft.inputs[o.value] as { readonly _tag: string })._tag !== "UnresolvedObject") continue
+        const id = objectId(draft, o)
+        const entry = chain.get(id)
+        if (entry) entry.owner = Bcs.decodeSync(Bcs.Address)(pure(draft, c.address))
+      }
+    }
     return created
   }
 
   const executor: Write.Executor<Aborted, never> = {
-    sender: OWNER,
+    sender,
     execute: (recipe) =>
       Effect.gen(function*() {
         const { draft } = yield* Ptb.build(recipe)
+        drafts.push(draft)
         const names = draft.commands.flatMap((c) => c._tag === "MoveCall" ? [c.function] : [])
-        executed.push(names.includes("register_blob") ? "register" : names.includes("certify_blob") ? "certify" : names.join(","))
+        const transfers = draft.commands.some((c) => c._tag === "TransferObjects")
+        executed.push(
+          names.includes("register_blob")
+            ? "register"
+            : names.includes("certify_blob")
+            ? "certify"
+            : names.length === 0 && transfers
+            ? "transfer"
+            : names.join(",")
+        )
         const result = apply(draft)
         if (result instanceof Aborted) return yield* result
         const effects: Transactions.Effects = {
@@ -224,11 +281,17 @@ const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: n
       })
   }
 
+  // Cached like `System.layer`: `state` answers what was last loaded, `refresh` loads again.
+  let cached: System.SystemState | undefined
+  let refreshes = 0
   const system = Layer.succeed(
     System.System,
     System.System.of({
-      state: Effect.sync(state),
-      refresh: Effect.sync(state),
+      state: Effect.sync(() => (cached ??= state())),
+      refresh: Effect.sync(() => {
+        refreshes++
+        return (cached = state())
+      }),
       walType: Effect.succeed(`${TYPE_ORIGIN}::wal::WAL`)
     })
   )
@@ -270,8 +333,17 @@ const makeWorld = (specs: ReadonlyArray<NodeSpec>, options: { readonly epoch?: n
     nodes,
     chain,
     executed,
+    drafts,
     executor,
     layer,
+    get refreshes() {
+      return refreshes
+    },
+    /** Change the prices on chain (a cached `System` does not see it until it refreshes). */
+    setPrices: (storage: bigint, write: bigint) => {
+      storagePrice = storage
+      writePrice = write
+    },
     get maxInFlight() {
       return maxInFlight
     },
@@ -649,5 +721,142 @@ describe("steps", () => {
     const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
     const tooLarge = { length: Encoding.maxBlobSize(N) + 1 } as Uint8Array
     expect(failure(await world.run(Write.encode(tooLarge)))._tag).toBe("BlobTooLarge")
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Ownership, prices and reuse
+// -----------------------------------------------------------------------------
+
+const USER = Address.normalize("0x05e4")
+
+/** The address a draft's `TransferObjects` sends to (the first one). */
+const transferTarget = (draft: Ptb.Draft) => {
+  const t = draft.commands.find((c): c is Extract<T.Command, { _tag: "TransferObjects" }> => c._tag === "TransferObjects")
+  if (!t || t.address._tag !== "Input") return undefined
+  const input = draft.inputs[t.address.value]!
+  return input._tag === "Pure" ? Bcs.decodeSync(Bcs.Address)(input.bytes) : undefined
+}
+
+describe("owner", () => {
+  test("owner other than the sender: the sender keeps the Blob until the certify transaction transfers it", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    const certified = value(await world.run(Write.run(BLOB, opts(world, { owner: USER }))))
+    expect(world.executed).toEqual(["register", "certify"])
+    // Register: the Blob goes to the sender, whom certify needs as its owner.
+    expect(transferTarget(world.drafts[0]!)).toBe(OWNER)
+    // Certify: certify_blob, then the transfer to the owner, in one transaction.
+    expect(transferTarget(world.drafts[1]!)).toBe(USER)
+    const onChain = world.chain.get(certified.blobObjectId)!
+    expect(onChain.owner).toBe(USER)
+    expect(Option.getOrUndefined(onChain.blob.certified_epoch)).toBe(5)
+  })
+
+  test("the fake chain refuses a Blob the sender does not own (what used to strand a paid registration)", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    const saved = await crashAfter(world, "Uploaded")
+    if (saved._tag !== "Uploaded") throw new Error("not uploaded")
+    world.chain.get(saved.blobObjectId)!.owner = USER
+    const e = failure(await world.run(Write.certify(saved, { executor: world.executor })))
+    expect(e).toMatchObject({ _tag: "Aborted", reason: expect.stringContaining("not the sender") })
+  })
+
+  test("owner: resuming from Registered or Uploaded still ends with the owner holding the certified Blob", async () => {
+    for (const at of ["Registered", "Uploaded"] as const) {
+      const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+      let saved: Write.Step | undefined
+      const exit = await world.run(Write.run(BLOB, opts<Crash>(world, {
+        owner: USER,
+        onStep: (s) => Effect.suspend(() => { saved = s; return s._tag === at ? Effect.fail(new Crash()) : Effect.void })
+      })))
+      expect(failure(exit)._tag).toBe("Crash")
+      const certified = value(await world.run(Write.run(BLOB, opts(world, { owner: USER, resume: saved! }))))
+      expect(world.executed).toEqual(["register", "certify"])
+      expect(world.chain.get(certified.blobObjectId)!.owner).toBe(USER)
+    }
+  })
+
+  test("a certified Blob the sender still holds is transferred on its own", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    let uploaded: Write.Step | undefined
+    value(await world.run(Write.run(BLOB, opts(world, { onStep: (s) => Effect.sync(() => { if (s._tag === "Uploaded") uploaded = s }) }))))
+    const again = value(await world.run(Write.run(BLOB, opts(world, { owner: USER, resume: uploaded! }))))
+    expect(world.executed).toEqual(["register", "certify", "transfer"])
+    expect(world.chain.get(again.blobObjectId)!.owner).toBe(USER)
+    // Already with the owner: nothing more to do.
+    value(await world.run(Write.run(BLOB, opts(world, { owner: USER, resume: uploaded! }))))
+    expect(world.executed.length).toBe(3)
+  })
+
+  test("register reuses only registrations the sender owns", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    const { step } = value(await world.run(Write.encode(BLOB)))
+    const first = value(await world.run(Write.register(step, opts(world))))
+    world.chain.get(first.blobObjectId)!.owner = USER // given away: the sender cannot certify it
+    const second = value(await world.run(Write.register(step, opts(world, { owner: USER }))))
+    expect(second.blobObjectId).not.toBe(first.blobObjectId)
+    expect(world.executed).toEqual(["register", "register"])
+  })
+})
+
+describe("System state", () => {
+  test("a price change after the state was cached: register aborts, refreshes and is rebuilt once", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    value(await world.run(Write.encode(BLOB))) // caches prices 10 / 20
+    world.setPrices(11n, 22n)
+    const certified = value(await world.run(Write.run(BLOB, opts(world))))
+    expect(world.executed).toEqual(["register", "register", "certify"]) // the first one aborted
+    expect(world.chain.size).toBe(1)
+    expect(Option.getOrUndefined(world.chain.get(certified.blobObjectId)!.blob.certified_epoch)).toBe(5)
+  })
+
+  test("an abort the system object does not explain is not retried", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    const { step } = value(await world.run(Write.encode(BLOB)))
+    const aborting: Write.Executor<Aborted, never> = {
+      sender: OWNER,
+      execute: (recipe) => Effect.flatMap(Ptb.build(recipe), () => Effect.fail(new Aborted({ reason: "out of gas" })))
+    }
+    const before = world.refreshes
+    const e = failure(await world.run(Write.register(step, { epochs: 2, deletable: true, executor: aborting })))
+    expect(e).toMatchObject({ _tag: "Aborted", reason: "out of gas" })
+    expect(world.refreshes).toBe(before + 1)
+  })
+
+  test("a reused registration gets the requested attributes (e.g. a quilt's marker)", async () => {
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
+    const { step } = value(await world.run(Write.encode(BLOB)))
+    const plain = value(await world.run(Write.register(step, opts(world))))
+    const marked = value(await world.run(Write.register(step, opts(world, { attributes: { _walrusBlobType: "quilt" } }))))
+    expect(marked.blobObjectId).toBe(plain.blobObjectId)
+    expect(world.executed).toEqual(["register", "insert_or_update_metadata_pair"])
+    expect(world.chain.get(plain.blobObjectId)!.attributes).toEqual({ _walrusBlobType: "quilt" })
+  })
+})
+
+describe("epoch moves twice", () => {
+  test("the second round reports its own failures, not a synthetic one", async () => {
+    // Node 0 (4 shards, needed for the quorum) always confirms for the next epoch.
+    const world = makeWorld(HEAVY_AND_LIGHT.map((shards, i) => ({
+      shards,
+      ...(i === 0 && {
+        intercept: (req: Recorded, node: FakeNode) => {
+          if (!req.path.includes("/confirmation/")) return undefined
+          const id = BlobId.fromString(req.path.split("/")[3]!)
+          if (id._tag !== "Success") return undefined
+          const objectId = req.path.split("/").at(-1)! as Address.Address
+          const message = Messages.confirmationMessage(node.epoch + 1, id.success, { _tag: "Deletable", objectId })
+          return {
+            status: 200,
+            contentType: "application/json",
+            body: { success: { code: 200, data: { signed: { serializedMessage: Buffer.from(message).toString("base64"), signature: Buffer.from(signWith(0)(message)).toString("base64") } } } }
+          }
+        }
+      })
+    })))
+    const e = failure(await world.run(Write.run(BLOB, opts(world))))
+    if (e._tag !== "NotEnoughConfirmations") throw e
+    expect(e.weight).toBeLessThan(Bft.minCorrect(N))
+    expect(e.failures).toEqual([{ node: world.nodes[0]!.url, weight: 4, kind: "InvalidSignature", message: expect.stringContaining("epoch 6") }])
   })
 })

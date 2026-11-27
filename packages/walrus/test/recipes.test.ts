@@ -6,8 +6,10 @@
  * expects them.
  */
 import { beforeAll, describe, expect, test } from "bun:test"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import { TestClock } from "effect/testing"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "@unconfirmed/sui/Address"
 import * as Ptb from "@unconfirmed/sui/Ptb"
@@ -243,4 +245,34 @@ describe("delete, extend, burn, destroy", () => {
 test("the generated Package default is untouched by recipes (it stays the testnet id)", async () => {
   const id = await Effect.runPromise(Effect.gen(function*() { return yield* Package }))
   expect(id).toBe(Address.normalize("0x7d3b2086808a62bbc44d18c6b1d407973d77dd26946735873092c2f5650b4611"))
+})
+
+test("System.state is reused for STATE_TTL, then read again (prices and the package id move)", async () => {
+  const objects = objectsLayer(fixture)
+  const reads = () => [...objects.gets.values()].reduce((a, b) => a + b, 0)
+  const counts = await Effect.runPromise(
+    Effect.gen(function*() {
+      const system = yield* Effect.service(System.System)
+      yield* system.state
+      const first = reads()
+      yield* system.state
+      const cached = reads()
+      yield* TestClock.adjust(Duration.sum(System.STATE_TTL, Duration.seconds(1)))
+      yield* system.state
+      return { first, cached, after: reads() }
+    }).pipe(
+      Effect.provide(System.layer.pipe(Layer.provide(Layer.mergeAll(objects.layer, packagesLayer(fixture), Config.layer(fixture.config))))),
+      Effect.provide(TestClock.layer())
+    )
+  )
+  expect(counts.first).toBeGreaterThan(0)
+  expect(counts.cached).toBe(counts.first)
+  expect(counts.after).toBe(2 * counts.first)
+})
+
+test("setAttributes: one insert_or_update_metadata_pair per entry on the existing Blob", async () => {
+  const blobObjectId = Address.normalize("0xb10b")
+  const { draft } = await build(Recipes.setAttributes({ blobObjectId, attributes: { a: "1", b: "2" } }))
+  expect(calls(draft)).toEqual(["PKG::blob::insert_or_update_metadata_pair", "PKG::blob::insert_or_update_metadata_pair"])
+  expect(draft.inputs[0]).toEqual({ _tag: "UnresolvedObject", objectId: blobObjectId })
 })

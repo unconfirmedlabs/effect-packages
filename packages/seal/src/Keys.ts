@@ -9,10 +9,16 @@
  * Every per-server outcome is a typed `KeyServerError`: an unloadable key
  * server object is `Unresolved` (or `Unavailable` for a retryable `RpcError`),
  * a key that does not verify is `InvalidKey`, an id left out is `MissingKey`,
- * and a defect inside a member becomes `Unavailable`, because a defect would
- * sink the whole quorum. Retries are per server (`retry`, transient kinds
- * only). Refusals that judge the request itself (`definitive`) end the call
- * once they weigh the threshold, after `denialGrace` (§5).
+ * and a defect inside a member becomes `Unavailable` (not retried), because a
+ * defect would sink the whole quorum. Retries are per server (`retry`,
+ * transient kinds only). Refusals that judge the request itself
+ * (`definitive`) end the call once they weigh the threshold, after
+ * `denialGrace` (§5).
+ *
+ * Verification is bounded by the request, not by the answer: at most one
+ * entry per command (H6, at most 100), each id verified once, the keys of one
+ * server checked together with one pairing (`Ibe.verifyDerivedKeys`), and the
+ * fiber yields between keys.
  */
 import { bytesToHex } from "@noble/hashes/utils.js"
 import * as Quorum from "@unconfirmed/quorum/Quorum"
@@ -27,10 +33,18 @@ import * as Result from "effect/Result"
 import * as Schedule from "effect/Schedule"
 import type { Approval } from "./Approval.ts"
 import * as Bls from "./Bls.ts"
-import { normalizeObjectId } from "./Config.ts"
 import * as ElGamal from "./ElGamal.ts"
-import { KeyServerError, SessionKeyExpired, type SignatureRequired, ThresholdNotMet } from "./Errors.ts"
+import * as Entropy from "./Entropy.ts"
+import {
+  InvalidKeyServer,
+  isRetryableKind,
+  KeyServerError,
+  SessionKeyExpired,
+  type SignatureRequired,
+  ThresholdNotMet
+} from "./Errors.ts"
 import * as Ibe from "./Ibe.ts"
+import { normalizeObjectId } from "./ids.ts"
 import * as Kdf from "./Kdf.ts"
 import { type KeyServer, KeyServers } from "./KeyServer.ts"
 import * as KeyServerApi from "./KeyServerApi.ts"
@@ -69,11 +83,24 @@ export type FetchError = ThresholdNotMet | SessionKeyExpired | SignatureRequired
 /** The default `denialGrace`. */
 export const DEFAULT_DENIAL_GRACE: Duration.Duration = /* @__PURE__ */ Duration.seconds(2)
 
-/** Exponential from 250 ms, each delay capped at 2 s, 3 retries. */
+/** The longest `Retry-After` `defaultRetry` waits for. */
+export const MAX_RETRY_AFTER: Duration.Duration = /* @__PURE__ */ Duration.seconds(10)
+
+/**
+ * Exponential from 250 ms, each delay capped at 2 s, 3 retries. A server that
+ * sent `Retry-After` (`KeyServerError.retryAfter`, on a `429` or `503`) is
+ * not asked sooner than that, up to `MAX_RETRY_AFTER`.
+ */
 export const defaultRetry = (): Schedule.Schedule<unknown, KeyServerError> =>
   Schedule.max([
     Schedule.exponential("250 millis").pipe(
-      Schedule.modifyDelay(({ duration }) => Effect.succeed(Duration.min(duration, Duration.seconds(2))))
+      Schedule.modifyDelay(({ duration, input }) => {
+        const capped = Duration.min(duration, Duration.seconds(2))
+        const after = input instanceof KeyServerError && input.retryAfter !== undefined
+          ? Duration.min(Duration.millis(input.retryAfter), MAX_RETRY_AFTER)
+          : Duration.zero
+        return Effect.succeed(Duration.max(capped, after))
+      })
     ),
     Schedule.recurs(3)
   ])
@@ -103,6 +130,30 @@ interface Member {
 /** Verified keys of one server, by hex full id. */
 type Keys = ReadonlyMap<string, Uint8Array>
 
+/** What every server's answer is checked against: one entry per full id, with `gid` computed once per fetch. */
+interface Wanted {
+  readonly fullId: Uint8Array
+  readonly gid: Bls.G1
+  /** The batch coefficient (`Ibe.verifyDerivedKeys`): 128 random bits, never sent. */
+  readonly rho: bigint
+}
+
+/** Decoded server public keys, kept as long as the `KeyServer` value (the `KeyServers` cache entry) is. */
+const decodedKeys = /* @__PURE__ */ new WeakMap<Uint8Array, Bls.G2>()
+
+const publicKeyOf = (server: KeyServer): Result.Result<Bls.G2, Bls.InvalidEncoding> => {
+  const hit = decodedKeys.get(server.publicKey)
+  if (hit !== undefined) return Result.succeed(hit)
+  const pk = Bls.g2FromBytes(server.publicKey)
+  if (Result.isSuccess(pk)) decodedKeys.set(server.publicKey, pk.success)
+  return pk
+}
+
+/** Errors made from a defect: reported as `Unavailable`, never retried (a bug does not go away). */
+const fromDefect = /* @__PURE__ */ new WeakSet<KeyServerError>()
+
+const retryableMember = (e: KeyServerError): boolean => KeyServerApi.retryable(e) && !fromDefect.has(e)
+
 const keyServerError = (
   server: Address,
   kind: KeyServerApi.KeyServerErrorKind,
@@ -131,15 +182,18 @@ const validate = (options: FetchOptions): Effect.Effect<ReadonlyArray<Member>> =
     return Effect.succeed(members)
   })
 
-/** `reason` from the failures alone (§4.7 step 6), whichever quorum check ended the run. */
+/**
+ * `reason` from the failures alone (§4.7 step 6), whichever quorum check
+ * ended the run: `denied` when the denials weigh the threshold, or when every
+ * server but the deniers (cached ones included) could not reach it.
+ */
 const reasonOf = (
   failures: ReadonlyArray<{ readonly weight: number; readonly error: KeyServerError }>,
   threshold: number,
-  askableWeight: number,
-  cachedWeight: number
+  totalWeight: number
 ): "denied" | "unreachable" => {
   const denied = Quorum.failedWeight(failures as ReadonlyArray<Quorum.Failure<unknown, KeyServerError>>, KeyServerApi.definitive)
-  return denied >= threshold || askableWeight - denied < threshold - cachedWeight ? "denied" : "unreachable"
+  return denied >= threshold || totalWeight - denied < threshold ? "denied" : "unreachable"
 }
 
 /**
@@ -209,9 +263,16 @@ export const fetch = (
       )
     if (cachedWeight >= threshold) return derived(complete)
 
-    // 4. One request for every server.
+    // 4. One request for every server; what answers are checked against.
     const certificate = yield* session.certificate
     const enc = yield* ElGamal.generate
+    const randomness = yield* Entropy.bytes(16 * fullIds.size)
+    const wanted = new Map<string, Wanted>()
+    for (const [h, fullId] of fullIds) {
+      const i = wanted.size * 16
+      const rho = BigInt("0x" + bytesToHex(randomness.subarray(i, i + 16))) | 1n
+      wanted.set(h, { fullId, gid: Kdf.gid(fullId), rho })
+    }
     const requestSignature = yield* SessionKey.signRequest(session, approval.bytes, enc.publicKey, enc.verificationKey)
     const request: KeyServerApi.FetchKeyRequest = {
       ptb: approval.bytes,
@@ -224,29 +285,49 @@ export const fetch = (
     // 5. The quorum.
     const servers = yield* Effect.service(KeyServers)
     const api = yield* Effect.service(KeyServerApi.KeyServerApi)
+    const maxEntries = approval.ids.length
+    const load = (m: Member, fresh: boolean) =>
+      (fresh ? servers.refresh(m.objectId) : servers.get(m.objectId)).pipe(
+        Effect.mapError((e) =>
+          (e instanceof RpcError && e.retryable)
+            ? keyServerError(m.objectId, "Unavailable", `key server object unavailable: ${e.message}`)
+            : (e instanceof InvalidKeyServer && e.kind !== undefined && isRetryableKind(e.kind))
+            ? keyServerError(m.objectId, e.kind, `key server not verified: ${e.reason}`)
+            : keyServerError(m.objectId, "Unresolved", `key server object not usable: ${describeLoadError(e)}`)
+        )
+      )
+    const call = (server: KeyServer) =>
+      api.fetchKey(
+        { objectId: server.objectId, url: server.url!, ...(server.apiKey !== undefined && { apiKey: server.apiKey }) },
+        request
+      )
+    /** Servers already reloaded after a transport failure in this fetch: at most once each (K3: URLs change). */
+    const reloaded = new Set<Address>()
     const ask = (m: Member): Effect.Effect<Keys, KeyServerError> => {
       let url: string | undefined
       return Effect.gen(function*() {
-        const server = yield* servers.get(m.objectId).pipe(
-          Effect.mapError((e) =>
-            e instanceof RpcError && e.retryable
-              ? keyServerError(m.objectId, "Unavailable", `key server object unavailable: ${e.message}`)
-              : keyServerError(m.objectId, "Unresolved", `key server object not usable: ${describeLoadError(e)}`)
-          )
-        )
+        const server = yield* load(m, false)
         if (server.url === undefined) {
           return yield* keyServerError(m.objectId, "Unresolved", "key server has no URL: it is not configured for requests")
         }
         url = server.url
-        const answer = yield* api.fetchKey(
-          { objectId: server.objectId, url: server.url, ...(server.apiKey !== undefined && { apiKey: server.apiKey }) },
-          request
-        )
-        return yield* Effect.fromResult(verify(server, answer, enc.secret, fullIds))
+        const first = yield* Effect.result(call(server))
+        if (Result.isSuccess(first)) return yield* verify(server, first.success, enc.secret, wanted, maxEntries)
+        // No HTTP answer at all: the URL on chain may have changed since the server was cached (K3). Reload
+        // it once per fetch and, if the URL did change, ask the new one at once; otherwise keep the error.
+        const e = first.failure
+        if (!(e.kind === "Unavailable" && e.status === undefined) || reloaded.has(m.objectId)) return yield* Effect.fail(e)
+        reloaded.add(m.objectId)
+        const fresh = yield* Effect.orElseSucceed(load(m, true), () => undefined)
+        if (fresh === undefined || fresh.url === undefined || fresh.url === server.url) return yield* Effect.fail(e)
+        url = fresh.url
+        return yield* verify(fresh, yield* call(fresh), enc.secret, wanted, maxEntries)
       }).pipe(
-        Effect.catchDefect((defect) =>
-          Effect.fail(keyServerError(m.objectId, "Unavailable", `unexpected defect: ${String(defect)}`, url))
-        )
+        Effect.catchDefect((defect) => {
+          const e = keyServerError(m.objectId, "Unavailable", `unexpected defect: ${String(defect)}`, url)
+          fromDefect.add(e)
+          return Effect.fail(e)
+        })
       )
     }
     const grace = options.denialGrace ?? DEFAULT_DENIAL_GRACE
@@ -256,7 +337,7 @@ export const fetch = (
         threshold: threshold - cachedWeight,
         run: ask,
         schedule: options.retry ?? defaultRetry(),
-        while: KeyServerApi.retryable,
+        while: retryableMember,
         giveUp: { when: KeyServerApi.definitive, weight: threshold, grace }
       })
     )
@@ -274,49 +355,66 @@ export const fetch = (
     return yield* new ThresholdNotMet({
       reason: e.reason === "insufficientWeight"
         ? "insufficientWeight"
-        : reasonOf(failures, threshold, totalWeight, cachedWeight),
+        : reasonOf(failures, threshold, totalWeight),
       threshold,
       weight: cachedWeight + e.weight,
       totalWeight,
       failures,
       unsettled: e.unsettled.map((u) => ({ server: u.member.objectId, weight: u.weight, started: u.started }))
     })
-  })
+  }).pipe(
+    Effect.withSpan("Keys.fetch", {
+      attributes: { "seal.threshold": options.threshold, "seal.servers": options.servers.length, "seal.ids": options.approval.ids.length }
+    })
+  )
 
 const describeLoadError = (e: { readonly _tag: string; readonly message?: string; readonly reason?: string }): string =>
   e._tag === "InvalidKeyServer" ? e.reason ?? e._tag : e._tag === "ObjectNotFound" ? "object not found" : `${e._tag}: ${e.message ?? ""}`
 
 /**
- * Open and verify one server's answer (C3, C16): every entry for a full id
- * we asked for must decrypt to a finite G1 point that verifies against the
- * server's public key, else the whole server is `InvalidKey` (item 9);
- * entries for other ids are ignored; every full id must be present, else
- * `MissingKey` (item 7).
+ * Open and verify one server's answer (C3, C16): the first entry for each
+ * full id we asked for must decrypt to a finite G1 point, and those keys must
+ * verify against the server's public key (one batched pairing check), else
+ * the whole server is `InvalidKey` (item 9). Later entries for an id already
+ * seen and entries for other ids are skipped without being decoded. More
+ * entries than the approval has commands is `Malformed` (H6: one per
+ * command), so the work is bounded by the request, whatever the server
+ * sends. Every full id must be present, else `MissingKey` (item 7). Yields
+ * between keys, so other fibers run and the member can be interrupted.
  */
 const verify = (
   server: KeyServer,
   answer: ReadonlyArray<KeyServerApi.EncryptedKey>,
   secret: Bls.Scalar,
-  fullIds: ReadonlyMap<string, Uint8Array>
-): Result.Result<Keys, KeyServerError> => {
-  const fail = (kind: KeyServerApi.KeyServerErrorKind, message: string) =>
-    Result.fail(keyServerError(server.objectId, kind, message, server.url))
-  const pk = Bls.g2FromBytes(server.publicKey)
-  if (Result.isFailure(pk)) return fail("Unresolved", `invalid public key: ${pk.failure.reason}`)
-  const keys = new Map<string, Uint8Array>()
-  for (const entry of answer) {
-    const h = bytesToHex(entry.fullId)
-    const fullId = fullIds.get(h)
-    if (fullId === undefined) continue
-    const usk = ElGamal.decrypt(secret, entry.ciphertext)
-    if (Result.isFailure(usk)) return fail("InvalidKey", `the key for an id does not decode: ${usk.failure.reason}`)
-    if (!Ibe.verifyUserSecretKey(usk.success, fullId, pk.success)) {
-      return fail("InvalidKey", "a returned key does not verify against the server's public key")
+  wanted: ReadonlyMap<string, Wanted>,
+  maxEntries: number
+): Effect.Effect<Keys, KeyServerError> =>
+  Effect.gen(function*() {
+    const fail = (kind: KeyServerApi.KeyServerErrorKind, message: string) =>
+      Effect.fail(keyServerError(server.objectId, kind, message, server.url))
+    if (answer.length > maxEntries) {
+      return yield* fail("Malformed", `the answer has ${answer.length} entries for ${maxEntries} commands`)
     }
-    keys.set(h, Bls.g1ToBytes(usk.success))
-  }
-  if (keys.size < fullIds.size) {
-    return fail("MissingKey", `the answer lacks ${fullIds.size - keys.size} of ${fullIds.size} requested ids`)
-  }
-  return Result.succeed(keys)
-}
+    const pk = publicKeyOf(server)
+    if (Result.isFailure(pk)) return yield* fail("Unresolved", `invalid public key: ${pk.failure.reason}`)
+    const found = new Map<string, { readonly userSecretKey: Bls.G1; readonly gid: Bls.G1; readonly rho: bigint }>()
+    for (const entry of answer) {
+      const h = bytesToHex(entry.fullId)
+      const w = wanted.get(h)
+      if (w === undefined || found.has(h)) continue
+      if (found.size > 0) yield* Effect.yieldNow
+      const usk = ElGamal.decrypt(secret, entry.ciphertext)
+      if (Result.isFailure(usk)) return yield* fail("InvalidKey", `the key for an id does not decode: ${usk.failure.reason}`)
+      found.set(h, { userSecretKey: usk.success, gid: w.gid, rho: w.rho })
+    }
+    const entries = Array.from(found.values())
+    if (!Ibe.verifyDerivedKeys(entries, pk.success, entries.map((e) => e.rho))) {
+      return yield* fail("InvalidKey", "a returned key does not verify against the server's public key")
+    }
+    if (found.size < wanted.size) {
+      return yield* fail("MissingKey", `the answer lacks ${wanted.size - found.size} of ${wanted.size} requested ids`)
+    }
+    const keys = new Map<string, Uint8Array>()
+    for (const [h, e] of found) keys.set(h, Bls.g1ToBytes(e.userSecretKey))
+    return keys as Keys
+  })

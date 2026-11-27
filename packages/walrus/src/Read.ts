@@ -19,7 +19,6 @@ import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schedule from "effect/Schedule"
-import * as Semaphore from "effect/Semaphore"
 import * as Quorum from "@unconfirmed/quorum/Quorum"
 import * as Bft from "./Bft.ts"
 import type { BlobId } from "./BlobId.ts"
@@ -57,13 +56,21 @@ import * as StorageNode from "./StorageNode.ts"
 // -----------------------------------------------------------------------------
 
 export interface ReadOptions {
-  /** `"strict"` (default): re-derive the blob id from the decoded bytes. `"skip"`: trust the slivers. */
+  /**
+   * `"strict"` (default): re-derive the blob id from the decoded bytes, so the result is the blob that was
+   * written or a typed error. `"skip"`: no check after decoding. Slivers are then only header-checked, so
+   * this trusts every node that served one: any one of them can change the bytes returned. It saves one
+   * WASM call (`Encoder.blobId`); use it only when the bytes are verified another way.
+   */
   readonly consistency?: "strict" | "skip"
   /** Refuse blobs whose (verified) metadata claims more than this many bytes. Default 1 GiB. */
   readonly maxSize?: number
   /** Skip the status lookup during an epoch change when the caller already knows it. */
   readonly certifiedEpoch?: number
-  /** Per node; default exponential 200 ms .. 5 s, 4 retries. Only `StorageNode.retryable` errors are retried. */
+  /**
+   * Per node; default exponential 200 ms .. 5 s, 4 retries. Reads prefer another node to a retry: metadata
+   * requests retry only `RateLimited`, sliver requests every `StorageNode.retryable` error but `Timeout`.
+   */
   readonly retry?: Schedule.Schedule<unknown, NodeError>
 }
 
@@ -105,10 +112,10 @@ export const defaultRetry = (): Schedule.Schedule<unknown, NodeError> =>
   ])
 
 /** Whole `agree` calls for `status`: answers converge as nodes process the same events. */
-const agreementRetry = () =>
+const agreementRetry = (rounds: number) =>
   Schedule.max([
     Schedule.exponential("500 millis"),
-    Schedule.recurs(2)
+    Schedule.recurs(rounds)
   ])
 
 /**
@@ -132,8 +139,30 @@ export const blob = (blobId: BlobId, options: ReadOptions = {}): Effect.Effect<U
         }
         return yield* readSlivers(nodes, encoder, committee, metadata, options.consistency ?? "strict", retry)
       })
-    )
+    ).pipe(checkAbsent(nodes, blobId, retry))
   })
+
+/**
+ * After a read ends in `NotEnoughSlivers` or `NoMetadata`, ask for the status once: a blob the nodes call
+ * `Nonexistent` (deleted, or never certified) is `BlobNotFound`, as the Rust client reports it. Paid only
+ * on that failure path; any other answer, or none, keeps the original error.
+ */
+const checkAbsent = (nodes: Nodes, blobId: BlobId, retry: Schedule.Schedule<unknown, NodeError>) =>
+<A, R>(read: Effect.Effect<A, ReadError, R>): Effect.Effect<A, ReadError, R | Committees> =>
+  Effect.catchIf(
+    read,
+    (e): e is NotEnoughSlivers | NoMetadata => e._tag === "NotEnoughSlivers" || e._tag === "NoMetadata",
+    (e) =>
+      Effect.gen(function*() {
+        const committees = yield* Effect.service(Committees)
+        const status = yield* Effect.result(
+          Effect.flatMap(committees.get, ({ current }) => agreeStatus(nodes, current, blobId, coarseKey, retry, 0))
+        )
+        return yield* Effect.fail(
+          Result.isSuccess(status) && status.success._tag === "Nonexistent" ? new BlobNotFound({ blobId }) : e
+        )
+      })
+  )
 
 /** The blob's metadata, verified against its id, from the read committee. */
 export const metadata = (
@@ -158,7 +187,7 @@ export const locate = (
         chooseCommittee(nodes, blobId, active, options.certifiedEpoch, retry),
         (committee) => Effect.map(fetchMetadata(nodes, committee, blobId, retry), (metadata) => ({ committee, metadata }))
       )
-    )
+    ).pipe(checkAbsent(nodes, blobId, retry))
   })
 
 /**
@@ -204,7 +233,10 @@ const withCommitteeRetry = <A, R>(
       if (Result.isSuccess(result)) return result.success
       const error = result.failure
       if (attempt >= MAX_COMMITTEE_RETRIES || !isEpochError(error)) return yield* Effect.fail(error)
-      const fresh = yield* committees.refresh
+      // A failed refresh keeps the read's own error: it says more than the refresh's `RpcError`.
+      const refreshed = yield* Effect.result(committees.refresh)
+      if (Result.isFailure(refreshed)) return yield* Effect.fail(error)
+      const fresh = refreshed.success
       if (!changed(active, fresh)) return yield* Effect.fail(error)
       active = fresh
     }
@@ -215,7 +247,10 @@ const coarseKey = (s: BlobStatus): string => `${s._tag}:${Status.certifiedEpoch(
 
 /**
  * Step 1 (C6): the current committee, unless a certified epoch is known or the
- * committees are transitioning (then the status supplies it).
+ * committees are transitioning (then the status supplies it). When no status
+ * gathers enough agreement during a transition, the current committee is used
+ * (the Rust client's `continue_on_no_valid_status_received`); a miss there is
+ * an epoch error, which `withCommitteeRetry` handles.
  */
 const chooseCommittee = (
   nodes: Nodes,
@@ -227,7 +262,9 @@ const chooseCommittee = (
   Effect.gen(function*() {
     if (certifiedEpoch !== undefined) return yield* Effect.fromResult(readCommittee(active, certifiedEpoch))
     if (!active.transitioning) return active.current
-    const s = yield* agreeStatus(nodes, active.current, blobId, coarseKey, retry)
+    const agreed = yield* Effect.result(agreeStatus(nodes, active.current, blobId, coarseKey, retry))
+    if (Result.isFailure(agreed)) return active.current
+    const s = agreed.success
     if (s._tag === "Invalid") return yield* new InvalidBlob({ blobId })
     const epoch = Status.certifiedEpoch(s)
     if (epoch === undefined) return yield* new BlobNotFound({ blobId })
@@ -245,7 +282,9 @@ const agreeStatus = (
   committee: Committee,
   blobId: BlobId,
   key: (s: BlobStatus) => string,
-  retry: Schedule.Schedule<unknown, NodeError>
+  retry: Schedule.Schedule<unknown, NodeError>,
+  /** Whole `agree` calls after the first; default 2. */
+  rounds = 2
 ): Effect.Effect<BlobStatus, StatusUnverified> => {
   const n = committee.nShards
   const once = Quorum.agree(committee.nodes, {
@@ -258,7 +297,7 @@ const agreeStatus = (
     schedule: retry,
     while: StorageNode.retryable
   })
-  return Effect.retry(once, { schedule: agreementRetry() }).pipe(
+  return (rounds > 0 ? Effect.retry(once, { schedule: agreementRetry(rounds) }) : once).pipe(
     Effect.map((agreed) => agreed.winner.successes[0]!.value),
     Effect.catchTag("AgreementFailed", (e) =>
       Effect.fail(
@@ -309,6 +348,12 @@ const malformed = (node: string, message: string) => new NodeError({ node, kind:
 // Metadata
 // -----------------------------------------------------------------------------
 
+/**
+ * An upper bound on BCS `BlobMetadataWithId` at `n` shards: id (32), tags and length (≤ 16), and per
+ * shard two Merkle roots of 33 bytes (66,044 bytes at `n = 1000`).
+ */
+const metadataBytes = (n: number): number => 32 + 16 + 66 * n + 16
+
 /** Not-found and blocked answers: a node judging the blob, not failing to serve it. */
 const absent = (e: NodeError): boolean => e.kind === "NotFound" || e.kind === "Blocked"
 
@@ -337,18 +382,15 @@ const fetchMetadata = (
       )
     // Three lanes, plus one more for every node that fails for good: a present blob costs about three
     // metadata downloads, an absent one does not wait for 2f + 1 not-found answers three at a time.
-    // (Quorum's `concurrency` is fixed, so the widening window is a resizable semaphore inside `run`.)
-    let width = METADATA_LANES
-    const lanes = yield* Semaphore.make(width)
-    const widen = Effect.suspend(() => lanes.resize(++width))
+    // Another node is asked rather than the same one again (only `RateLimited` is retried), so a hung
+    // node costs one timeout, not five.
+    const maxBytes = metadataBytes(n)
     return yield* Quorum.run(committee.nodes, {
       weight: (node) => node.shards.length,
-      run: (node) =>
-        Effect.flatMap(nodes.metadata(node, blobId), (bytes) => verify(node, bytes)).pipe(
-          Effect.retry({ schedule: retry, while: StorageNode.retryable }),
-          Effect.tapError(() => widen),
-          Semaphore.withPermit(lanes)
-        ),
+      run: (node) => Effect.flatMap(nodes.metadata(node, blobId, { maxBytes }), (bytes) => verify(node, bytes)),
+      schedule: retry,
+      while: (e) => e.kind === "RateLimited",
+      concurrency: (p) => METADATA_LANES + p.failed,
       threshold: 1,
       order: "shuffle",
       giveUp: { when: absent, weight: Bft.quorum(n) }
@@ -377,6 +419,9 @@ const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => {
   return true
 }
 
+/** Failures about one shard of a node, not the node: they do not fail its other shards. */
+const SHARD_LEVEL: ReadonlySet<NodeError["kind"]> = /* @__PURE__ */ new Set<NodeError["kind"]>(["ShardNotAssigned", "NotFound"])
+
 /**
  * Step 3: primary slivers for the shards not yet `held`, one shard per member,
  * until `need` are held. `failedNodes` is shared across a read: a node that
@@ -400,6 +445,7 @@ const fetchSlivers = (
   const members: Array<number> = []
   for (let shard = 0; shard < n; shard++) if (!heldShards.has(shard)) members.push(shard)
   const concurrency = Math.min(need, Math.max(1, Math.floor(IN_FLIGHT_BYTES / sizes.primary)))
+  const maxBytes = Encoding.bcsSliverBytes(metadata.unencodedLength, n).primary
 
   const member = (shard: number): Effect.Effect<Fetched, NodeError> =>
     Effect.suspend(() => {
@@ -409,17 +455,23 @@ const fetchSlivers = (
       const once = Effect.suspend(() => {
         const prior = failedNodes.get(url)
         if (prior) return Effect.fail(prior)
-        return Effect.flatMap(nodes.sliver(node, blobId, pair, "primary"), (bytes) => {
+        return Effect.flatMap(nodes.sliver(node, blobId, pair, "primary", { maxBytes }), (bytes) => {
           const checked = Messages.checkSliver(bytes, { index: pair, symbolSize: sizes.symbolSize, symbols })
           return Result.isSuccess(checked)
             ? Effect.succeed<Fetched>({ shard, pair, node: url, bytes })
             : Effect.fail(malformed(url, `sliver ${pair}: ${checked.failure.reason}`))
         })
       })
-      return Effect.retry(once, { schedule: retry, while: (e) => StorageNode.retryable(e) && !failedNodes.has(url) }).pipe(
+      // A timed-out node is not asked again for this sliver (other shards can stand in), and only a
+      // node-level failure fails the node's other shards: a shard it no longer holds, or a sliver it
+      // does not have, fails that shard alone.
+      return Effect.retry(once, {
+        schedule: retry,
+        while: (e) => StorageNode.retryable(e) && e.kind !== "Timeout" && !failedNodes.has(url)
+      }).pipe(
         Effect.tapError((e) =>
           Effect.sync(() => {
-            if (!failedNodes.has(url)) failedNodes.set(url, e)
+            if (!failedNodes.has(url) && !SHARD_LEVEL.has(e.kind)) failedNodes.set(url, e)
           })
         )
       )
@@ -444,12 +496,23 @@ const fetchSlivers = (
   )
 }
 
+/**
+ * A pause between two blocking WASM calls, so that a strict read stalls the thread for one call at a time
+ * and timers and I/O run in between. `Effect.yieldNow` is not enough on Bun (it does not let a timer fire);
+ * a real `setTimeout(0)` is, and unlike `Effect.sleep` it does not wait for a `TestClock`.
+ */
+export const wasmBreak: Effect.Effect<void> = /* @__PURE__ */ Effect.callback<void>((resume) => {
+  const timer = setTimeout(() => resume(Effect.void), 0)
+  return Effect.sync(() => clearTimeout(timer))
+})
+
 /** Merkle roots of primary slivers, at most `n − 2f` per WASM call. */
 const primaryRoots = (encoder: EncoderService, n: number, symbolSize: number, slivers: ReadonlyArray<Uint8Array>) =>
   Effect.gen(function*() {
     const batch = Encoding.sourceSymbols(n).primary
     const roots: Array<Uint8Array> = []
     for (let i = 0; i < slivers.length; i += batch) {
+      if (i > 0) yield* wasmBreak
       roots.push(...(yield* encoder.sliverRoots(n, "primary", symbolSize, slivers.slice(i, i + batch))))
     }
     return roots
@@ -477,8 +540,11 @@ const readSlivers = (
       held = [...held, ...(yield* fetchSlivers(nodes, committee, metadata, held, failedNodes, retry))]
       const bytes = yield* encoder.decode(n, unencodedLength, held.map((f) => f.bytes))
       if (consistency === "skip") return bytes
+      // Each WASM call blocks the thread for seconds at n = 1000: let timers and other fibers run between them.
+      yield* wasmBreak
       if ((yield* encoder.blobId(n, bytes)).blobId === blobId) return bytes
 
+      yield* wasmBreak
       const unchecked = held.filter((f) => !verified.has(f.shard))
       const roots = yield* primaryRoots(encoder, n, symbolSize, unchecked.map((f) => f.bytes))
       const bad = new Set<Fetched>()

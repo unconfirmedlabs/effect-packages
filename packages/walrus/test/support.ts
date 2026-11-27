@@ -430,6 +430,26 @@ export const committeeNodes: Effect.Effect<ReadonlyArray<LiveNode>, unknown, Obj
 export const suiLayer = SuiGrpc.layer({ baseUrl: TESTNET_FULLNODE }).pipe(Layer.provide(FetchHttpClient.layer))
 
 /** The newest `BlobCertified` events (blob id, end epoch, deletable, object id), newest first. */
+/**
+ * A failed read in one line, with the kinds and weights of its failures: what a live test prints for a
+ * candidate it skips, so that the next flaky run says why.
+ */
+export const describeReadFailure = (e: { readonly _tag: string }): string => {
+  const failures = (e as { readonly failures?: ReadonlyArray<{ readonly kind: string; readonly weight: number }> }).failures
+  if (!failures) return e._tag
+  const byKind = new Map<string, number>()
+  for (const f of failures) byKind.set(f.kind, (byKind.get(f.kind) ?? 0) + f.weight)
+  const weight = (e as { readonly weight?: number }).weight
+  return `${e._tag}${weight === undefined ? "" : ` (weight ${weight})`}: ${[...byKind].map(([k, w]) => `${k} ${w}`).join(", ")}`
+}
+
+/**
+ * Candidates for a live read: newest certified first, permanent only (testnet bots delete most deletable
+ * blobs seconds after certifying them, review WAL-4), not extensions, and lasting a while.
+ */
+export const readableCandidates = (currentEpoch: number, count = 200) =>
+  Effect.map(recentCertified(count), (all) => all.filter((c) => !c.isExtension && !c.deletable && c.endEpoch >= currentEpoch + 2))
+
 export const recentCertified = (count: number) =>
   Effect.flatMap(Effect.service(Events.Events), (events) =>
     events.list({ filter: Events.eventType(`${TESTNET_TYPE_ORIGIN}::events::BlobCertified`), descending: true }).pipe(

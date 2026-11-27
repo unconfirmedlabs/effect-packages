@@ -24,10 +24,18 @@ export const NotAppliedEvidence = Schema.Literals(["expired", "inputConsumed", "
 export type NotAppliedEvidence = typeof NotAppliedEvidence.Type
 
 /**
- * The transaction provably never applied and never will:
- * - `expired`: its epoch window closed, observed twice around two lookups that missed;
- * - `inputConsumed`: another transaction consumed an object version these bytes pinned;
- * - `refused`: the node refused the first send outright (nothing was executed).
+ * The transaction did not apply, and the lifecycle will not send it again:
+ * - `expired`: its epoch window closed and it is absent, observed twice (around
+ *   a recheck) by one `Evidence` backend whose history covers the window, with
+ *   `Transactions` missing it too: it never applied and never will;
+ * - `inputConsumed`: another transaction consumed an object version these bytes
+ *   pinned: it never applied and never will;
+ * - `refused`: the node refused the first send outright (`INVALID_ARGUMENT`),
+ *   so nothing executed then. This is the node's verdict at that moment, not
+ *   proof that the bytes can never land: some refusals are time-dependent
+ *   (e.g. an unfunded address balance) and the node may still hold the bytes.
+ *   It means this process will not send them again on its own
+ *   (`Lifecycle.resubmit(..., { retryRefused: true })` does on request).
  */
 export class NotApplied extends Schema.TaggedError<NotApplied>()("NotApplied", {
   digest: Schema.String,
@@ -46,10 +54,13 @@ export class SubmissionUnknown extends Schema.TaggedError<SubmissionUnknown>()("
 }) {}
 
 /**
- * The journal could not be read or written. Raised only by the `Signed` write
- * before bytes that were never sent go out (so `not_applied`); once the bytes
- * may have left — an earlier send, a re-send — a journal failure becomes
- * `SubmissionUnknown` instead, and later writes are logged, never raised.
+ * The journal could not be read or written. Raised only before bytes that were
+ * never sent go out (so `not_applied`): by `run` (bytes it signed just now) on
+ * any journal failure before the send, and by `submit` when the `Signed` write
+ * fails for bytes the journal has never seen. Once the bytes may have left — an
+ * earlier send, a re-send, `submit` unable to read the journal — a journal
+ * failure becomes `SubmissionUnknown` instead, and later writes are logged,
+ * never raised.
  */
 export class JournalError extends Schema.TaggedError<JournalError>()("JournalError", {
   message: Schema.String
@@ -104,3 +115,8 @@ export type Reconciled =
   | { readonly _tag: "ExecutionFailed"; readonly digest: string; readonly error: ExecutionFailed }
   | { readonly _tag: "NotApplied"; readonly digest: string; readonly error: NotApplied }
   | { readonly _tag: "SubmissionUnknown"; readonly digest: string; readonly error: SubmissionUnknown }
+  /**
+   * The journal entry could not be read (see `Journal.CorruptEntry`); `digest`
+   * is its key. Nothing was concluded or sent; `Journal.remove(digest)` drops it.
+   */
+  | { readonly _tag: "Corrupt"; readonly digest: string; readonly reason: string }

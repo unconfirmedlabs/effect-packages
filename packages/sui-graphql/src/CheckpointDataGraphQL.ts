@@ -13,6 +13,7 @@ import { RpcError } from "@unconfirmed/sui/RpcError"
 import { call, effects, effectsFields, EffectsNode, event, U64 } from "./convert.ts"
 import { EVENTS_PAGE, EVENTS_PAGE_FIELDS, EventsPage, GetObjectChanges, GetTransactionEvents, rest } from "./paging.ts"
 import { noClientRetry, resubscribe } from "./subscription.ts"
+import { rangeOf, Tip } from "./tip.ts"
 
 /** Transactions per page (the server's maximum for `Checkpoint.transactions`). */
 const TX_PAGE = 50
@@ -22,8 +23,14 @@ const TX_PAGE = 50
  * completed by digest.
  */
 const NESTED_CHANGES = 50
-/** Checkpoints fetched concurrently by `list` (in order). */
-const LIST_CONCURRENCY = 4
+/**
+ * Checkpoints fetched ahead, concurrently and delivered in order, by `list` and
+ * `subscribe`. One `GetCheckpoint` takes longer than a checkpoint interval
+ * (~0.25 s) on busy networks, so one at a time falls behind the chain.
+ */
+const CONCURRENCY = 16
+/** Checkpoint numbers enumerated per step of `list` (they are consecutive; nothing is read for them). */
+const NUMBERS_STEP = 64n
 
 const TransactionNode = Schema.Struct({
   digest: Schema.String,
@@ -61,27 +68,6 @@ export const GetCheckpointTransactions = GraphQL.query("GetCheckpointTransaction
   result: Schema.Struct({ checkpoint: Schema.NullOr(Schema.Struct({ transactions: Schema.NullOr(TransactionsPage) })) })
 })
 
-export const ListCheckpointNumbers = GraphQL.query("ListCheckpointNumbers", {
-  document: "query ListCheckpointNumbers($first:Int,$after:String,$filter:CheckpointFilter){" +
-    "checkpoints(first:$first,after:$after,filter:$filter){pageInfo{hasNextPage endCursor}nodes{sequenceNumber}}}",
-  variables: {
-    first: Schema.Number,
-    after: Schema.NullOr(Schema.String),
-    filter: Schema.Struct({ afterCheckpoint: Schema.optionalKey(Schema.Number), beforeCheckpoint: Schema.optionalKey(Schema.Number) })
-  },
-  result: Schema.Struct({
-    checkpoints: Schema.Struct({
-      pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean, endCursor: Schema.NullOr(Schema.String) }),
-      nodes: Schema.Array(Schema.Struct({ sequenceNumber: U64 }))
-    })
-  })
-})
-
-export const Tip = GraphQL.query("Tip", {
-  document: "query Tip{checkpoint{sequenceNumber}}",
-  result: Schema.Struct({ checkpoint: Schema.NullOr(Schema.Struct({ sequenceNumber: U64 })) })
-})
-
 export const SubscribeCheckpointNumbers = GraphQL.subscription("SubscribeCheckpointNumbers", {
   document: "subscription SubscribeCheckpointNumbers($after:String){checkpoints(after:$after){cursor node{sequenceNumber}}}",
   variables: { after: Schema.NullOr(Schema.String) },
@@ -91,7 +77,6 @@ export const SubscribeCheckpointNumbers = GraphQL.subscription("SubscribeCheckpo
 export const group = GraphQLGroup.make(
   GetCheckpoint,
   GetCheckpointTransactions,
-  ListCheckpointNumbers,
   Tip,
   SubscribeCheckpointNumbers,
   GetObjectChanges,
@@ -101,11 +86,13 @@ export const group = GraphQLGroup.make(
 /**
  * `CheckpointData` over GraphQL. `get` reads a checkpoint with its first 50
  * transactions (each with its first 50 object changes and events) in one
- * request, and completes whatever didn't fit by paging. `list` pages the
- * checkpoint numbers and `get`s each (4 at a time, in order); `subscribe`
- * follows the checkpoint subscription (cursor-resumed, bounded reconnects)
- * and `get`s each new checkpoint, waiting briefly if the indexer trails the
- * subscription.
+ * request, and completes whatever didn't fit by paging. `list` pins its open
+ * ends to the indexer's served range (tip as of the call, retention floor) and
+ * `get`s each checkpoint number in it; `subscribe` follows the checkpoint
+ * subscription (cursor-resumed, bounded reconnects) and `get`s each new
+ * checkpoint, waiting briefly if the indexer trails the subscription. Both
+ * fetch up to 16 checkpoints ahead concurrently and deliver them in order, so
+ * they keep up with the chain.
  */
 export const layer: Layer.Layer<CheckpointData.CheckpointData, never, GraphQLProtocol.GraphQLProtocol> = Layer.effect(
   CheckpointData.CheckpointData,
@@ -140,6 +127,13 @@ export const layer: Layer.Layer<CheckpointData.CheckpointData, never, GraphQLPro
         const r = yield* call(client.GetCheckpoint({ sequenceNumber: Number(sequenceNumber) }))
         const c = r.checkpoint
         if (c === null) return yield* new CheckpointData.CheckpointNotFound({ sequenceNumber })
+        const dataLoss = (message: string) => new RpcError({ method: "GetCheckpoint", code: "DATA_LOSS", message })
+        if (c.epoch === null) return yield* dataLoss(`checkpoint ${sequenceNumber} without an epoch`)
+        const epoch = c.epoch.epochId
+        const timestampMs = Date.parse(c.timestamp)
+        if (!Number.isFinite(timestampMs)) {
+          return yield* dataLoss(`checkpoint ${sequenceNumber} has an unreadable timestamp ${JSON.stringify(c.timestamp)}`)
+        }
         const nodes = yield* rest("GetCheckpoint", "transactions", c.transactions, (after) =>
           Effect.map(
             client.GetCheckpointTransactions({ sequenceNumber: Number(sequenceNumber), after }),
@@ -151,8 +145,8 @@ export const layer: Layer.Layer<CheckpointData.CheckpointData, never, GraphQLPro
         return {
           sequenceNumber: c.sequenceNumber,
           digest: c.digest,
-          epoch: c.epoch?.epochId ?? 0n,
-          timestampMs: BigInt(Date.parse(c.timestamp)),
+          epoch,
+          timestampMs: BigInt(timestampMs),
           transactions
         }
       }).pipe(Effect.withSpan("CheckpointData.get", { attributes: { sequenceNumber: String(sequenceNumber) } }))
@@ -168,27 +162,30 @@ export const layer: Layer.Layer<CheckpointData.CheckpointData, never, GraphQLPro
     return CheckpointData.CheckpointData.of({
       get,
       list: (options) => {
-        const end = options?.end !== undefined
-          ? Effect.succeed(options.end)
-          : client.Tip().pipe(call, Effect.map((r) => (r.checkpoint?.sequenceNumber ?? 0n) + 1n))
-        return Stream.unwrap(Effect.map(end, (end) => {
-          if (options?.start !== undefined && options.start >= end) return Stream.empty
-          const filter = {
-            ...(options?.start !== undefined && options.start > 0n && { afterCheckpoint: Number(options.start - 1n) }),
-            beforeCheckpoint: Number(end)
-          }
-          return Stream.paginate(null as string | null, (after) =>
-            client.ListCheckpointNumbers({ first: 50, after, filter }).pipe(
-              call,
-              Effect.map(({ checkpoints: c }) =>
-                [c.nodes.map((n) => n.sequenceNumber), Option.fromNullishOr(c.pageInfo.hasNextPage ? c.pageInfo.endCursor : null)] as const
-              )
-            )).pipe(Stream.mapEffect(getIndexed, { concurrency: LIST_CONCURRENCY }))
+        const start = options?.start
+        const end = options?.end
+        if (start !== undefined && end !== undefined && start >= end) return Stream.empty
+        // Pin the open ends before the first read, like gRPC: the end at the tip
+        // as of the call, an absent start at the indexer's retention floor.
+        const range = start !== undefined && end !== undefined
+          ? Effect.succeed({ first: start, end })
+          : client.Tip().pipe(call, Effect.flatMap(rangeOf))
+        return Stream.unwrap(Effect.map(range, (served) => {
+          const from = start ?? served.first
+          const until = end ?? served.end
+          if (from >= until) return Stream.empty
+          // Checkpoint numbers are consecutive: enumerate them, nothing to list.
+          return Stream.paginate(from, (n) => {
+            const to = n + NUMBERS_STEP < until ? n + NUMBERS_STEP : until
+            const numbers: Array<bigint> = []
+            for (let i = n; i < to; i++) numbers.push(i)
+            return Effect.succeed([numbers, to < until ? Option.some(to) : Option.none()] as const)
+          }).pipe(Stream.mapEffect(getIndexed, { concurrency: CONCURRENCY }))
         }))
       },
       subscribe: resubscribe((after) =>
         client.SubscribeCheckpointNumbers({ after }).pipe(Stream.map(({ checkpoints }) => checkpoints))
-      ).pipe(Stream.mapEffect((edge) => getIndexed(edge.node.sequenceNumber)))
+      ).pipe(Stream.mapEffect((edge) => getIndexed(edge.node.sequenceNumber), { concurrency: CONCURRENCY }))
     })
   })
 )

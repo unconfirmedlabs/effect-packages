@@ -75,6 +75,37 @@ const programs: Record<string, string> = {
       const signer = yield* Ed25519.generate
       return yield* Tx.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
     }).pipe(Effect.provide(layer))).then(console.log)`,
+  "ours: hand-written moveCall": `
+    ${E("Effect")}
+    ${I("@unconfirmed/sui", "Ptb")}
+    Effect.runPromise(Ptb.build(Effect.gen(function*() { yield* Ptb.moveCall({ target: "0x1::blob::burn", arguments: [yield* Ptb.object("0x6")] }) }))).then(console.log)`,
+  "ours: one generated call (walrus blob.burn)": `
+    ${E("Effect")}
+    ${I("@unconfirmed/sui", "Ptb")}
+    import * as blob from "@unconfirmed/walrus/generated/walrus/blob"
+    Effect.runPromise(Ptb.build(blob.burn({ arguments: ["0x6"] }))).then(console.log)`,
+  "ours: Tx.run over GraphQL": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
+    import * as SuiGraphQL from "@unconfirmed/sui-graphql"
+    const layer = SuiGraphQL.layer({ url: "https://graphql.testnet.sui.io/graphql" }).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Tx.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
+  "ours: Lifecycle.run (gRPC, KeyValueStore journal)": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("effect/persistence", "KeyValueStore")}
+    ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
+    ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = Layer.mergeAll(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStore.layerMemory))).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
   "walrus: read via aggregator": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
@@ -125,14 +156,14 @@ const programs: Record<string, string> = {
       packageId: objectId, id: new Uint8Array([1]), recipients: [{ objectId, publicKey }], threshold: 1,
       input: { _tag: "AesGcm256", data: new Uint8Array(32) }, randomness
     }))).then(console.log)`,
+  // Seal needs only Objects and Packages from the chain (SealGrpc.layer); SuiGrpc.layer would add every RPC's codec.
   "seal: encrypt + decrypt": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/sui", "Ed25519")}
-    ${I("@unconfirmed/seal", "Approval", "Config", "Seal")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/seal", "Approval", "Config", "Seal", "SealGrpc")}
     const packageId = "0x58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2"
-    const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provideMerge(FetchHttpClient.layer))
+    const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" } }).pipe(Layer.provideMerge(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       const id = new Uint8Array(32)
@@ -233,6 +264,8 @@ const bucket = (path: string) => {
   if (/packages[/\\]quorum/.test(path)) return "quorum"
   if (/packages[/\\]sui-multisig/.test(path)) return "sui-multisig"
   if (/packages[/\\]sui-secp/.test(path)) return "sui-secp*"
+  if (/packages[/\\]sui-graphql/.test(path)) return "sui-graphql"
+  if (/packages[/\\]sui-lifecycle/.test(path)) return "sui-lifecycle"
   if (/packages[/\\]sui[/\\]src[/\\]grpc/.test(path)) return "sui/grpc"
   if (/packages[/\\]sui[/\\]src/.test(path)) return "sui core"
   if (/packages[/\\]bcs/.test(path)) return "bcs"

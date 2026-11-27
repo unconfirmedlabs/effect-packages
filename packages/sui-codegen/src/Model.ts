@@ -5,7 +5,9 @@
  *
  * Addresses are normalized (`0x` + 64 hex). A package's `address` is the one
  * its modules are published under and that types refer to it by (the original
- * id, stable across upgrades). `storageId` is the id calls go to (the latest
+ * id, stable across upgrades). An unpublished package (address `0x0` in the
+ * summaries) gets a synthetic identity instead, `unpublished:<label>` (see
+ * {@link unpublished}), so several can be loaded together; it renders as `0x0`. `storageId` is the id calls go to (the latest
  * version that was loaded), and each datatype carries its own `origin`: the
  * package version that introduced it, which is what its type string uses.
  */
@@ -89,7 +91,7 @@ export interface Module {
 }
 
 export interface Package {
-  /** The address types refer to the package by (its original id; `0x0` when unpublished). */
+  /** The address types refer to the package by (its original id; `unpublished:<label>` when unpublished). */
   readonly address: string
   /** The id calls go to (the loaded version). */
   readonly storageId: string
@@ -118,8 +120,21 @@ export const normalizeAddress = (s: string): string => {
   return "0x" + h.padStart(64, "0")
 }
 
+const UNPUBLISHED = "unpublished:"
+
+/** The synthetic identity of an unpublished package (the summaries say `0x0`), by its label. */
+export const unpublished = (label: string): string => `${UNPUBLISHED}${label}`
+
+export const isUnpublished = (address: string): boolean => address.startsWith(UNPUBLISHED)
+
+export const ZERO = "0x" + "0".repeat(64)
+
+/** The address a package identity renders as: `0x0` for an unpublished package. */
+export const renderedAddress = (address: string): string => isUnpublished(address) ? ZERO : address
+
 /** `0x2` for small addresses, the full form otherwise. */
 export const shortAddress = (address: string): string => {
+  if (isUnpublished(address)) return "0x0"
   const h = address.replace(/^0x/, "").replace(/^0+/, "")
   return h.length <= 4 ? `0x${h || "0"}` : address
 }

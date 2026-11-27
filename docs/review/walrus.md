@@ -25,6 +25,8 @@ Counts: high 1, medium 5, low 8, nit 6.
 
 **Fix.** Make `maxTip` required in `UploadRelayOptions` (or default it to a small constant such as 0.01 SUI and document it). **Effort S.**
 
+**Resolution.** Fixed. `UploadRelayOptions.maxTip` is required (an untyped caller without it gets `0n`, so any tip is `TipTooHigh`); new optional `tipAddress` pins the recipient and a tip config naming another address is a `RelayError` before anything is signed. (The address used is always the one the tip config declares, so pinning is the only check possible.) Tests in `relay.test.ts`; README and design §4.8 updated.
+
 ### WAL-2 · medium · correctness · CONFIRMED (certain from code and Sui's ownership rule; not executed, it would spend funds)
 `packages/walrus/src/Write.ts:147`, `:387-406`, `:677`
 
@@ -33,6 +35,8 @@ Counts: high 1, medium 5, low 8, nit 6.
 **Scenario.** `Write.run(bytes, { owner: user, executor: Write.viaTx(serverKey), … })`: register succeeds (WAL and gas paid, object now owned by `user`), upload succeeds, certify fails at input resolution, every resume fails the same way. `write.test.ts` passes because its fake chain does not model ownership and uses `sender === OWNER`.
 
 **Fix.** Keep the `Blob` with the sender until it is certified and transfer in the certify transaction (`certify_blob` then `transferObjects`), as the Rust client's `PostStoreAction::TransferTo` does after certification (`crates/walrus-sui/src/client.rs:430-434`). Search the sender's objects in `findRegistration`. Add ownership to the fake chain. **Effort M.**
+
+**Resolution.** Fixed. Register transfers the `Blob` to the executor's sender; `certify(uploaded, { executor, owner? })` transfers it to `owner` in the certify transaction; `findRegistration` searches the sender; a certified `Blob` the sender still holds is transferred on its own. The fake chain in `write.test.ts` now aborts on inputs the sender does not own and applies transfers; the new owner tests fail against the old `Write.ts`.
 
 ### WAL-3 · medium · correctness · CONFIRMED
 `packages/walrus/src/System.ts:150-161`; users: `Recipes.ts` (`registerBlob`, `reserveSpace`, `extendBlob`), `Write.ts:268`, `:388`, `Aggregator.ts` (`verified`)
@@ -43,15 +47,21 @@ Counts: high 1, medium 5, low 8, nit 6.
 
 **Fix.** Give `System.state` the committee's TTL (1 minute), or refresh and rebuild once when a register transaction aborts. Recipes' doc already promises "the step can be rebuilt"; nothing does it. **Effort S.**
 
+**Resolution.** Fixed. `System.state` has a 1-minute TTL (`System.STATE_TTL`), and a failed register transaction refreshes `System` and is rebuilt once when prices, package id, epoch, shard count or shared version moved (otherwise the original error). Tests: TTL in `recipes.test.ts`; price change and unexplained abort in `write.test.ts` (fake chain checks the exact WAL payment).
+
 ### WAL-4 · medium · tests · measured, mechanism PLAUSIBLE (not caught in the act)
 `packages/walrus/test/live.gateway.test.ts:37-42`, `live.read.test.ts:62-67`
 
 See "Investigated item 1" below for the measurements. The candidate filter keeps deletable blobs; on testnet 73% of the newest certified blobs are deleted 11–104 s after certification, and the metadata pre-check passes as long as one node still has the metadata. **Fix.** Filter `!c.deletable` (the helper already decodes it), take `recentCertified(200)` (only ~10% are permanent), and on a failed candidate log the failure kinds and try the next one. **Effort S.**
 
+**Resolution.** Fixed (tests), plus the optional check. Live tests take `recentCertified(200)` filtered to permanent, non-extension blobs (`readableCandidates`), log each failed candidate with its failure kinds (`describeReadFailure`) and try the next (up to 20). `Read.blob` / `Read.locate` ending in `NotEnoughSlivers` or `NoMetadata` ask the status once and return `BlobNotFound` when it is `Nonexistent`. `SUI_LIVE=1` gateway test passed 4 of 4 runs.
+
 ### WAL-5 · medium · performance · CONFIRMED (measured)
 `packages/walrus/src/Encoder.ts:143-144` (every call), `Read.ts:478-483`
 
 See "Investigated item 3". Each WASM call blocks the thread 2.3–2.65 s at `n = 1000`; a strict read runs decode and `blobId` back to back in one fiber with no yield (4.9 s; a blame pass adds 2.6 s). **Fix.** A worker-backed layer (M), and as a stop-gap a 1 ms `Effect.sleep` between consecutive WASM calls (S).
+
+**Resolution.** Stop-gap applied. `Read.wasmBreak` (a real `setTimeout(0)`, so it does not wait on a `TestClock`; `Effect.sleep(1)` would hang `TestClock` tests) runs between `decode`, `blobId` and each `sliverRoots` batch. Measured at `n = 1000`, 1 MB blob from repair slivers: longest timer gap 4.93 s → 2.57 s, total unchanged (4.91 s). Worker-backed encoder not built (out of this batch).
 
 ### WAL-6 · medium · correctness/performance · PLAUSIBLE (arithmetic, not run)
 `packages/walrus/src/StorageNode.ts:210-213`, `Walrus.ts:46-55`, `UploadRelay.ts:205`, `Write.ts:625`
@@ -62,6 +72,8 @@ See "Investigated item 3". Each WASM call blocks the thread 2.3–2.65 s at `n =
 
 **Fix.** A separate write timeout (default 30 s or more), or scale by body size (`base + bytes / minRate`) for `putSliver`, `putMetadata` and the relay `POST`. **Effort S.**
 
+**Resolution.** Fixed. `StorageNode.scaledTimeout(base, bytes, rate)`; uploads time out after `requestTimeout + max(body, sharedBytes) / minUploadRate` (default 125,000 B/s, option on `StorageNodesOptions` and `UploadRelayOptions`). `Write` passes `sharedBytes` = the bytes that can be in flight at once; the relay `POST` scales with the blob. A full 12.5 MB window at the 15 s base gets 115 s; a 75 MB relay upload 660 s. Arithmetic and TestClock timeouts tested in `storage-node.test.ts`.
+
 ### WAL-7 · low · correctness · PLAUSIBLE
 `packages/walrus/src/Read.ts:230`, `:186-187`
 
@@ -69,60 +81,88 @@ See "Investigated item 3". Each WASM call blocks the thread 2.3–2.65 s at `n =
 
 **Scenario.** An epoch change in which fewer than `f + 1` shards agree on `kind + initialCertifiedEpoch` for a few seconds (nodes at different event heights): every read fails with `StatusUnverified` where the Rust client reads normally. **Fix.** On `StatusUnverified` in `chooseCommittee`, use `active.current` (and let the existing retry handle a miss). **Effort S.**
 
+**Resolution.** Fixed. `chooseCommittee` falls back to the current committee on `StatusUnverified`; a miss is an epoch error that `withCommitteeRetry` handles. Test in `read.test.ts`.
+
 ### WAL-8 · low · security (hardening) · PLAUSIBLE
 `packages/walrus/src/StorageNode.ts:198-209`
 
 **What.** Response bodies are buffered whole with no size limit, although every expected size is known exactly (metadata 66,044 bytes at `n = 1000`, a sliver `bcsSliverBytes`, status a few hundred bytes). **Scenario.** One committee member answers sliver `GET`s with an endless body: a read has up to 334 requests in flight and a node receives one per shard it holds, each buffering for the full timeout. **Fix.** Reject on `content-length` above the expected size and cap the streamed read. **Effort S–M.**
+
+**Resolution.** Fixed. `StorageNodes.metadata` / `sliver` take `{ maxBytes }`; bodies are read as a stream with the cap and checked against `content-length` first (`Malformed` when larger). `Read` passes `66n + 64` for metadata and the exact BCS sliver size; defaults 1 MiB (JSON), 8 MiB (metadata), 256 MiB (slivers). Tests in `storage-node.test.ts`.
 
 ### WAL-9 · low · correctness · CONFIRMED
 `packages/walrus/src/Encoder.ts:299`
 
 **What.** `sliverRoots` allocates the crafted blob outside `attempt`. **Scenario.** `n = 1000`, symbol size 20,000 (a blob over 4 GiB, reachable with a raised `maxSize`, in a blame pass or a verified quilt read): `new Uint8Array(4.46e9)` throws `RangeError: Out of memory`, which leaves as a defect, not an `EncoderError` (`q/small.test.ts`). The README promises no defects from the WASM path. **Fix.** Build the blob inside the `attempt`. **Effort S.**
 
+**Resolution.** Fixed. The crafted blob is allocated inside `attempt`, so a failed allocation is an `EncoderError`. Test in `encoder.test.ts` (n = 1000, symbol size 20,000).
+
 ### WAL-10 · low · performance · CONFIRMED (from code)
 `packages/walrus/src/Write.ts:482-489`
 
 **What.** The global in-flight permit wraps the whole retried `PUT`, so it is held through backoff sleeps (up to 12.6 s in total) and all 7 attempts. **Scenario.** A large blob leaves few permits (500 MB: 8). One node that accepts metadata and then stalls on slivers holds all of them through its timeouts and backoffs and starves every other node. **Fix.** Take the permit per attempt: `withRetry(Semaphore.withPermit(global)(nodes.putSliver(…)))`. **Effort S.**
+
+**Resolution.** Fixed. The global permit wraps each `PUT` attempt (`withRetry(Semaphore.withPermit(global)(putSliver))`). No dedicated test (the existing in-flight bound test still holds).
 
 ### WAL-11 · low · performance · CONFIRMED (from code)
 `packages/walrus/src/Read.ts:346-351`, `:419`
 
 **What.** Reads retry the same node 4 times (`Timeout` included) before moving on, and for metadata the retry runs inside the lane. The Rust client makes one attempt per node on reads and relies on the other nodes. **Scenario.** A hung node holds a metadata lane for 5 × 15 s + 3 s = 78 s (153 s with `StorageNode.layer`'s 30 s default); the window only widens on a final failure. If the three first picks hang, the first metadata answer is 78 s late although 96 other nodes were never asked. **Fix.** No retry (or `RateLimited` only) for metadata; do not retry `Timeout` on sliver reads. **Effort S.**
 
+**Resolution.** Fixed. Metadata requests retry only `RateLimited` (another node is asked instead); sliver requests do not retry `Timeout`. Test in `read.test.ts`; the default-schedule timing test now exercises sliver retries.
+
 ### WAL-12 · low · docs/api · CONFIRMED (from code)
 `packages/walrus/src/Read.ts:59-61`, `:479`; design §9.3
 
 **What.** `consistency: "skip"` is documented as "trust the slivers" / "callers that trust the writer". Slivers are only header-checked, so it trusts every node that served one of the 334 slivers: one node can change the bytes returned. The Rust default check verifies each sliver against the metadata, so its cheap mode does not have this property. **Fix.** Say so in the option's doc and the README. A sliver-verified mode would cost the same one WASM call as `strict`, so there is nothing cheaper to offer. **Effort S.**
+
+**Resolution.** Fixed (docs). `ReadOptions.consistency`, the README and design §4.5 say `"skip"` trusts every node that served a sliver.
 
 ### WAL-13 · low · correctness · PLAUSIBLE
 `packages/walrus/src/Read.ts:404-426`
 
 **What.** A node is marked failed for the whole read on any non-retryable error, including the per-shard ones (`ShardNotAssigned`, `SLIVER_NOT_FOUND`). **Scenario.** A stale committee during an epoch change: node A still holds 29 of its 30 listed shards; the moved one is asked first, A answers `SHARD_NOT_ASSIGNED`, and A's 29 good shards fail at once. The committee refresh then usually recovers. **Fix.** Poison a node only on node-level errors; let `ShardNotAssigned` fail that shard alone. **Effort S.**
 
+**Resolution.** Fixed. `ShardNotAssigned` and `NotFound` on a sliver fail that shard only; other final failures still fail the node's other shards. Test in `read.test.ts`.
+
 ### QRM-1 · low · docs/correctness · CONFIRMED
 `packages/quorum/src/Quorum.ts:346-348`, design §3.4 point 3 against §3.6
 
 **What.** §3.4 says "the result is a success whatever happens in the window". A straggler that dies or interrupts itself during the linger (or grace) window fails or interrupts a call whose threshold was already reached. **Scenario.** Threshold reached at 1,000 ms, `linger: "1 second"`, another member dies at 1,200 ms: the call fails with the defect and the collected quorum is lost (`q/edge.test.ts`, case D). For a Walrus write that would discard a valid set of confirmations. **Fix.** Decide and document it. Surfacing the defect is defensible; then §3.4 should say so. **Effort S.**
+
+**Resolution.** Fixed, as quorum.md §3.4 says: after the threshold is reached, a defect or self-interruption ends the linger window, is logged at warning level, and the call succeeds with what it has. During a `giveUp` grace (no quorum) a defect still fails the call. §3.4 and §3.6 updated; tests in `quorum/test/engine.test.ts`.
 
 ### QRM-2 · nit · correctness · CONFIRMED
 `packages/quorum/src/Quorum.ts:356-365`, `:407-417`
 
 Settlements already queued when the deciding one is taken are dropped: four `Effect.sync` members with threshold 1 all complete, the result has one success and three `unsettled` with `started: true` (`q/small.test.ts`). Harmless for the current callers; a write with `linger: 0` can lose confirmations that arrived in the same turn. **Fix.** Drain the queue without blocking before closing the scope on `done`. **Effort S.**
 
+**Resolution.** Fixed. After `done`, settlements already queued are drained with `Queue.poll` (no yield: a yield let freshly forked members send requests only to be interrupted, seen in the read tests). Under `TestClock`, sleeps ending at the same instant still settle in separate turns, so only same-turn settlements are kept. Tests in `engine.test.ts` (four `Effect.sync` members all succeed; `agree` groups them).
+
 ### WAL-14 · nit · api
 `packages/walrus/src/Write.ts:582-588`: the second `EpochMoved` round reports `NotEnoughConfirmations` with `weight: 0` and one synthetic failure, dropping the real per-node failures of that round.
+
+**Resolution.** Fixed. `EpochMoved` carries the round's weight and failures; the second round reports them. Test in `write.test.ts`.
 
 ### WAL-15 · nit · api
 `packages/walrus/src/Walrus.ts:51`: an untyped caller that passes neither `network` nor `config` silently gets testnet. Fail instead.
 
+**Resolution.** Fixed. Without `network` or `config` (or an unknown network) `Walrus.layer` dies with an `IllegalArgumentError` (a caller bug TypeScript already rejects, like Quorum's validation defects). Test in `gateway.test.ts`.
+
 ### WAL-16 · nit · correctness
 `packages/walrus/src/Write.ts:330-351`: a reused registration is not checked for `attributes`. A `Blob` registered elsewhere without `_walrusBlobType: "quilt"` is reused for a quilt write and stays unmarked.
+
+**Resolution.** Fixed. A reused registration gets the requested `attributes` via the new `Recipes.setAttributes` (`insert_or_update_metadata_pair`, idempotent), in the relay auth-only transaction or a small transaction of its own. Test in `write.test.ts`.
 
 ### WAL-17 · nit · api
 `packages/walrus/src/Read.ts:207`: when `committees.refresh` fails inside `withCommitteeRetry`, its `RpcError` replaces the original `NotEnoughSlivers` / `NoMetadata`.
 
+**Resolution.** Fixed. A failed refresh inside `withCommitteeRetry` keeps the read's own error. Test in `read.test.ts`.
+
 ### WAL-18 · nit · tests
 `packages/walrus/test/write.test.ts:150-200`: the fake chain checks epoch, weight and signature but not object ownership or the payment amount, which is why WAL-2 and WAL-3 pass the suite.
+
+**Resolution.** Fixed with WAL-2/3: the fake chain models ownership, transfers, the exact WAL payment at current prices, attributes, and a caching `System`. The new tests fail (8 of them) against the old `Write.ts`.
 
 ## Investigated items
 
@@ -177,6 +217,8 @@ A side benefit: terminating an idle worker releases the WASM heap, which otherwi
 | O4 | `findRegistration` collects every owned `Blob` page before matching (`Write.ts:340`). Filter and take the first match. | O(owned blobs) per write for publisher-like accounts; the no-match case still scans | S |
 | O5 | Quorum function-valued `concurrency` (item 2). | +136 B min / +47 B gzip | S |
 | O6 | Read bundle (esbuild, minified): 378 KB, of which `packages/sui/src/grpc/generated/rpc.ts` is 107 KB (28%); walrus's own code is 24 KB + 4 KB generated, quorum 5.9 KB. Outside this review's area; passed on for the sui reviewer. | measured in `bundle/meta.json` | — |
+
+**Resolution (optimizations).** O1 taken: `byIdentifier` decodes the index unverified only to find the patch, then verifies index and patch columns in one `sliverRoots` call; anything unexpected takes the verified path. One call at `n = 1000` measured 2.60 s, so about 5.2 s → 2.6 s of WASM per call (test in `quilt.test.ts`). O2 not taken (M, no gain on testnet today). O3 taken: the `Registered` → upload chain re-read is skipped right after a register in the same run (`certify` still reads). O4 taken: `findRegistration` stops at the first match (`Stream.filterMap` + `runHead`). O5 taken (function-valued `concurrency`, used by `Read.ts` metadata). O6 is for the sui reviewer. `Quorum.ts` grew 6,775 → 7,538 bytes minified (2,722 → 2,992 gzip) with O5 and the QRM-1/QRM-2 fixes.
 
 ## Checked and found sound
 

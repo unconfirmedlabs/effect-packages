@@ -2,7 +2,7 @@
  * Against devnet over gRPC-web. Opt in with SUI_LIVE=1.
  */
 import { describe, expect, test } from "bun:test"
-import { DateTime, Effect, Layer, Option } from "effect"
+import { DateTime, Effect, Layer, Option, Schedule } from "effect"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
 import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
@@ -13,6 +13,11 @@ import type * as Signer from "@unconfirmed/sui/Signer"
 import { Transactions } from "@unconfirmed/sui/Transactions"
 import * as Tx from "@unconfirmed/sui/Tx"
 import { DEVNET, faucet, grpcLayer, live } from "../../sui/test/support.ts"
+import * as Hash from "@unconfirmed/sui/Hash"
+import * as SuiGraphQL from "@unconfirmed/sui-graphql/SuiGraphQL"
+import { FetchHttpClient } from "effect/http"
+import * as Evidence from "../src/Evidence.ts"
+import * as EvidenceGraphQL from "../src/EvidenceGraphQL.ts"
 import * as EvidenceGrpc from "../src/EvidenceGrpc.ts"
 import * as Journal from "../src/Journal.ts"
 import { JournalEntry } from "../src/JournalEntry.ts"
@@ -20,6 +25,9 @@ import * as JournalKeyValueStore from "../src/JournalKeyValueStore.ts"
 import * as Lifecycle from "../src/Lifecycle.ts"
 
 const suite = live ? describe : describe.skip
+
+/** A well-formed digest no transaction has. */
+const digestOf = (seed: string) => Hash.transactionDigest(new TextEncoder().encode(`absent:${seed}`))
 
 const devnet = () =>
   EvidenceGrpc.layer.pipe(
@@ -71,13 +79,42 @@ suite("devnet", () => {
           Effect.ignore
         )
         const recovered = yield* Lifecycle.reconcileAll()
-        const after = yield* journal.listUnresolved
+        const { entries: after } = yield* journal.listUnresolved
         return { digest: signed.digest, recovered, after }
       }).pipe(Effect.provide(devnet()))
     )
     expect(result.recovered.map((r) => [r._tag, r.digest])).toEqual([["Executed", result.digest]])
     expect(result.after).toEqual([])
   }, 60_000)
+
+  test("Evidence over gRPC and GraphQL: one consistent observation of a known and an unknown digest", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function*() {
+        const signer = yield* Ed25519.generate
+        const coin = yield* faucet(signer.address)
+        const effects = yield* Lifecycle.run(transfer(signer, 1_000n), { signer, payment: Resolve.fixed([Objects.refOf(coin)]) })
+        const unknown = digestOf(effects.digest)
+        const observe = (layer: Layer.Layer<never>) =>
+          Effect.gen(function*() {
+            const e = yield* Evidence.Evidence
+            return yield* Effect.all([e.observe(effects.digest, 0n), e.observe(unknown, 0n)])
+          }).pipe(Effect.provide(layer))
+        const grpc = yield* observe(EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl: DEVNET }).pipe(Layer.provide(FetchHttpClient.layer)))))
+        // The indexer may trail the fullnode by a few seconds.
+        const graphql = yield* observe(
+          EvidenceGraphQL.layer.pipe(Layer.provide(SuiGraphQL.protocol({ url: SuiGraphQL.DEVNET }).pipe(Layer.provide(FetchHttpClient.layer))))
+        ).pipe(
+          Effect.repeat({ until: ([known]) => Option.isSome(known) && known.value.found, schedule: Schedule.spaced("1 second"), times: 20 })
+        )
+        return { grpc, graphql }
+      }).pipe(Effect.provide(devnet()))
+    )
+    for (const [known, missing] of [result.grpc, result.graphql]) {
+      expect(Option.getOrThrow(known).found).toBe(true)
+      expect(Option.getOrThrow(missing).found).toBe(false)
+      expect(Option.getOrThrow(missing).epoch).toBeGreaterThanOrEqual(0n)
+    }
+  }, 90_000)
 
   test("reconcile: another transaction consumed the pinned gas coin -> NotApplied inputConsumed", async () => {
     const error = await Effect.runPromise(

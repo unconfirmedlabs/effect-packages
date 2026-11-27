@@ -24,6 +24,7 @@ import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
 import { TestClock } from "effect/testing"
 import * as Approval from "../src/Approval.ts"
+import * as ElGamal from "../src/ElGamal.ts"
 import * as Entropy from "../src/Entropy.ts"
 import { SessionKeyExpired, ThresholdNotMet } from "../src/Errors.ts"
 import * as Ibe from "../src/Ibe.ts"
@@ -42,7 +43,9 @@ import {
   keyServerErrors,
   seeded,
   statusOf,
-  unhex
+  toB64,
+  unhex,
+  b64
 } from "./support.ts"
 
 // Stepping 10 ms of virtual time at a time through a 10 s timeout takes a few real seconds.
@@ -535,6 +538,193 @@ describe("Keys.fetch", () => {
 // -----------------------------------------------------------------------------
 // Parity: requests (§6.2)
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Review fixes (docs/review/seal.md)
+// -----------------------------------------------------------------------------
+
+/** One `decryption_keys` entry for `id`, encrypted to the request's ElGamal key with the server's master key. */
+const entryFor = (req: FakeRequest, masterKey: Bls.Scalar, id: Uint8Array) => {
+  const encKey = b64(JSON.parse(req.body!).enc_key)
+  const fullId = Kdf.fullId(PKG, id)
+  const ct = Result.getOrThrow(ElGamal.encrypt(encKey, Ibe.extract(masterKey, fullId), 12345n))
+  return { id: Array.from(fullId), encrypted_key: [toB64(ct[0]), toB64(ct[1])] }
+}
+const keysReply = (entries: ReadonlyArray<unknown>) => ({
+  status: 200,
+  body: { decryption_keys: entries },
+  contentType: "application/json",
+  headers: { "x-keyserver-version": "0.6.16" }
+})
+
+describe("Keys.fetch: review fixes", () => {
+  test("SEAL-1: a server repeating one valid entry 1,000 times is Malformed at once, nothing verified", async () => {
+    let masterKey!: Bls.Scalar
+    const w = world([{
+      intercept: (req) => {
+        const entry = entryFor(req, masterKey, ID)
+        return keysReply(Array.from({ length: 1000 }, () => entry))
+      }
+    }, {
+      intercept: () => ({ delay: "100 millis" })
+    }])
+    masterKey = w.servers[0]!.masterKey
+    const started = performance.now()
+    const r = await timed(w.layer, Effect.gen(function*() {
+      const s = yield* session(w.prompts.signer)
+      return yield* Effect.flip(Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 2 }))
+    }))
+    // Before the fix this verified every copy: about 14 s of blocked event loop.
+    expect(performance.now() - started).toBeLessThan(3000)
+    const e = value(r.exit) as ThresholdNotMet
+    expect(e.failures.map((f) => [f.error.server, f.error.kind])).toEqual([[w.ids[0]!, "Malformed"]])
+    expect(e.failures[0]!.error.message).toContain("1000 entries for 1 commands")
+  })
+
+  test("SEAL-1: within the command count, the first entry for an id decides and later copies are not decoded", async () => {
+    const ID2 = unhex("0304")
+    let masterKey!: Bls.Scalar
+    const w = world([{
+      intercept: (req) =>
+        keysReply([
+          entryFor(req, masterKey, ID),
+          // a copy for the same id that is not even a curve point: skipped, never decoded
+          { id: Array.from(Kdf.fullId(PKG, ID)), encrypted_key: [toB64(new Uint8Array(48).fill(7)), toB64(new Uint8Array(48).fill(7))] },
+          entryFor(req, masterKey, ID2)
+        ])
+    }])
+    masterKey = w.servers[0]!.masterKey
+    const r = await timed(w.layer, Effect.gen(function*() {
+      const s = yield* session(w.prompts.signer)
+      return yield* Keys.fetch({ session: s, approval: approvalFor([ID, ID2, ID]), servers: weighted(w.ids), threshold: 1 })
+    }))
+    const keys = value(r.exit)
+    expect(keys.map((k) => hex(k.fullId))).toEqual([hex(Kdf.fullId(PKG, ID)), hex(Kdf.fullId(PKG, ID2))])
+    expect(keys.map((k) => hex(k.key))).toEqual([ID, ID2].map((id) => hex(Bls.g1ToBytes(Ibe.extract(masterKey, Kdf.fullId(PKG, id))))))
+  })
+
+  test("SEAL-1/SEAL-9: one wrong key among several of one server is InvalidKey (batched check)", async () => {
+    const ids = [unhex("01"), unhex("02"), unhex("03"), unhex("04")]
+    let masterKey!: Bls.Scalar
+    const other = 777n
+    const w = world([{
+      intercept: (req) => keysReply(ids.map((id, i) => entryFor(req, i === 2 ? other : masterKey, id)))
+    }])
+    masterKey = w.servers[0]!.masterKey
+    const r = await timed(w.layer, Effect.gen(function*() {
+      const s = yield* session(w.prompts.signer)
+      return yield* Effect.flip(Keys.fetch({ session: s, approval: approvalFor(ids), servers: weighted(w.ids), threshold: 1 }))
+    }))
+    expect((value(r.exit) as ThresholdNotMet).failures.map((f) => f.error.kind)).toEqual(["InvalidKey"])
+  })
+
+  test("SEAL-3: reason is denied when a cached server, a denial and a healthy server make 3 of 3 unreachable", async () => {
+    let denyB = false
+    const w = world([{}, { intercept: () => denyB ? reply(deny()) : undefined }, {}])
+    const r = await timed(w.layer, Effect.gen(function*() {
+      const s = yield* session(w.prompts.signer)
+      yield* Keys.fetch({ session: s, approval, servers: weighted([w.ids[0]!]), threshold: 1 }) // A is now cached
+      denyB = true
+      return yield* Effect.flip(Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 3, denialGrace: 0 }))
+    }))
+    const e = value(r.exit) as ThresholdNotMet
+    expect(e.reason).toBe("denied")
+    expect(e.failures.map((f) => f.error.kind)).toEqual(["NoAccess"])
+  })
+
+  test("SEAL-4: no crypto.randomUUID (an insecure context): requests still go out, each with its own Request-Id", async () => {
+    const w = world([{}, {}])
+    const original = crypto.randomUUID
+    ;(crypto as { randomUUID: unknown }).randomUUID = undefined
+    try {
+      const r = await timed(w.layer, Effect.gen(function*() {
+        const s = yield* session(w.prompts.signer)
+        return yield* Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 2 })
+      }))
+      expect(value(r.exit)).toHaveLength(2)
+    } finally {
+      ;(crypto as { randomUUID: unknown }).randomUUID = original
+    }
+    const ids = w.fetchRequests().map((q) => q.headers["request-id"])
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  })
+
+  test("SEAL-4: a defect inside a member is Unavailable but not retried", async () => {
+    const w = world([{}], () =>
+      Layer.succeed(
+        KeyServer.KeyServers,
+        KeyServer.KeyServers.of({ get: () => Effect.die(new Error("boom")), refresh: () => Effect.die(new Error("boom")) })
+      ))
+    const r = await timed(w.layer, Effect.gen(function*() {
+      const s = yield* session(w.prompts.signer)
+      return yield* Effect.flip(Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 1, retry: Keys.defaultRetry() }))
+    }))
+    expect(r.at).toBe(0)
+    const e = value(r.exit) as ThresholdNotMet
+    expect(e.failures.map((f) => f.error.kind)).toEqual(["Unavailable"])
+    expect(e.failures[0]!.error.message).toContain("unexpected defect")
+  })
+
+  test("SEAL-6: a transient proof-of-possession failure is retried like an unavailable server", async () => {
+    let loads = 0
+    const w = world([{}], (servers) =>
+      Layer.effect(
+        KeyServer.KeyServers,
+        Effect.gen(function*() {
+          const ks = yield* Effect.service(KeyServer.KeyServers)
+          const get = (id: Address.Address) =>
+            Effect.suspend(() =>
+              ++loads === 1
+                ? Effect.fail(new KeyServer.InvalidKeyServer({ objectId: id, reason: "proof of possession unavailable (Unavailable): 503", kind: "Unavailable" }))
+                : ks.get(id)
+            )
+          return KeyServer.KeyServers.of({ get, refresh: get })
+        })
+      ).pipe(Layer.provide(KeyServer.layerFromServers(servers))))
+    const r = await timed(w.layer, Effect.gen(function*() {
+      return yield* Keys.fetch({ session: yield* session(w.prompts.signer), approval, servers: weighted(w.ids), threshold: 1 })
+    }))
+    expect(r.at).toBe(250)
+    expect(value(r.exit)).toHaveLength(1)
+    expect(loads).toBe(2)
+  })
+
+  test("SEAL-15: a 429 with Retry-After is not asked again sooner", async () => {
+    const w = world([{
+      intercept: (_req, n) => n === 1 ? { ...reply(keyServerErrors.failure()), status: 429, headers: { "retry-after": "3" } } : undefined
+    }])
+    const r = await timed(w.layer, Effect.gen(function*() {
+      return yield* Keys.fetch({ session: yield* session(w.prompts.signer), approval, servers: weighted(w.ids), threshold: 1 })
+    }))
+    expect(r.at).toBe(3000)
+    expect(value(r.exit)).toHaveLength(1)
+  })
+
+  test("SEAL-15: no answer at all reloads the server once; a changed URL is asked at once", async () => {
+    const w = world([{ url: "https://moved.test" }, { url: "https://old.test", intercept: () => "network-error" }])
+    // The cached entry still has the old URL; the chain (refresh) has the new one.
+    const stale = { ...w.servers[0]!, url: "https://old.test" }
+    let refreshes = 0
+    const layer = Layer.merge(
+      w.api(),
+      Layer.succeed(
+        KeyServer.KeyServers,
+        KeyServer.KeyServers.of({
+          get: () => Effect.succeed(stale),
+          refresh: () => Effect.sync(() => (refreshes++, w.servers[0]!))
+        })
+      )
+    )
+    const r = await timed(layer, Effect.gen(function*() {
+      return yield* Keys.fetch({ session: yield* session(w.prompts.signer), approval, servers: weighted([w.ids[0]!]), threshold: 1 })
+    }))
+    expect(r.at).toBe(0)
+    expect(value(r.exit)).toHaveLength(1)
+    expect(refreshes).toBe(1)
+  })
+})
 
 describe("request parity with @mysten/seal", () => {
   test("SealClient sends the same body and headers (Request-Id aside) for the same session, PTB and ElGamal draw", async () => {

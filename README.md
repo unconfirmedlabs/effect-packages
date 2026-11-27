@@ -10,7 +10,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
-| `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence, journal (memory / KeyValueStore), sender lock | — |
+| `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / KeyValueStore), sender lock | — |
 | `@unconfirmed/sui-secp256k1` | Secp256k1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-mldsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
@@ -60,7 +60,8 @@ const { winner } = yield* Quorum.agree(nodes, { weight, run: getStatus, key: can
 - It returns on the success that crosses the threshold and fails fast (`QuorumFailed`, `reason: "unreachable"`) the moment failures leave too little weight; everything still in flight is interrupted and awaited before it returns.
 - Results and errors carry every success, failure (with its typed error) and unsettled member, so callers can classify failures (`Quorum.failedWeight`).
 - `giveUp: { when, weight, grace? }` (`run` only) stops early once final failures matching `when` weigh `weight` (`reason: "gaveUp"`), for failures that make success pointless rather than impossible: Walrus metadata stops at `2f + 1` not-found weight instead of waiting for every node; Seal stops once denials weigh `t`. An optional `grace` keeps going for a moment, and a threshold reached in it still succeeds.
-- A defect in a member fails the whole call; it is not counted as a member failure. Timeouts go inside `run` (per attempt) or around the call (overall).
+- `concurrency` is a number, `"unbounded"`, or a function of progress so far, asked whenever a slot may open: `(p) => 3 + p.failed` starts with three and widens by one per final failure (Walrus metadata reads). Members never started are reported `started: false`.
+- A defect in a member fails the whole call; it is not counted as a member failure. Once the threshold is reached the call is a success whatever happens next: a defect during the linger window ends the window and is logged, and results that settled in the same turn as the deciding one are kept. Timeouts go inside `run` (per attempt) or around the call (overall).
 - `QuorumFailed` / `AgreementFailed` are `Data.TaggedError`s (generic in your member and error types, no `Schema`); convert them at your boundary. Design: [docs/design/quorum.md](docs/design/quorum.md).
 
 ### Walrus
@@ -85,15 +86,15 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 // { _tag: "Certified", blobId, blobObjectId, certifiedEpoch, endEpoch, deletable, digest }
 ```
 
-- **Reads** verify the metadata against the blob id before using it, check each sliver's shape, decode from `n − 2f` shards and re-derive the blob id (`consistency: "strict"`, the default). If the bytes don't match, the slivers are checked one by one: a node that served a bad one is blamed and replaced. Only a blob the writer encoded wrongly is `InconsistentBlob`. A blob unknown to `2f + 1` shards is `BlobNotFound` (`BlobBlocked` for blocked blobs), typically within seconds. During an epoch change the read committee is chosen per blob from its certified epoch.
-- **Writes** count weight in shards, as the chain does. The certificate is built at `n − f` (`@mysten/walrus` counts nodes, so it can refuse a valid certificate or build one the chain rejects). Each confirmation's signature is checked. In-flight sliver bytes are capped (12.5 MB), retries are per request, and the write lingers `0.5 × elapsed + 500 ms` after the quorum for stragglers, as the Rust client does. [docs/design/walrus.md](docs/design/walrus.md) §1.8 and §2 list what differs from `@mysten/walrus` and why.
+- **Reads** verify the metadata against the blob id before using it, check each sliver's shape, decode from `n − 2f` shards and re-derive the blob id (`consistency: "strict"`, the default). If the bytes don't match, the slivers are checked one by one: a node that served a bad one is blamed and replaced. Only a blob the writer encoded wrongly is `InconsistentBlob`. A blob unknown to `2f + 1` shards is `BlobNotFound` (`BlobBlocked` for blocked blobs), typically within seconds; a read that fails while the nodes call the blob `Nonexistent` (deleted meanwhile) is `BlobNotFound` too. During an epoch change the read committee is chosen per blob from its certified epoch (the current one when no status gathers enough agreement). `consistency: "skip"` drops the final check, and slivers are then only header-checked: any one node that served a sliver can change the bytes, so use it only when the bytes are verified another way. Reads prefer asking another node to retrying a slow one, and a body larger than the expected size is refused.
+- **Writes** count weight in shards, as the chain does. The certificate is built at `n − f` (`@mysten/walrus` counts nodes, so it can refuse a valid certificate or build one the chain rejects). Each confirmation's signature is checked. In-flight sliver bytes are capped (12.5 MB), retries are per request, and the write lingers `0.5 × elapsed + 500 ms` after the quorum for stragglers, as the Rust client does. Upload timeouts grow with the bytes in flight (`requestTimeout + bytes / minUploadRate`, default 1 Mbit/s), so a slow uplink delays a large write instead of timing it out. `owner` (default: the executor's sender) receives the `Blob` in the certify transaction: the sender holds it until then, since only an object's owner can certify it. The system state (prices, package id) is cached for a minute, and a register transaction that aborts because the prices or the package moved is rebuilt once. [docs/design/walrus.md](docs/design/walrus.md) §1.8 and §2 list what differs from `@mysten/walrus` and why.
 - **Steps are resumable.** `onStep` receives each step as plain JSON (`Schema.encode(Write.Step)`), and `resume` continues from it in another process. Each step checks the chain before acting, so a crash between register and persist reuses the registration rather than paying again. For the transactions themselves, any `Executor` works: `Write.viaTx(signer)` (a key or a wallet), or `sui-lifecycle`'s `Lifecycle.run` for a journal.
-- **Through the upload relay** the blob goes to a relay that encodes and stores it for a tip in SUI. The relay's certificate is verified before the certify transaction is built. Only relay writes need the relay layer (`via: "relay"` adds `UploadRelay` to the requirements):
+- **Through the upload relay** the blob goes to a relay that encodes and stores it for a tip in SUI. The relay's certificate is verified before the certify transaction is built. The tip amount and address come from the relay, so `maxTip` (MIST per blob) is required: a higher tip is `TipTooHigh` before anything is signed, and `tipAddress` optionally pins the recipient. Only relay writes need the relay layer (`via: "relay"` adds `UploadRelay` to the requirements):
 
   ```ts
   const layer = Layer.mergeAll(
     Walrus.layer({ network: "testnet" }),
-    UploadRelay.layer({ host: UploadRelay.TESTNET_HOST, maxTip: 1_000n })   // tips above maxTip (MIST) are TipTooHigh
+    UploadRelay.layer({ host: UploadRelay.TESTNET_HOST, maxTip: 1_000n })   // required; `0n` accepts only relays that want no tip
   ).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), Layer.provideMerge(FetchHttpClient.layer))
   yield* Write.run(bytes, { epochs: 5, deletable: true, executor: Write.viaTx(signer), via: "relay" })
   ```
@@ -120,10 +121,10 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
   const file = yield* QuiltRead.patch(Quilt.patchId(certified.blobId, patches[0]!))   // or QuiltRead.byIdentifier(blobId, "hello.txt")
   ```
 
-  A patch read fetches only that file's columns, each from the node holding its shard, and verifies them together (one WASM call, two for `byIdentifier`) before returning anything; any missing or mismatching column falls back to `Read.blob`. `@mysten/walrus` trusts one node's unverified sliver here. `verify: false` skips the check.
-- Every failure is a typed `Schema.TaggedError` (`BlobNotFound`, `NotEnoughSlivers`, `NotEnoughConfirmations`, `EncoderError`, ...). Nothing a node, gateway or the WASM throws escapes as a defect.
+  A patch read fetches only that file's columns, each from the node holding its shard, and verifies them together (one WASM call; `byIdentifier` verifies the index and the patch together in one) before returning anything; any missing or mismatching column falls back to `Read.blob`. `@mysten/walrus` trusts one node's unverified sliver here. `verify: false` skips the check.
+- Every failure is a typed `Schema.TaggedError` (`BlobNotFound`, `NotEnoughSlivers`, `NotEnoughConfirmations`, `EncoderError`, ...). Nothing a node, gateway or the WASM throws escapes as a defect. (`Walrus.layer` called without `network` or `config`, which TypeScript rejects, is a defect rather than a silent testnet.)
 
-**The WASM.** Erasure coding and BLS run in `@mysten/walrus-wasm`. Each call takes about 2.5 s at testnet's 1000 shards, synchronously, whatever the blob size up to a few MB: a read costs two calls, a write one. The module is imported only when an `Encoder` layer is built, so importing the package costs nothing until then. How to load it depends on the runtime:
+**The WASM.** Erasure coding and BLS run in `@mysten/walrus-wasm`. Each call takes about 2.5 s at testnet's 1000 shards, synchronously, whatever the blob size up to a few MB: a read costs two calls, a write one. A read yields to the event loop between its calls, so the thread stalls for one call at a time (2.6 s, not 4.9 s); a worker-backed encoder is not available yet. The module is imported only when an `Encoder` layer is built, so importing the package costs nothing until then. How to load it depends on the runtime:
 
 | Runtime | What to do |
 |---|---|
@@ -140,13 +141,16 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 import * as Approval from "@unconfirmed/seal/Approval"
 import * as Config from "@unconfirmed/seal/Config"
 import * as Seal from "@unconfirmed/seal/Seal"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
+import * as SealGrpc from "@unconfirmed/seal/SealGrpc"
 
-// Configuration, key servers read from chain, and the key server HTTP client; needs an HttpClient and a Sui client.
-const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(
-  Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })),
-  Layer.provideMerge(FetchHttpClient.layer)
-)
+// Configuration, key servers read from chain, the key server HTTP client, and the two chain reads Seal needs
+// (Objects, Packages) over gRPC-web; needs an HttpClient.
+const layer = SealGrpc.layer({
+  servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee],
+  grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" }
+}).pipe(Layer.provideMerge(FetchHttpClient.layer))
+// A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), ...).
+// SuiGrpc.layer ships every RPC (about 100 KB more than Seal needs).
 
 const id = Bcs.encodeSync(Bcs.Address)(signer.address)                       // account_based: the id is the user's address
 const { encryptedObject } = yield* Seal.encrypt({ packageId, id, data, threshold: 2 })   // or dem: "Hmac256Ctr", aad
@@ -157,7 +161,7 @@ const plaintext = yield* Seal.decrypt({ data: encryptedObject, session, approval
 ```
 
 - **Weights come from the ciphertext.** `decrypt` asks the servers the object names that are also configured, each counting for its number of shares in the object. `@mysten/seal` requires the client's configured weights to equal the object's. Servers the object names but the configuration lacks are never contacted: their URLs come from objects anyone can create, and a request tells the server who is asking for what. Their public keys are still read from chain when `checkShareConsistency: true`.
-- **Strict ids.** Package, server and user ids are `0x` + 64 hex digits. A short or unprefixed id is refused up front; `@mysten/seal` signs it as given and every server then rejects the session. `decrypt` checks that the object, the session and the approval belong together (`ApprovalMismatch`) before sending anything. `Seal.session` checks that the package is a first version, which `SessionKey.make` doesn't.
+- **Strict ids.** Package and user ids are `0x` + 64 hex digits; key server ids are exactly 64 hex digits, `0x` optional. A short or unprefixed package or user id is refused up front; `@mysten/seal` signs it as given and every server then rejects the session. `decrypt` checks that the object, the session and the approval belong together (`ApprovalMismatch`) before sending anything. `Seal.session` checks that the package is a first version, which `SessionKey.make` doesn't.
 - **One wallet prompt per session.** Concurrent callers share the prompt; a rejected prompt isn't remembered. `@mysten/seal` prompts once per concurrent call.
 - **The derived-key cache belongs to the session** and is checked after the session's expiry. `@mysten/seal` keeps one unbounded cache per client and returns from it before looking at the session, so an expired session, or another user's session on the same client, decrypts from it. `Seal.fetchKeys({ objects, session, approval })` fetches keys for many objects in one round; after that, `decrypt` sends nothing. Every key is verified against the server's on-chain public key before it is cached or used.
 - **`ThresholdNotMet` lists every server's failure**, each a typed `KeyServerError` (`NoAccess` with the Move abort, `InvalidPtb`, `Timeout`, `RateLimited`, ...), plus `reason: "denied" | "unreachable" | "insufficientWeight"`. `@mysten/seal` throws one "majority" error, or `undefined` when servers answer with unusable keys. Transient failures are retried per server.
@@ -284,6 +288,29 @@ A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` wi
 
 **5. The transport ships only the RPCs you call, and only the fields it reads.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. The capability services use pruned handles (`generated/lean.ts`, generated from `packages/sui/scripts/grpc-lean.ts`) whose descriptors carry just the fields in their read masks; the rest of a response is skipped as unknown fields. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover, with full descriptors.
 
+**GraphQL.** `@unconfirmed/sui-graphql` implements every capability over Sui GraphQL. `CheckpointData.subscribe` and `list` fetch up to 16 checkpoints ahead concurrently and deliver them in order, so `CheckpointData.follow` keeps up with mainnet and testnet: measured over 30 s, it stays about 5 checkpoints behind the light `Checkpoints.subscribe`. One request at a time fell 34 (testnet) to 74 (mainnet) behind and kept losing ground. Open-ended `list` calls are pinned to the indexer's tip at the time of the call, as over gRPC. When the indexer answers null where a value must exist (current epoch, latest checkpoint, gas price), the call fails with `RpcError` `UNAVAILABLE`; it never substitutes a default.
+
+**6. Crash-safe submission (`@unconfirmed/sui-lifecycle`).**
+
+```ts
+import * as EvidenceGrpc from "@unconfirmed/sui-lifecycle/EvidenceGrpc"   // or EvidenceGraphQL
+import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/sui-lifecycle"
+
+const layer = Layer.mergeAll(
+  SuiGrpc.layer({ baseUrl }),
+  EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl }))),   // same backend as Transactions
+  JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
+)
+yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
+const effects = yield* Lifecycle.run(recipe, { signer })
+```
+
+- Every failure lands on one axis: `applied` (`ExecutionFailed`), `not_applied` (`NotApplied`, `JournalError`) or `unknown` (`SubmissionUnknown`, which carries the signed bytes to `resubmit`). Only `not_applied` is safe to rebuild.
+- **The expiry rule needs `Evidence`, and it is off without it.** `NotApplied{expired}` means the transaction's epoch window has closed and it is not on chain. It is concluded only when one `Evidence` backend reports, in a single consistent observation taken twice around a recheck, that its epoch is past the window, that it does not have the transaction, and that its history covers the window. `Transactions.get` must also miss each time. `SuiGrpc.layer` and `SuiGraphQL.layer` do not include `Evidence`. Without it, a transaction that never reached the network stays `SubmissionUnknown` (and unresolved in the journal) until you `resubmit` it or `Journal.remove` it. Point `Evidence` at the same backend as `Transactions`. Behind a load balancer of mixed nodes, set `SubmitConfig` `expiryEvidence: "never"`.
+- `NotApplied{refused}` (`INVALID_ARGUMENT` on the first send) means only that this process will not send those bytes again on its own. Some refusals depend on time (an unfunded address balance, for example). `Lifecycle.resubmit(signed, { retryRefused: true })` re-sends them on request. Bytes built for another chain are never sent.
+- **Journal.** The durable journal stores each entry as versioned JSON (`{"v":1,…}`) and still reads entries written before versioning. An entry it cannot read does not fail the listing: it is reported in `listUnresolved().corrupt` and as `{ _tag: "Corrupt" }` from `reconcileAll`. `Journal.remove(digest)` drops any entry, unresolved or corrupt. The in-memory default keeps the latest 10 000 settled entries.
+- `reconcileAll({ concurrency, resubmit })` makes one lookup per entry, without polling, and keeps the time each unknown entry was first sent and its last send error. `reconcile(digest)` uses the signed bytes the journal holds for that digest.
+
 ## Keys
 
 **Import and export** use the `suiprivkey1…` strings the Sui CLI and wallets exchange. The core can't build a signer for a scheme it doesn't ship, so decoding gives bytes and the scheme package makes the signer:
@@ -335,7 +362,7 @@ import { defineConfig } from "@unconfirmed/sui-codegen/Config"
 export default defineConfig({
   output: "./src/generated",
   packages: [
-    { path: "./move/counter" },                                    // local: runs `sui move summary`
+    { path: "./move/counter", packageId: "0x…" },                  // local: runs `sui move summary`
     { id: "0x…", network: "testnet", name: "deepbook" },           // on-chain, over gRPC GetPackage
     { path: "./move/counter", package: "sui", modules: ["coin"] }  // framework modules, same summaries
   ]
@@ -359,13 +386,16 @@ const recipe = Effect.gen(function*() {
 })
 yield* Tx.run(recipe, { signer }).pipe(Effect.provide(Layer.succeed(counter.Package, testnetId)))  // R needs no Package by default
 const value = yield* counter.Counter.get(id)   // Objects.getAs with the generated schema
-counter.Counter.type()                         // "0x<defining id>::counter::Counter"
+counter.Counter.type()                         // "0x<packageId>::counter::Counter" (`0x0` without packageId/originalId)
 ```
 
 - **Package ids.** Each package has one `Package` (`Context.Reference<string>`) defaulting to the id it was generated from, so calls need nothing in `R`; point them elsewhere with `Layer.succeed` / `Effect.provideService`. Type strings use each type's defining (type-origin) id, which survives upgrades.
+- **Local packages.** `sui move summary` lists an unpublished package at `0x0` and carries no type origins, so give the published ids: `packageId` (calls) and `originalId` (type strings; default `packageId`, right until the first upgrade), plus `typeOrigins: { "module::Type": id }` for types an upgrade added. `.type()` is synchronous and built at generation time, so providing `Package` at run time does not change it. Without either id, calls and type strings say `0x0`. Several unpublished packages can share one config (each is keyed by its name).
+- **Names.** A Move name that would clash in TypeScript is renamed deterministically: a struct named `Move`, `Bcs` or `Package` is bound as `Move_` and still exported as `Move` (a module exporting a type `Package` then leaves the `Package` reference in `$package.ts`); of `foo_bar` and `fooBar` the camelCase one keeps its name and the other keeps its Move name; an argument key taken by an auto-filled object or an earlier argument keeps its Move name if that differs, else gets a numeric suffix (`random: u64` next to `&Random` is `random2`). Functions with a `signer` parameter are skipped with a comment.
+- **Writing.** `generate` replaces `<output>/<package>` and `<output>/deps` only when they hold nothing but generated files (otherwise it fails and writes nothing), and fails when two packages would be written to one path. Directories of packages removed from the config are left in place.
 - **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, ...).
 - **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
-- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2.6 KB min / 0.8 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8).
+- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2.6 KB min / 1.0 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report).
 - Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
 
 ## Importing
@@ -393,6 +423,10 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | Read one object | 199 / 66 | 197 / 67 | 195 / 64 | 289 / 76 (ships all 30 RPCs) |
 | Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 311 / 101 | 306 / 101 | 302 / 97 | 373 / 105 |
 | The same with `SuiGrpc.layer` (all nine services) | 338 / 106 | 333 / 106 | 329 / 101 | — |
+| The same over GraphQL (`SuiGraphQL.layer`) | 309 / 106 | 303 / 106 | 307 / 101 | — |
+| `Lifecycle.run` (gRPC, KeyValueStore journal) | 423 / 124 | 418 / 124 | 424 / 119 | — |
+| Hand-written `Ptb.moveCall` | 89 / 30 | 90 / 31 | 93 / 30 | — |
+| One generated call (Walrus `blob.burn`) | 91 / 31 | 92 / 32 | 96 / 31 | — |
 | Walrus: read via the aggregator | 144 / 49 | 144 / 49 | 145 / 47 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
 | Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |
@@ -400,14 +434,14 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | Walrus: write a blob through the relay | 458 / 137 | 452 / 137 | 460 / 132 | — |
 | Seal: parse an encrypted object | 91 / 31 | 90 / 31 | 97 / 31 | — |
 | Seal: encrypt with pinned keys (`Envelope.seal`) | 177 / 63 | 175 / 63 | 183 / 62 | — |
-| Seal: encrypt + decrypt (the layer, gRPC, `FetchHttpClient`) | 487 / 150 | 481 / 150 | 490 / 145 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
+| Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 389 / 135 | 384 / 135 | 390 / 130 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
 | zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 98 / 41 | — |
 | zkLogin: `ZkLoginAddress.fromJwt` | 155 / 74 | 154 / 74 | 160 / 76 | — |
 | zkLogin: `ZkLogin.signer` | 138 / 49 | 136 / 49 | 143 / 49 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
-- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program is 20 KB larger than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (9 KB gzip, Rolldown).
+- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 80 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (6 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 100 KB, every RPC's codec.
 - **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.

@@ -168,6 +168,24 @@ const addAttributes = (target: Move.Argument, attributes: Readonly<Record<string
   })
 
 /**
+ * Set attributes on an existing `Blob` (`blob::insert_or_update_metadata_pair`
+ * per entry, which creates the metadata when there is none): idempotent, so it
+ * is safe on a `Blob` that already carries them.
+ */
+export const setAttributes = (o: {
+  readonly blobObjectId: Address.Address
+  readonly attributes: Readonly<Record<string, string>>
+}): Effect.Effect<void, RecipeError, RecipeServices> =>
+  withSystem(() =>
+    Effect.gen(function*() {
+      const target = yield* objectArg(o.blobObjectId)
+      for (const [key, value] of Object.entries(o.attributes)) {
+        yield* blob.insertOrUpdateMetadataPair({ arguments: [target, key, value] })
+      }
+    })
+  )
+
+/**
  * `system::certify_blob` with the certificate's aggregate signature, its
  * signers as a bitmap over the system committee (M3), and its message. The
  * system object is an immutable shared input. The chain checks the epoch

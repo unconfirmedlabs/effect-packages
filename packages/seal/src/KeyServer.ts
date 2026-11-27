@@ -13,6 +13,7 @@
  * the object's own id and the public key (a valid G2 point, not infinity) are
  * all checked, and trailing bytes are refused (`Bcs.decode`).
  */
+import { bytesToHex } from "@noble/hashes/utils.js"
 import * as Cache from "effect/Cache"
 import * as Context from "effect/Context"
 import * as Duration from "effect/Duration"
@@ -29,9 +30,10 @@ import * as Objects from "@unconfirmed/sui/Objects"
 import type { RpcError } from "@unconfirmed/sui/RpcError"
 import * as TypeTag from "@unconfirmed/sui/TypeTag"
 import * as Bls from "./Bls.ts"
-import { find, isHttpUrl, normalizeObjectId, SealConfig, type SealConfigService, type ServerConfig } from "./Config.ts"
+import { find, isHttpUrl, SealConfig, type SealConfigService, type ServerConfig } from "./Config.ts"
 import { InvalidKeyServer } from "./Errors.ts"
 import * as Ibe from "./Ibe.ts"
+import { normalizeObjectId } from "./ids.ts"
 import { KeyServerApi } from "./KeyServerApi.ts"
 
 export { InvalidKeyServer }
@@ -221,22 +223,29 @@ export const chooseVersion = (objectId: Address, object: Objects.SuiObject): Res
   })
 
 /**
- * One read of the object and one of its versioned field, both through the
- * batched `Objects.get`. A missing object is `ObjectNotFound`; a missing
- * field, like every other inconsistency, is `InvalidKeyServer`.
+ * One round trip: the object and both candidate versioned fields (their ids
+ * are derivable up front) are read together through the batched
+ * `Objects.get`, then the version is chosen. A missing object is
+ * `ObjectNotFound`; a missing chosen field, like every other inconsistency,
+ * is `InvalidKeyServer`. A field that is absent but not chosen costs nothing
+ * more than its slot in the batch.
  */
 export const read = (objectId: Address): Effect.Effect<OnChain, KeyServerLoadError, Objects.Objects> =>
   Effect.gen(function*() {
     const id = normalizeObjectId(objectId)
     if (id === undefined) return yield* invalid(objectId, "not an object id")
     const objects = yield* Effect.service(Objects.Objects)
-    const object = yield* objects.get(id)
+    const field = (version: 1 | 2) =>
+      objects.get(fieldId(id, version)).pipe(
+        Effect.map((f): Objects.SuiObject | undefined => f),
+        Effect.catchTag("ObjectNotFound", () => Effect.succeed(undefined))
+      )
+    const [object, v2, v1] = yield* Effect.all([objects.get(id), field(2), field(1)], { concurrency: "unbounded" })
     const version = yield* Effect.fromResult(chooseVersion(id, object))
-    const field = yield* objects.get(fieldId(id, version)).pipe(
-      Effect.catchTag("ObjectNotFound", () => Effect.fail(invalid(id, `versioned field ${version} not found`)))
-    )
-    return yield* Effect.fromResult(decode(id, field, version))
-  })
+    const chosen = version === 2 ? v2 : v1
+    if (chosen === undefined) return yield* invalid(id, `versioned field ${version} not found`)
+    return yield* Effect.fromResult(decode(id, chosen, version))
+  }).pipe(Effect.withSpan("KeyServer.read"))
 
 // -----------------------------------------------------------------------------
 // The service
@@ -288,8 +297,9 @@ export const resolve = (onChain: OnChain, config: ServerConfig | undefined): Res
  * Check a key server's proof of possession (C17, H10) through `/v1/service`.
  * A server without `url` (unconfigured) and a committee (whose aggregator
  * does not implement the route) are accepted as they are. A failed request is
- * `InvalidKeyServer` too, with the `KeyServerError` kind in its reason, and
- * is not cached.
+ * `InvalidKeyServer` too, with the request's `KeyServerError` kind in `kind`
+ * (and in its reason), so a transient failure is `retryable`; it is not
+ * cached.
  */
 export const verify = (server: KeyServer): Effect.Effect<KeyServer, InvalidKeyServer, KeyServerApi> =>
   Effect.gen(function*() {
@@ -300,7 +310,13 @@ export const verify = (server: KeyServer): Effect.Effect<KeyServer, InvalidKeySe
       url: server.url,
       ...(server.apiKey !== undefined && { apiKey: server.apiKey })
     }).pipe(
-      Effect.mapError((e) => invalid(server.objectId, `proof of possession unavailable (${e.kind}): ${e.message}`))
+      Effect.mapError((e) =>
+        new InvalidKeyServer({
+          objectId: server.objectId,
+          reason: `proof of possession unavailable (${e.kind}): ${e.message}`,
+          kind: e.kind
+        })
+      )
     )
     if (normalizeObjectId(answer.serviceId) !== server.objectId) {
       return yield* invalid(server.objectId, `proof of possession names another id: ${answer.serviceId}`)
@@ -365,8 +381,15 @@ export const layer = (options?: LayerOptions): Layer.Layer<KeyServers, never, Se
 
 /**
  * As `layer`, and also checks each configured independent server's proof of
- * possession whenever it is loaded (C17, H10); committee servers and
- * unconfigured servers are not checked. Off by default (open question 13).
+ * possession (C17, H10); committee servers and unconfigured servers are not
+ * checked. Off by default (open question 13).
+ *
+ * The proof covers only `(public key, object id)`, neither of which changes
+ * (K3), so a verified pair is remembered for the life of the layer: reloads
+ * after the TTL (for URL changes) and `refresh` do not ask again unless the
+ * public key changed. A failed proof request is not remembered; when it was
+ * transient, the `InvalidKeyServer` is `retryable` and `Keys.fetch` retries
+ * it like an unavailable server.
  */
 export const layerVerified = (
   options?: LayerOptions
@@ -375,7 +398,13 @@ export const layerVerified = (
     KeyServers,
     Effect.gen(function*() {
       const config = yield* Effect.service(SealConfig)
-      return yield* makeService((id) => Effect.flatMap(load(config, id), verify), options)
+      const verified = new Set<string>()
+      const pair = (s: KeyServer) => `${s.objectId}:${bytesToHex(s.publicKey)}`
+      const check = (server: KeyServer) =>
+        verified.has(pair(server))
+          ? Effect.succeed(server)
+          : Effect.tap(verify(server), () => Effect.sync(() => verified.add(pair(server))))
+      return yield* makeService((id) => Effect.flatMap(load(config, id), check), options)
     })
   )
 

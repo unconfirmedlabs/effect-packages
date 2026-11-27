@@ -7,9 +7,10 @@
  *   of shares in the object. Servers the object names but the configuration
  *   does not are never contacted (open question 8); their public keys are
  *   still read from chain for the consistency check.
- * - **Strict ids.** Object, package and server ids are `0x` + 64 hex digits;
- *   the object, the session and the approval must belong together
- *   (`ApprovalMismatch`) before anything is sent.
+ * - **Strict ids.** Package and user ids are `0x` + 64 hex digits; key
+ *   server ids are 64 hex digits, `0x` optional (as in `Config`). The object,
+ *   the session and the approval must belong together (`ApprovalMismatch`)
+ *   before anything is sent.
  * - Key fetching is `Keys.fetch`: one wallet prompt per session, verified
  *   keys only, the session's cache checked after its expiry, and
  *   `ThresholdNotMet` carrying every server's failure.
@@ -43,6 +44,7 @@ import {
   type NotEnoughKeys,
   NotFirstVersion
 } from "./Errors.ts"
+import { normalizeObjectId, strictId } from "./ids.ts"
 import * as KeyServer from "./KeyServer.ts"
 import * as KeyServerApi from "./KeyServerApi.ts"
 import * as Keys from "./Keys.ts"
@@ -58,10 +60,6 @@ export type DecryptError =
   | KeyServer.KeyServerLoadError
   | CryptoUnavailable
 export type FetchKeysError = Keys.FetchError | InvalidCiphertext | ApprovalMismatch
-
-const ID = /^0x[0-9a-fA-F]{64}$/
-/** Strict: `0x` + 64 hex digits, either case; the canonical lower-case form, or `undefined`. */
-const strictId = (s: string): Address | undefined => (ID.test(s) ? (s.toLowerCase() as Address) : undefined)
 
 // -----------------------------------------------------------------------------
 // First versions (I1)
@@ -157,8 +155,8 @@ export const encrypt = (
     const servers: Array<{ readonly objectId: Address; readonly weight: number }> = []
     const seen = new Set<Address>()
     for (const s of options.servers ?? config.servers) {
-      const objectId = strictId(s.objectId)
-      if (objectId === undefined) return yield* invalidEncryption(`key server id ${JSON.stringify(s.objectId)} is not 0x followed by 64 hex digits`)
+      const objectId = normalizeObjectId(s.objectId)
+      if (objectId === undefined) return yield* invalidEncryption(`key server id ${JSON.stringify(s.objectId)} is not 64 hex digits`)
       if (seen.has(objectId)) return yield* invalidEncryption(`key server ${objectId} is listed twice`)
       if (!Number.isSafeInteger(s.weight) || s.weight < 1) return yield* invalidEncryption(`weight ${s.weight} of ${objectId} is not a positive integer`)
       seen.add(objectId)
@@ -170,10 +168,12 @@ export const encrypt = (
     if (!Number.isInteger(threshold) || threshold < 1 || threshold > total) {
       return yield* invalidEncryption(`threshold ${threshold} out of range for ${total} shares`)
     }
-    if (options.checkPackage !== false) yield* checkFirstVersion(packageId)
-
+    // The package check and the server loads in one round: concurrent reads share one batch.
     const keyServers = yield* Effect.service(KeyServer.KeyServers)
-    const loaded = yield* Effect.forEach(servers, (s) => keyServers.get(s.objectId), { concurrency: "unbounded" })
+    const [, loaded] = yield* Effect.all([
+      options.checkPackage !== false ? checkFirstVersion(packageId) : Effect.void,
+      Effect.forEach(servers, (s) => keyServers.get(s.objectId), { concurrency: "unbounded" })
+    ], { concurrency: "unbounded" })
     const recipients = servers.flatMap((s, i) =>
       Array.from({ length: s.weight }, (): Envelope.Recipient => ({ objectId: s.objectId, publicKey: loaded[i]!.publicKey }))
     )
@@ -191,7 +191,7 @@ export const encrypt = (
       randomness
     })
     return { encryptedObject: sealed.bytes, key: Redacted.make(sealed.key, { label: "DEM key" }) }
-  })
+  }).pipe(Effect.withSpan("Seal.encrypt", { attributes: { "seal.threshold": options.threshold } }))
 
 // -----------------------------------------------------------------------------
 // Decrypt
@@ -246,16 +246,24 @@ const askable = (config: Config.SealConfigService, object: EncryptedObject.Encry
     Config.find(config, s.objectId) !== undefined
   )
 
+const fetchAttributes = (object: EncryptedObject.EncryptedObject, servers: ReadonlyArray<Keys.WeightedServer>) => ({
+  "seal.threshold": object.threshold,
+  "seal.shares": object.services.length,
+  "seal.servers": servers.length
+})
+
 /** Parse, check, fetch: the keys of `object`'s full id, by server. */
 const keysFor = (options: DerivedKeysOptions) =>
   Effect.gen(function*() {
     const object = yield* parse(options.data)
     yield* belongs(object, options.session, options.approval)
     const config = yield* Effect.service(Config.SealConfig)
+    const servers = askable(config, object)
+    yield* Effect.annotateCurrentSpan(fetchAttributes(object, servers))
     const keys = yield* Keys.fetch({
       session: options.session,
       approval: options.approval,
-      servers: askable(config, object),
+      servers,
       threshold: object.threshold,
       ...(options.retry !== undefined && { retry: options.retry }),
       ...(options.denialGrace !== undefined && { denialGrace: options.denialGrace })
@@ -289,7 +297,7 @@ export const decrypt = (
       publicKeys,
       legacyNonce: options.legacyNonce === true
     })
-  })
+  }).pipe(Effect.withSpan("Seal.decrypt"))
 
 /**
  * One round of requests for several objects under one approval; afterwards
@@ -321,7 +329,7 @@ export const fetchKeys = (
         ...(options.denialGrace !== undefined && { denialGrace: options.denialGrace })
       })
     }
-  })
+  }).pipe(Effect.withSpan("Seal.fetchKeys", { attributes: { "seal.objects": options.objects.length } }))
 
 /**
  * Verified derived keys for the object's full id from servers weighing its
@@ -330,7 +338,7 @@ export const fetchKeys = (
 export const derivedKeys = (
   options: DerivedKeysOptions
 ): Effect.Effect<ReadonlyArray<Keys.DerivedKey>, FetchKeysError, Config.SealConfig | KeyServer.KeyServers | KeyServerApi.KeyServerApi> =>
-  Effect.map(keysFor(options), (r) => r.keys)
+  Effect.map(keysFor(options), (r) => r.keys).pipe(Effect.withSpan("Seal.derivedKeys"))
 
 // -----------------------------------------------------------------------------
 // The layer

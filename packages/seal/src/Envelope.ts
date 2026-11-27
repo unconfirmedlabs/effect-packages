@@ -16,14 +16,17 @@
  * only produce `InvalidCiphertext` or `DecryptionFailed`, never a wrong
  * plaintext, except in `Plain` mode, where a wrong key comes out silently.
  */
+import { bytesToHex } from "@noble/hashes/utils.js"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Bls from "./Bls.ts"
+import { xor } from "./bytes.ts"
 import * as Dem from "./Dem.ts"
 import * as EncryptedObject from "./EncryptedObject.ts"
 import * as Entropy from "./Entropy.ts"
 import { CryptoUnavailable, DecryptionFailed, InvalidCiphertext, InvalidEncryption, NotEnoughKeys } from "./Errors.ts"
 import * as Ibe from "./Ibe.ts"
+import { isCanonical } from "./ids.ts"
 import * as Kdf from "./Kdf.ts"
 import * as Shamir from "./Shamir.ts"
 
@@ -38,7 +41,13 @@ export interface Recipient {
   readonly publicKey: Uint8Array
 }
 
-/** Everything random about one encryption. */
+/**
+ * Everything random about one encryption. **Never reuse one**: the DEM key is
+ * a function of `(baseKey, r, id, recipients, threshold)`, so sealing two
+ * payloads with the same randomness to the same id and recipients reuses the
+ * AES-GCM key under Seal's fixed IV (or the HMAC-CTR keystream). Draw a fresh
+ * value with `randomness` for every `seal`.
+ */
 export interface Randomness {
   /** 32 bytes. */
   readonly baseKey: Uint8Array
@@ -52,8 +61,6 @@ const KEY_BYTES = 32
 /** Shares and the threshold are `u8`s; indices run `1..=n` (I5). */
 export const MAX_SHARES = 255
 
-const ADDRESS = /^0x[0-9a-f]{64}$/
-
 /** `32 + 32(t − 1) + 48` bytes of `Entropy`: base key, coefficients, then the 48 bytes mapped to `r`. */
 export const randomness = (threshold: number): Effect.Effect<Randomness> =>
   Effect.gen(function*() {
@@ -63,7 +70,27 @@ export const randomness = (threshold: number): Effect.Effect<Randomness> =>
     return { baseKey, coefficients, r }
   })
 
-const xor = (a: Uint8Array, b: Uint8Array): Uint8Array => a.map((x, i) => x ^ b[i]!)
+/**
+ * Decode public keys, each distinct byte string once: a server of weight `w`
+ * appears `w` times, and handing `Ibe` the same point object lets it pair once.
+ */
+const decodePublicKeys = (
+  keys: ReadonlyArray<Uint8Array>
+): Result.Result<ReadonlyArray<Bls.G2>, { readonly index: number; readonly reason: string }> => {
+  const decoded = new Map<string, Bls.G2>()
+  const out: Array<Bls.G2> = []
+  for (const [index, bytes] of keys.entries()) {
+    const k = bytesToHex(bytes)
+    let point = decoded.get(k)
+    if (point === undefined) {
+      const pk = Bls.g2FromBytes(bytes)
+      if (Result.isFailure(pk)) return Result.fail({ index, reason: pk.failure.reason })
+      decoded.set(k, point = pk.success)
+    }
+    out.push(point)
+  }
+  return Result.succeed(out)
+}
 
 const isByteCount = (n: number, min: number) => Number.isInteger(n) && n >= min && n <= MAX_SHARES
 
@@ -97,15 +124,16 @@ const prepare = (o: SealOptions): Result.Result<Prepared, InvalidEncryption> => 
   if (!isByteCount(o.threshold, 1) || o.threshold > n) {
     return failEncryption(`threshold ${o.threshold} out of range for ${n} recipients`)
   }
-  if (!ADDRESS.test(o.packageId)) return failEncryption(`invalid package id ${o.packageId}`)
+  if (!isCanonical(o.packageId)) return failEncryption(`invalid package id ${o.packageId}`)
   if (!(o.id instanceof Uint8Array)) return failEncryption("id must be bytes")
-  const publicKeys: Array<Bls.G2> = []
   for (const [i, recipient] of o.recipients.entries()) {
-    if (!ADDRESS.test(recipient.objectId)) return failEncryption(`recipient ${i}: invalid object id ${recipient.objectId}`)
-    const pk = Bls.g2FromBytes(recipient.publicKey)
-    if (Result.isFailure(pk)) return failEncryption(`recipient ${i}: invalid public key: ${pk.failure.reason}`)
-    publicKeys.push(pk.success)
+    if (!isCanonical(recipient.objectId)) return failEncryption(`recipient ${i}: invalid object id ${recipient.objectId}`)
   }
+  const decoded = decodePublicKeys(o.recipients.map((r) => r.publicKey))
+  if (Result.isFailure(decoded)) {
+    return failEncryption(`recipient ${decoded.failure.index}: invalid public key: ${decoded.failure.reason}`)
+  }
+  const publicKeys = decoded.success
   const { baseKey, coefficients, r } = o.randomness
   if (baseKey.length !== KEY_BYTES) return failEncryption(`base key must be ${KEY_BYTES} bytes, got ${baseKey.length}`)
   if (r <= 0n || r >= Bls.ORDER) return failEncryption("r must be a non-zero scalar below the group order")
@@ -117,6 +145,7 @@ const prepare = (o: SealOptions): Result.Result<Prepared, InvalidEncryption> => 
 /**
  * Encrypt `input` to `recipients` (one share each, indices `1..n` in order), any `threshold` of
  * which can decrypt. Checks `1 ≤ threshold ≤ n ≤ 255`, ids, public keys and randomness sizes.
+ * `randomness` must be fresh for every call (`randomness(threshold)`): see `Randomness`.
  */
 export const seal = (o: SealOptions): Effect.Effect<Sealed, InvalidEncryption | CryptoUnavailable> =>
   Effect.suspend((): Effect.Effect<Sealed, InvalidEncryption | CryptoUnavailable> => {
@@ -175,22 +204,25 @@ const recoverKey = (o: OpenOptions): Result.Result<Uint8Array, InvalidCiphertext
   if (Result.isFailure(nonce)) return failCiphertext(`invalid nonce: ${nonce.failure.reason}`)
   const fullId = EncryptedObject.fullId(object)
 
-  const userSecretKeys = new Map<Address, Bls.G1>()
   // `threshold` shares determine the polynomial; more would only cost pairings (a wrong key among
-  // them is caught by the nonce check either way).
+  // them is caught by the nonce check either way). One pairing per server, however many shares it
+  // holds, and `gid` once.
   const used = usable.slice(0, threshold)
+  const gts = new Map<Address, Uint8Array>()
   for (const i of used) {
     const server = services[i]!.objectId
-    if (userSecretKeys.has(server)) continue
+    if (gts.has(server)) continue
     const usk = Bls.g1FromBytes(o.keys.get(server)!)
     if (Result.isFailure(usk)) return failCiphertext(`invalid derived key for ${server}: ${usk.failure.reason}`)
-    userSecretKeys.set(server, usk.success)
+    gts.set(server, Ibe.decap(nonce.success, usk.success))
   }
+  const nonceBytes = Bls.g2ToBytes(nonce.success)
+  const gidBytes = Bls.g1ToBytes(Kdf.gid(fullId))
   const shares = used.map((i): Shamir.Share => {
     const service = services[i]!
     return {
       index: service.index,
-      share: Ibe.decryptShare(nonce.success, userSecretKeys.get(service.objectId)!, ibe.encryptedShares[i]!, fullId, service)
+      share: Ibe.unmask(gts.get(service.objectId)!, nonceBytes, gidBytes, ibe.encryptedShares[i]!, service)
     }
   })
   const baseKey = Shamir.combine(shares)
@@ -213,12 +245,9 @@ const recoverKey = (o: OpenOptions): Result.Result<Uint8Array, InvalidCiphertext
     if (o.publicKeys.length !== services.length) {
       return failCiphertext(`expected ${services.length} public keys for the consistency check, got ${o.publicKeys.length}`)
     }
-    const publicKeys: Array<Bls.G2> = []
-    for (const [i, bytes] of o.publicKeys.entries()) {
-      const pk = Bls.g2FromBytes(bytes)
-      if (Result.isFailure(pk)) return failCiphertext(`public key ${i}: ${pk.failure.reason}`)
-      publicKeys.push(pk.success)
-    }
+    const decoded = decodePublicKeys(o.publicKeys)
+    if (Result.isFailure(decoded)) return failCiphertext(`public key ${decoded.failure.index}: ${decoded.failure.reason}`)
+    const publicKeys = decoded.success
     const polynomial = Shamir.interpolate(shares)
     if (Result.isFailure(polynomial)) return failCiphertext(polynomial.failure.reason)
     const all = Ibe.decryptAllShares(r, ibe.encryptedShares, publicKeys, fullId, services)
