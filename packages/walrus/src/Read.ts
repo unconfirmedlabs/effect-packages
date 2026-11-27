@@ -502,18 +502,6 @@ export const wasmBreak: Effect.Effect<void> = /* @__PURE__ */ Effect.callback<vo
   return Effect.sync(() => clearTimeout(timer))
 })
 
-/** Merkle roots of primary slivers, at most `n − 2f` per WASM call. */
-const primaryRoots = (encoder: EncoderService, n: number, symbolSize: number, slivers: ReadonlyArray<Uint8Array>) =>
-  Effect.gen(function*() {
-    const batch = Encoding.sourceSymbols(n).primary
-    const roots: Array<Uint8Array> = []
-    for (let i = 0; i < slivers.length; i += batch) {
-      if (i > 0) yield* wasmBreak
-      roots.push(...(yield* encoder.sliverRoots(n, "primary", symbolSize, slivers.slice(i, i + batch))))
-    }
-    return roots
-  })
-
 /** Steps 3–5: fetch, decode, check, and blame on mismatch. */
 const readSlivers = (
   nodes: Nodes,
@@ -542,7 +530,8 @@ const readSlivers = (
 
       yield* wasmBreak
       const unchecked = held.filter((f) => !verified.has(f.shard))
-      const roots = yield* primaryRoots(encoder, n, symbolSize, unchecked.map((f) => f.bytes))
+      // One WASM call for all of them: each root costs one sliver expansion and `n` hashes.
+      const roots = yield* encoder.sliverRoots(n, "primary", symbolSize, unchecked.map((f) => f.bytes))
       const bad = new Set<Fetched>()
       unchecked.forEach((f, i) => {
         if (Bytes.equal(roots[i]!, metadata.hashes[f.pair]!.primary)) verified.add(f.shard)

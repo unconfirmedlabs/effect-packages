@@ -354,8 +354,19 @@ for (const [name, source] of Object.entries(programs)) {
 }
 await Bun.$`rm -rf ${dir}`
 console.log("\nKB minified / KB minified+gzip, JS only (all chunks)")
-const wasm = Bun.file(`${import.meta.dir}/../node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm`)
-if (await wasm.exists()) console.log(`Walrus programs that encode, decode or verify also load the WASM asset: ${kb(wasm.size)} KB (web/walrus_wasm_bg.wasm), not counted above`)
+{
+  // Our programs ship @unconfirmed/walrus-wasm's glue; @mysten/walrus ships @mysten/walrus-wasm's.
+  const asset = async (path: string) => {
+    const file = Bun.file(`${import.meta.dir}/../${path}`)
+    return (await file.exists()) ? `${kb(file.size)} KB / ${kb(gzipSync(await file.bytes()).length)} KB gzip` : "missing"
+  }
+  console.log(
+    `Walrus programs that encode, decode or verify also load one WASM asset, not counted above: ` +
+      `${await asset("packages/walrus-wasm/web/walrus_wasm_bg.wasm")} (SIMD build), or ` +
+      `${await asset("packages/walrus-wasm/web/walrus_wasm_nosimd_bg.wasm")} (scalar fallback, engines without WebAssembly SIMD); ` +
+      `@mysten/walrus-wasm: ${await asset("node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm")}`
+  )
+}
 if (violations.length > 0) {
   console.error(`\nSeal containment checks failed:\n${violations.map((v) => `  ${v}`).join("\n")}`)
   process.exitCode = 1

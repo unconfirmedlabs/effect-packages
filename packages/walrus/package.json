@@ -9,16 +9,17 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@mysten/walrus-wasm": "0.3.1",
     "@noble/hashes": "^2.3.0",
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/quorum": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
+    "@unconfirmed/walrus-wasm": "workspace:*",
     "effect": "4.1.6"
   },
   "devDependencies": {
     "@mysten/sui": "3.0.1",
     "@mysten/walrus": "2.0.1",
+    "@mysten/walrus-wasm": "0.3.1",
     "@noble/curves": "^2.3.0",
     "@unconfirmed/sui-codegen": "workspace:*",
     "@unconfirmed/test-support": "workspace:*"

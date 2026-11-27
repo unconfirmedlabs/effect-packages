@@ -2,14 +2,14 @@
 
 Status: design, 2026-11-27. Implementers: read this file, `docs/design/quorum.md`, `EXPLORATION.md` §5, and the README sections "How it composes" and "Move codegen".
 
-A ground-up Walrus client on `@unconfirmed/sui`: read and write blobs against storage nodes with `@unconfirmed/quorum`, erasure coding through `@mysten/walrus-wasm`, Move bindings from `@unconfirmed/sui-codegen`. Upload relay, quilts and aggregator/publisher HTTP are included as separate modules.
+A ground-up Walrus client on `@unconfirmed/sui`: read and write blobs against storage nodes with `@unconfirmed/quorum`, erasure coding through `@unconfirmed/walrus-wasm` (our SIMD build of `walrus-core`, §1.7a; `@mysten/walrus-wasm` until then), Move bindings from `@unconfirmed/sui-codegen`. Upload relay, quilts and aggregator/publisher HTTP are included as separate modules.
 
 ## 0. References and how to cite them
 
 | Reference | Version | Where |
 |---|---|---|
 | `@mysten/walrus` | 2.0.1 (root devDependency, exact) | `node_modules/@mysten/walrus/dist/` — cited as `walrus/dist/<file>:<line>` |
-| `@mysten/walrus-wasm` | 0.3.1 (root devDependency, exact; becomes a runtime dependency of this package) | `node_modules/@mysten/walrus-wasm/` |
+| `@mysten/walrus-wasm` | 0.3.1 (root devDependency, exact; was this package's runtime dependency, now a devDependency for the parity tests only, §1.7a) | `node_modules/@mysten/walrus-wasm/` |
 | `@mysten/seal` | 2.0.1 (root devDependency, exact; for the quorum design only) | `node_modules/@mysten/seal/dist/` |
 | Walrus Rust repo | `MystenLabs/walrus` at `2bd352b6` (2026-11-23), workspace version 1.62.0 | cited as `crates/...`, `contracts/...`, `testnet-contracts/...` |
 | Testnet, read 2026-11-27 | epoch 594, 1000 shards, 99 nodes, epoch length 1 day, max 53 epochs ahead | `walrus info` (CLI 1.59.0 still talks to testnet), node probes, GraphQL |
@@ -125,6 +125,19 @@ The two `count_deletable_*` fields are snake_case (`api.rs:111-116` has no renam
 | W6 | **A sliver can be verified with stock `encode`.** Stack up to `n − 2f` fetched primary slivers as the rows of a crafted blob of exactly `primary × secondary × symbolSize` bytes; `encode` then returns each sliver's own Merkle root as `hashes[row].primary_hash`. Likewise place up to `n − f` secondary slivers as columns; column `c` comes back as `hashes[n − 1 − c].secondary_hash`. Both hold for repair slivers too (E8). Tested with corrupted slivers at symbol sizes 2 and 14: exactly the corrupted ones mismatch. | local test, follows from E3 and E8 |
 | W7 | **`n < 4` traps** (`unreachable`, a Rust panic) in `encode` and `compute_metadata`; `new BlobEncoder(n)` itself succeeds. A trap leaves that `BlobEncoder` marked as borrowed: every later call on it, and `free`, throws "attempted to take ownership of Rust value while it was borrowed". Other instances, and the module, keep working. | local test |
 
+### 1.7a `@unconfirmed/walrus-wasm` (our build, replaces 1.7 at run time)
+
+`packages/walrus-wasm` builds `walrus-core` 1.62.0 (`2bd352b6`, the revision this document cites) to WebAssembly with `simd128`; see its README for the build, the toolchain and the sources. Facts W2, W4 and W7 still describe the API shape where it was kept; the others are superseded:
+
+| # | Fact | Source |
+|---|---|---|
+| X1 | Byte-for-byte parity with `@mysten/walrus-wasm` 0.3.1 (built from `walrus-core` 1.40.0): blob ids, root hashes, metadata bytes, every sliver, decoded blobs from systematic and repair slivers, at `n` 4 to 1000. | `test/parity.encoder.test.ts`, `packages/walrus-wasm/test/wasm.test.ts`; `cargo test` against `walrus-core` |
+| X2 | `encode(blob)` returns one buffer, `primary ‖ secondary ‖ BCS metadata ‖ blob id ‖ root hash`; `compute_metadata` returns `blob id ‖ root hash`; `decode(length, slivers)` returns the blob. No `serde` objects cross the boundary (W3 is gone). | `packages/walrus-wasm/src/lib.rs` |
+| X3 | `sliver_roots(primary, slivers)` returns each sliver's Merkle root directly (`SliverData::get_merkle_root`: expand the sliver along the other axis, hash its `n` symbols), any number per call, repair slivers included. This replaces the crafted-blob method (W6); parity with it is tested. 334 primary slivers at `n = 1000`: 0.11 s instead of one 2.6 s crafted encode per batch. | `src/encode.rs`; `test/parity.encoder.test.ts` |
+| X4 | Speed (W5 superseded), Bun 1.4.4, x64, `n = 1000`, 1 KB to 10 MB: encode 0.50–0.54 s (Mysten 2.57–2.62 s), `compute_metadata` 0.49–0.50 s (2.55 s), decode from repair slivers 0.57 s (2.32 s), from systematic slivers 9–15 ms; at `n = 100`, 10 MB: encode 0.11 s (0.67 s). Node is in `packages/walrus-wasm/README.md`. What is left at `n = 1000` is hashing (about `3n²` BLAKE2b compressions, two at a time in SIMD lanes) and, for repair decodes, `reed-solomon-simd` recomputing the erasure locator for each of the `n − f` columns. | `packages/walrus/scripts/bench-wasm.ts` |
+| X5 | `n < 4` throws in the constructor instead of trapping later (W7); `walrus-core` panics would still trap, and `Encoder` still drops a trapped instance. | `src/lib.rs` |
+| X6 | Loading (W2 otherwise unchanged): Bun and Node load `nodejs/walrus_wasm_bg.wasm` (267 KB, SIMD) synchronously on import. Browsers fetch `web/walrus_wasm_bg.wasm` (267 KB, SIMD) or, when `WebAssembly.validate` rejects a SIMD instruction, `web/walrus_wasm_nosimd_bg.wasm` (254 KB); `Encoder`'s `wasmUrl` / `wasmFallbackUrl` say where they are served. Mysten's web build is 358 KB. | `packages/walrus-wasm/{index,web}.js` |
+
 ### 1.8 Where the Rust client and `@mysten/walrus` disagree
 
 | Topic | Rust client | `@mysten/walrus` 2.0.1 | We follow |
@@ -171,7 +184,7 @@ Line numbers are in `walrus/dist/`. Items 1–5 are the ones `EXPLORATION.md` §
 packages/walrus/
   package.json     @unconfirmed/walrus; exports { ".": "./src/index.ts", "./*": "./src/*.ts" }
                    dependencies: effect 4.1.6, @unconfirmed/bcs, @unconfirmed/sui, @unconfirmed/quorum (workspace:*; added by W5, it does not exist yet at W1),
-                                 @mysten/walrus-wasm 0.3.1 (exact), @noble/hashes ^2.3.0
+                                 @unconfirmed/walrus-wasm (workspace:*; @mysten/walrus-wasm 0.3.1 before §1.7a), @noble/hashes ^2.3.0
                    devDependencies: @noble/curves ^2.3.0 (tests sign as fake nodes; added by W3)
   sui-codegen.config.ts, scripts/codegen.ts
   src/
@@ -188,7 +201,7 @@ packages/walrus/
   test/            see §6
 ```
 
-Rules: namespace subpath imports only; every module-level value is a `/* @__PURE__ */` call or a function; only `Encoder.ts` imports `@mysten/walrus-wasm`; only `Read.ts` and `Write.ts` import `@unconfirmed/quorum` (`QuiltRead.ts` reaches it through `Read.ts`). A program that only uses `Aggregator` or the pure modules ships neither the WASM glue nor the quorum code.
+Rules: namespace subpath imports only; every module-level value is a `/* @__PURE__ */` call or a function; only `Encoder.ts` imports the WASM (`@unconfirmed/walrus-wasm`); only `Read.ts` and `Write.ts` import `@unconfirmed/quorum` (`QuiltRead.ts` reaches it through `Read.ts`). A program that only uses `Aggregator` or the pure modules ships neither the WASM glue nor the quorum code.
 
 ## 4. Public API
 
@@ -347,7 +360,7 @@ export interface EncoderService {
   readonly blobId: (nShards: number, blob: Uint8Array) => Effect.Effect<{ readonly blobId: BlobId; readonly rootHash: Uint8Array }, EncoderError>
   /** From >= n - 2f distinct BCS primary slivers. Verifies nothing (W4). */
   readonly decode: (nShards: number, unencodedLength: number, primarySlivers: ReadonlyArray<Uint8Array>) => Effect.Effect<Uint8Array, EncoderError>
-  /** The Merkle root of each given BCS SliverData, in order, by the crafted-blob method (W6). At most n - 2f primary or n - f secondary per call;
+  /** The Merkle root of each given BCS SliverData, in order (X3; the crafted-blob method, W6, before). Any number per call;
    *  each must carry `symbolSize` and the axis' symbol count, else EncoderError (run `Messages.checkSliver` first to blame a node). One WASM call. */
   readonly sliverRoots: (nShards: number, axis: Axis, symbolSize: number, slivers: ReadonlyArray<Uint8Array>)
     => Effect.Effect<ReadonlyArray<Uint8Array>, EncoderError>
@@ -357,7 +370,7 @@ export interface EncoderService {
   readonly blsVerifyAggregate: (publicKeys: ReadonlyArray<Uint8Array>, message: Uint8Array, signature: Uint8Array) => Effect.Effect<boolean, EncoderError>
 }
 export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/walrus/Encoder") {}
-export interface EncoderOptions { readonly wasmUrl?: string | URL }
+export interface EncoderOptions { readonly wasmUrl?: string | URL; readonly wasmFallbackUrl?: string | URL }   // browsers only (X6)
 /** The in-thread service; its `BlobEncoder`s are freed when the scope closes, and later calls fail with EncoderError. */
 export const make: (options?: EncoderOptions) => Effect.Effect<EncoderService, EncoderError, Scope.Scope>
 /** Initialises the module once per build; frees `BlobEncoder` instances when the layer's scope closes. `wasmUrl` is needed in browsers only (W2). */
@@ -366,14 +379,16 @@ export const layer: (options?: EncoderOptions) => Layer.Layer<Encoder, EncoderEr
 
 Every WASM call sits in `Effect.try`, so a thrown `JsError` (or a trap) is a typed `EncoderError { operation, message }`, never a defect; a failed load is `EncoderError { operation: "init" }`. Arguments that would trap or throw `RangeError` (`nShards` outside `[4, 65535]`, a length above `maxBlobSize`) are rejected before the call. One `BlobEncoder` per `nShards` is kept in the service; one that traps is dropped from the cache (W7). All calls are synchronous and slow (W5); the service passes only numbers and `Uint8Array`s, so a worker-backed layer can replace this one later (open question 5).
 
-`@mysten/walrus-wasm` is imported with a dynamic `import()` when the layer is built, not at module load, so importing `Encoder.ts` or the package index reads no `.wasm` until an `Encoder` is needed, and bundlers split the glue (about 17–23 KB) into its own chunk. What an app must do (W2):
+As built (§1.7a): the service interface is unchanged; it now runs on `@unconfirmed/walrus-wasm`, slices the slivers out of `encode`'s single buffer (views, no copies), and `sliverRoots` is one direct call with no batch limit, so `Read`'s blame pass and `QuiltRead`'s column check make one call each.
+
+The WASM module is imported with a dynamic `import()` when the layer is built, not at module load, so importing `Encoder.ts` or the package index reads no `.wasm` until an `Encoder` is needed, and bundlers split the glue (about 17–23 KB) into its own chunk. What an app must do (W2):
 
 | Runtime | What to do |
 |---|---|
 | Bun, Node, unbundled | Nothing. |
-| Server bundle (any bundler) | Keep `@mysten/walrus-wasm` external, or copy `node_modules/@mysten/walrus-wasm/nodejs/walrus_wasm_bg.wasm` next to the output and emit CJS (esbuild's ESM output has no `__dirname`). A Bun bundle runs only on the machine that built it. |
-| Browser, Vite / webpack 5 | Nothing, or pass `wasmUrl` from `import url from "@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url"` (Vite). |
-| Browser, esbuild / Rolldown / Bun | Serve `web/walrus_wasm_bg.wasm` and pass its URL as `wasmUrl`, or copy it next to the chunk that holds the glue. |
+| Server bundle (any bundler) | Keep `@unconfirmed/walrus-wasm` external, or copy `packages/walrus-wasm/nodejs/walrus_wasm_bg.wasm` next to the output and emit CJS (esbuild's ESM output has no `__dirname`). A Bun bundle runs only on the machine that built it. |
+| Browser, Vite / webpack 5 | Nothing (both builds are emitted, one is fetched), or pass `wasmUrl` / `wasmFallbackUrl` from `import url from "@unconfirmed/walrus-wasm/web/walrus_wasm_bg.wasm?url"` and `…/web/walrus_wasm_nosimd_bg.wasm?url` (Vite). |
+| Browser, esbuild / Rolldown / Bun | Serve `web/walrus_wasm_bg.wasm` and `web/walrus_wasm_nosimd_bg.wasm` and pass their URLs as `wasmUrl` / `wasmFallbackUrl`, or copy them next to the chunk that holds the glue. |
 
 ### 4.4 Storage nodes
 
@@ -810,7 +825,7 @@ The address holds about 1.15 SUI (in its address balance; gas resolves through `
 
 Add to `scripts/bundle-report.ts`: "walrus: read via aggregator", "walrus: read a blob", "walrus: write a blob", and `@mysten/walrus` `readBlob` / `writeBlob` under Rolldown for comparison. Report JS only, and state the WASM asset size (358 KB) separately. Add the rows to the README table.
 
-As built (W10): rows for the aggregator, `Bft` + `Encoding` only, read, write through the nodes and through the relay, and both `@mysten/walrus` programs (under all three bundlers). Sizes now sum every JS chunk, because Rolldown splits the WASM glue into its own chunk. Each Walrus row says whether the bundle contains the WASM glue (`walrus_wasm_bg.wasm`) or the quorum code (`QuorumFailed`).
+As built (W10): rows for the aggregator, `Bft` + `Encoding` only, read, write through the nodes and through the relay, and both `@mysten/walrus` programs (under all three bundlers). Sizes now sum every JS chunk, because Rolldown splits the WASM glue into its own chunk. Each Walrus row says whether the bundle contains the WASM glue (`walrus_wasm_bg.wasm`) or the quorum code (`QuorumFailed`). Since §1.7a the Walrus rows count `@unconfirmed/walrus-wasm`'s glue, and the report prints its WASM asset sizes (SIMD build 261 KB / 98 KB gzip, scalar fallback 248 KB) next to `@mysten/walrus-wasm`'s (349 KB / 182 KB gzip).
 
 Findings, KB minified / gzip:
 
@@ -830,7 +845,7 @@ Findings, KB minified / gzip:
 ## 7. Risks
 
 1. **About 20% of testnet weight is unreachable through `fetch`.** Probing all 99 nodes from Bun: 77 answered (795 of 1000 shards). The rest failed with expired certificates (92 shards), unresolvable hosts (37), refused connections (23–45), self-signed certificates (11) and one transport error (42). Reads need 334 and are comfortable. Writes need 667 of the reachable 795: a margin of 128 shards. The Rust client reaches more nodes because it pins network keys instead of using the web PKI. Fail-fast transport errors keep this cheap, but a few more bad nodes would make direct writes fail from JS runtimes; the relay is the fallback.
-2. **WASM blocks the thread for about 2.5 s per call** (W5): a read costs two calls, a write one, a blame pass one more. Timers and other fibers stall meanwhile. Acceptable for scripts and CLIs; a server needs the worker layer (open question 5).
+2. **WASM blocks the thread for about 0.5 s per call at `n = 1000`** (X4; 2.5 s with `@mysten/walrus-wasm`, W5): a read costs two calls, a write one, a blame pass one more. Timers and other fibers stall meanwhile. Acceptable for scripts and CLIs; a server needs the worker layer (open question 5).
 3. **Protocol drift.** The contracts are at version 4 with storage pools; a `V2` inner state would surface as `UnsupportedSystemVersion`, not as garbage. The parity suite and the live read test are the tripwires.
 4. **Memory.** `encode` peaks at about 10× the blob size (W5): the blob, the sliver buffers and the WASM's expanded matrix. v1 has no streaming; `maxSize` guards reads, and writes of large blobs from memory-constrained runtimes should use the relay (which needs only the blob id, but the same `compute_metadata` time).
 
@@ -867,7 +882,7 @@ After W1: W2, W3, W4, the gateway half of W10, Q1 and the pure half of W9 all ru
 ## 9. Open questions
 
 1. **`sui-lifecycle` for the two transactions?** *Recommendation: no dependency; inject an `Executor`.* `Lifecycle.run` accepts key signers only, so depending on it would exclude wallets. The steps are safe on their own because each one checks the chain before acting; a server passes `Lifecycle.run` as the executor and gets the journal as well (§4.7 example).
-2. **Sliver verification with stock WASM (W6), or our own WASM build of `walrus-core`?** *Recommendation: ship W6 now.* It needs nothing new and makes quilt reads and blame verifiable. Our own build could expose `verify_sliver`, cheaper checks than a full re-encode, and symbol recovery, and would cut the 2.5 s constant; it is a second Rust toolchain to own. Revisit after v1 with measurements.
+2. **Sliver verification with stock WASM (W6), or our own WASM build of `walrus-core`?** *Resolved: our own build* (§1.7a), with direct sliver roots and SIMD. Original recommendation: ship W6 now. It needs nothing new and makes quilt reads and blame verifiable. Our own build could expose `verify_sliver`, cheaper checks than a full re-encode, and symbol recovery, and would cut the 2.5 s constant; it is a second Rust toolchain to own. Revisit after v1 with measurements.
 3. **Default consistency.** *Recommendation: `"strict"`*, as `@mysten/walrus` does, with `"skip"` for callers that trust the writer. It costs one extra WASM call per read.
 4. **Linger default for writes.** *Recommendation: the Rust client's `0.5 × elapsed + 500 ms`*, overridable, `0` to disable. It adds latency but more nodes hold the data before certification.
 5. **Worker-backed `Encoder`.** *Recommendation: not in v1.* Keep the in-thread layer behind the `Encoder` service and add `EncoderWorker.layer` when a server needs it; nothing else changes.

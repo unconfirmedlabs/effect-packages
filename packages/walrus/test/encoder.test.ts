@@ -1,10 +1,11 @@
 /**
- * `Encoder` (§6.1): round trips, typed WASM errors, `sliverRoots` by the
- * crafted-blob method (W6), BLS against `@noble/curves`, and the layer's
- * lifecycle. Every WASM call costs about 2.5 s at `n = 1000` (W5), so
- * everything runs at `n = 10` except one slow test.
+ * `Encoder` (§6.1): round trips, typed WASM errors, `sliverRoots` (direct
+ * per-sliver roots; parity with the old crafted-blob method is in
+ * `parity.encoder.test.ts`), BLS against `@noble/curves`, and the layer's
+ * lifecycle. A WASM call costs about 0.5 s at `n = 1000` (W5), so everything
+ * runs at `n = 10` except the slow tests.
  */
-import { BlobEncoder } from "@mysten/walrus-wasm"
+import { BlobEncoder } from "@unconfirmed/walrus-wasm"
 import { bls12_381 } from "@noble/curves/bls12-381.js"
 import { afterAll, describe, expect, spyOn, test } from "bun:test"
 import * as Effect from "effect/Effect"
@@ -150,8 +151,8 @@ describe("sliverRoots", () => {
       const { symbolSize } = Encoding.sliverBytes(length, n)
       const next = rng(length + 1)
 
-      // primary: up to n - 2f at a time, systematic (< P) and repair pairs mixed
-      for (const k of [1, 2, P]) {
+      // primary: systematic (< P) and repair pairs mixed, any number per call
+      for (const k of [1, 2, P, P + 3]) {
         const pairs = pick(next, k, n)
         const roots = await run(encoder.sliverRoots(n, "primary", symbolSize, pairs.map((p) => e.primary[p]!)))
         expect(roots).toEqual(pairs.map((p) => m.hashes[p]!.primary))
@@ -164,8 +165,8 @@ describe("sliverRoots", () => {
         )
       }
 
-      // secondary: up to n - f at a time
-      for (const k of [1, 3, S]) {
+      // secondary
+      for (const k of [1, 3, S, n]) {
         const pairs = pick(next, k, n)
         const roots = await run(encoder.sliverRoots(n, "secondary", symbolSize, pairs.map((p) => e.secondary[p]!)))
         expect(roots).toEqual(pairs.map((p) => m.hashes[p]!.secondary))
@@ -192,8 +193,6 @@ describe("sliverRoots", () => {
     const e = await run(encoder.encode(n, bytes(2000, 1)))
     const { symbolSize } = Encoding.sliverBytes(2000, n)
     expect(await run(encoder.sliverRoots(n, "primary", symbolSize, []))).toEqual([])
-    await encoderError(encoder.sliverRoots(n, "primary", symbolSize, e.primary.slice(0, P + 1)), "sliverRoots", /at most 4/)
-    await encoderError(encoder.sliverRoots(n, "secondary", symbolSize, e.secondary.slice(0, S + 1)), "sliverRoots", /at most 7/)
     await encoderError(encoder.sliverRoots(n, "primary", symbolSize + 2, e.primary.slice(0, 1)), "sliverRoots", /symbol size/)
     await encoderError(encoder.sliverRoots(n, "primary", 3, e.primary.slice(0, 1)), "sliverRoots", /even/)
     await encoderError(encoder.sliverRoots(n, "primary", 0, e.primary.slice(0, 1)), "sliverRoots", /even/)
@@ -203,8 +202,8 @@ describe("sliverRoots", () => {
     await encoderError(encoder.sliverRoots(0, "primary", symbolSize, []), "sliverRoots", /nShards/)
   })
 
-  test("an allocation too large for the crafted blob is an EncoderError, not a defect", async () => {
-    // n = 1000 and symbol size 20,000: the crafted blob would be 334 × 667 × 20,000 = 4.46 GB.
+  test("needs no crafted blob: a 20,000-byte-symbol sliver at n = 1000", async () => {
+    // The crafted-blob method would have encoded 334 × 667 × 20,000 = 4.46 GB here and failed.
     const big = 1000
     const symbolSize = 20_000
     const len = Encoding.sourceSymbols(big).secondary * symbolSize
@@ -219,8 +218,9 @@ describe("sliverRoots", () => {
     const sliver = new Uint8Array(uleb.length + len + 4)
     sliver.set(uleb, 0)
     new DataView(sliver.buffer).setUint16(uleb.length + len, symbolSize, true)
-    await encoderError(encoder.sliverRoots(big, "primary", symbolSize, [sliver]), "sliverRoots", /./)
-  })
+    const [root] = await run(encoder.sliverRoots(big, "primary", symbolSize, [sliver]))
+    expect(root!.length).toBe(32)
+  }, 60_000)
 })
 
 describe("BLS", () => {

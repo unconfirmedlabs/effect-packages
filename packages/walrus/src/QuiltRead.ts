@@ -8,7 +8,7 @@
  * Each column comes from the one node holding its shard in the **read**
  * committee (C6), is header-checked (`Messages.checkSliver`), and, unless
  * `verify: false`, is checked against the verified metadata's secondary hashes
- * with one `Encoder.sliverRoots` call per batch of columns (W6) before any of
+ * with one `Encoder.sliverRoots` call per batch of columns before any of
  * its bytes is used. A column that cannot be fetched or does not match falls
  * back to `Read.blob` (a verified full read) for the rest of the call. This
  * closes `@mysten/walrus`'s unverified single-node quilt reads (§2 item 9).
@@ -283,7 +283,7 @@ const sliverSource = (
 /** Sliver bytes in flight at once (the read path's budget). */
 const IN_FLIGHT_BYTES = 12_500_000
 
-/** One `Encoder.sliverRoots` call per `n − f` columns, compared with `hashes[pairOfSecondary(s)].secondary`. */
+/** One `Encoder.sliverRoots` call for all the columns, compared with `hashes[pairOfSecondary(s)].secondary`. */
 const sliverRootsMatch = (
   encoder: EncoderService,
   n: number,
@@ -292,14 +292,8 @@ const sliverRootsMatch = (
   columns: ReadonlyArray<{ readonly s: number; readonly bytes: Uint8Array }>
 ): Effect.Effect<boolean, QuiltReadError> =>
   Effect.gen(function*() {
-    for (let i = 0; i < columns.length; i += layout.columns) {
-      const batch = columns.slice(i, i + layout.columns)
-      const roots = yield* encoder.sliverRoots(n, "secondary", layout.symbolSize, batch.map((c) => c.bytes))
-      for (let k = 0; k < batch.length; k++) {
-        const expected = metadata.hashes[Encoding.pairOfSecondary(batch[k]!.s, n)]!.secondary
-        if (!Bytes.equal(roots[k]!, expected)) return false
-      }
-    }
-    return true
+    if (columns.length === 0) return true
+    const roots = yield* encoder.sliverRoots(n, "secondary", layout.symbolSize, columns.map((c) => c.bytes))
+    return columns.every((c, k) => Bytes.equal(roots[k]!, metadata.hashes[Encoding.pairOfSecondary(c.s, n)]!.secondary))
   })
 

@@ -1,38 +1,39 @@
 /**
- * RS2 erasure coding and BLS through `@mysten/walrus-wasm` 0.3.1 (§1.7, §4.3).
+ * RS2 erasure coding, sliver verification and BLS through
+ * `@unconfirmed/walrus-wasm` (§1.7, §4.3): our own build of `walrus-core`
+ * 1.62.0 with WebAssembly SIMD, byte-identical to `@mysten/walrus-wasm` 0.3.1
+ * (parity tests) and several times faster.
  *
- * Every WASM call is synchronous and slow (about 2.5 s at `n = 1000`, W5). The
- * service only passes plain data (numbers and `Uint8Array`s) across its
- * boundary, so a worker-backed layer can replace `layer` later without
- * changing callers (open question 5).
+ * Every WASM call is synchronous (about 0.5 s at `n = 1000`, W5). The service
+ * only passes plain data (numbers and `Uint8Array`s) across its boundary, so a
+ * worker-backed layer can replace `layer` later without changing callers
+ * (open question 5).
  *
  * Loading the WASM (W2). The module is imported lazily, the first time a
  * layer is built, so importing this file (or the package index) costs nothing
  * until an `Encoder` is needed:
  *
- * - Bun and Node: `@mysten/walrus-wasm` reads `walrus_wasm_bg.wasm` next to
- *   its glue with `fs` (`__dirname`) and compiles it synchronously; `wasmUrl`
- *   is ignored. When bundling for a server, keep `@mysten/walrus-wasm`
- *   external, or copy `nodejs/walrus_wasm_bg.wasm` next to a CJS bundle
- *   (esbuild's ESM output has no `__dirname`; Bun's bundler hard-codes the
- *   build machine's path).
- * - Browsers (the `browser` export condition): the glue fetches the web
- *   build's `.wasm` (358 KB). Without `wasmUrl` it uses `new URL(
- *   "walrus_wasm_bg.wasm", import.meta.url)`, which Vite and webpack 5 turn
- *   into an emitted asset; esbuild, Rolldown and Bun's bundler do not, so
- *   serve `web/walrus_wasm_bg.wasm` and pass its URL as `wasmUrl` (or copy
- *   it next to the chunk). In Vite:
- *   `import wasmUrl from "@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url"`.
+ * - Bun and Node: `@unconfirmed/walrus-wasm` reads
+ *   `nodejs/walrus_wasm_bg.wasm` next to its glue with `fs` (`__dirname`) and
+ *   compiles it synchronously; `wasmUrl` is ignored. When bundling for a
+ *   server, keep `@unconfirmed/walrus-wasm` external, or copy
+ *   `nodejs/walrus_wasm_bg.wasm` next to a CJS bundle.
+ * - Browsers (the `browser` export condition): the glue fetches the SIMD
+ *   build (`web/walrus_wasm_bg.wasm`), or the scalar one
+ *   (`web/walrus_wasm_nosimd_bg.wasm`) when `WebAssembly.validate` rejects a
+ *   SIMD instruction. Without `wasmUrl` / `wasmFallbackUrl` they are found with
+ *   `new URL(…, import.meta.url)`, which Vite and webpack 5 turn into emitted
+ *   assets; esbuild, Rolldown and Bun's bundler do not, so serve the files and
+ *   pass their URLs (or copy them next to the chunk).
  *
  * A failed load is an `EncoderError` with operation `"init"`.
  */
-import type * as Wasm from "@mysten/walrus-wasm"
+import type * as Wasm from "@unconfirmed/walrus-wasm"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
 import type * as Scope from "effect/Scope"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as BlobId from "./BlobId.ts"
 import * as Encoding from "./Encoding.ts"
 import { EncoderError } from "./Errors.ts"
@@ -67,12 +68,13 @@ export interface EncoderService {
     primarySlivers: ReadonlyArray<Uint8Array>
   ) => Effect.Effect<Uint8Array, EncoderError>
   /**
-   * The Merkle root of each given BCS `SliverData`, in order, by the
-   * crafted-blob method (W6): compare entry `i` with the metadata's
-   * `hashes[sliverPair].primary` / `.secondary`. At most `n − 2f` primary or
-   * `n − f` secondary slivers per call; each must carry `symbolSize` and the
-   * axis' symbol count (run `Messages.checkSliver` first to blame a node for
-   * a malformed one). Works for repair slivers too (E8). One WASM call.
+   * The Merkle root of each given BCS `SliverData`, in order: each sliver is
+   * expanded along the other axis and its `n` symbols hashed, as
+   * `SliverData::verify` does (E8). Compare entry `i` with the metadata's
+   * `hashes[sliverPair].primary` / `.secondary`. Each must carry `symbolSize`
+   * and the axis' symbol count (run `Messages.checkSliver` first to blame a
+   * node for a malformed one). Works for repair slivers too. One WASM call,
+   * any number of slivers.
    */
   readonly sliverRoots: (
     nShards: number,
@@ -93,40 +95,18 @@ export interface EncoderService {
 export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/walrus/Encoder") {}
 
 export interface EncoderOptions {
-  /** Where the browser build fetches `walrus_wasm_bg.wasm` from. Ignored on Bun and Node (W2). */
+  /** Where browsers fetch the SIMD build (`web/walrus_wasm_bg.wasm`) from. Ignored on Bun and Node (W2). */
   readonly wasmUrl?: string | URL
+  /** Where browsers without WebAssembly SIMD fetch the scalar build (`web/walrus_wasm_nosimd_bg.wasm`) from. Ignored on Bun and Node. */
+  readonly wasmFallbackUrl?: string | URL
 }
 
 // -----------------------------------------------------------------------------
-// WASM result shapes (W3)
+// WASM results
 // -----------------------------------------------------------------------------
 
-type WasmNode = { readonly Digest: ArrayLike<number> } | "Empty" | { readonly Empty: unknown }
-
-interface WasmMetadata {
-  readonly blob_id: ArrayLike<number>
-  readonly metadata: {
-    readonly V1: {
-      readonly unencoded_length: number | bigint
-      readonly hashes: ReadonlyArray<{ readonly primary_hash: WasmNode; readonly secondary_hash: WasmNode }>
-    }
-  }
-}
-
-const merkleNode = (node: WasmNode): Messages.MerkleNode =>
-  typeof node === "object" && "Digest" in node
-    ? { _tag: "Digest", value: Uint8Array.from(node.Digest) }
-    : { _tag: "Empty" }
-
-const digest = (node: WasmNode, what: string): Uint8Array => {
-  if (typeof node === "object" && "Digest" in node) return Uint8Array.from(node.Digest)
-  throw new Error(`${what} is not a digest`)
-}
-
-const encodeMetadata = /* @__PURE__ */ Bcs.encodeSync(Messages.BlobMetadata)
-
-const blobIdOf = (bytes: ArrayLike<number>): BlobId.BlobId => {
-  const r = BlobId.fromBytes(Uint8Array.from(bytes))
+const blobIdOf = (bytes: Uint8Array): BlobId.BlobId => {
+  const r = BlobId.fromBytes(bytes)
   if (Result.isFailure(r)) throw new Error(`WASM returned a blob id of ${r.failure.input}`)
   return r.success
 }
@@ -143,7 +123,7 @@ const fail = (operation: string, message: string) => Effect.fail(new EncoderErro
 const attempt = <A>(operation: string, f: () => A): Effect.Effect<A, EncoderError> =>
   Effect.try({ try: f, catch: (e) => new EncoderError({ operation, message: messageOf(e) }) })
 
-/** The WASM traps (a Rust panic) below 4 shards (W7); a `u16` above. */
+/** `walrus-core` panics below 4 shards (W7); a `u16` above. */
 export const MIN_SHARDS = 4
 export const MAX_SHARDS = 0xffff
 
@@ -161,9 +141,12 @@ const checkLength = (operation: string, length: number, nShards: number): Effect
 const loadWasm = (options: EncoderOptions | undefined): Effect.Effect<typeof Wasm, EncoderError> =>
   Effect.tryPromise({
     try: async () => {
-      const wasm = await import("@mysten/walrus-wasm")
-      // A no-op on Bun and Node; fetches and instantiates in browsers (once per realm).
-      await wasm.default(options?.wasmUrl === undefined ? undefined : { module_or_path: options.wasmUrl })
+      const wasm = await import("@unconfirmed/walrus-wasm")
+      // A no-op on Bun and Node; picks a build, fetches and instantiates it in browsers (once per realm).
+      await wasm.default({
+        ...(options?.wasmUrl === undefined ? {} : { module_or_path: options.wasmUrl }),
+        ...(options?.wasmFallbackUrl === undefined ? {} : { fallback_module_or_path: options.wasmFallbackUrl })
+      })
       return wasm
     },
     catch: (e) => new EncoderError({ operation: "init", message: messageOf(e) })
@@ -215,33 +198,26 @@ export const make = (options?: EncoderOptions): Effect.Effect<EncoderService, En
       }
     }
 
-    /** `encode` into exactly sized buffers (W3). */
-    const rawEncode = (nShards: number, blob: Uint8Array) => {
-      const sizes = Encoding.bcsSliverBytes(blob.length, nShards)
-      const primary = Array.from({ length: nShards }, () => new Uint8Array(sizes.primary))
-      const secondary = Array.from({ length: nShards }, () => new Uint8Array(sizes.secondary))
-      const [metadata, root] = withEncoder(nShards, (e) => e.encode(blob, primary, secondary)) as [WasmMetadata, WasmNode]
-      return { metadata, root, primary, secondary }
-    }
-
     const encode: EncoderService["encode"] = (nShards, blob) =>
       Effect.gen(function*() {
         yield* checkShards("encode", nShards)
         yield* checkLength("encode", blob.length, nShards)
         return yield* attempt("encode", (): EncodedBlob => {
-          const { metadata, root, primary, secondary } = rawEncode(nShards, blob)
-          const v1 = metadata.metadata.V1
+          // `primary ‖ secondary ‖ metadata ‖ blob id ‖ root hash`; the slivers are views into it.
+          const out = withEncoder(nShards, (e) => e.encode(blob))
+          const sizes = Encoding.bcsSliverBytes(blob.length, nShards)
+          const slivers = nShards * (sizes.primary + sizes.secondary)
+          if (out.length <= slivers + 64) throw new Error(`WASM returned ${out.length} bytes, expected more than ${slivers + 64}`)
+          const primary = Array.from({ length: nShards }, (_, p) => out.subarray(p * sizes.primary, (p + 1) * sizes.primary))
+          const base = nShards * sizes.primary
+          const secondary = Array.from({ length: nShards }, (_, p) =>
+            out.subarray(base + p * sizes.secondary, base + (p + 1) * sizes.secondary))
           return {
-            blobId: blobIdOf(metadata.blob_id),
-            rootHash: digest(root, "root hash"),
+            blobId: blobIdOf(out.slice(out.length - 64, out.length - 32)),
+            rootHash: out.slice(out.length - 32),
             unencodedLength: blob.length,
             nShards,
-            metadata: encodeMetadata({
-              _tag: "V1",
-              encodingType: { _tag: "RS2" },
-              unencodedLength: BigInt(v1.unencoded_length),
-              hashes: v1.hashes.map((h) => ({ primaryHash: merkleNode(h.primary_hash), secondaryHash: merkleNode(h.secondary_hash) }))
-            }),
+            metadata: out.subarray(slivers, out.length - 64),
             primary,
             secondary
           }
@@ -253,8 +229,9 @@ export const make = (options?: EncoderOptions): Effect.Effect<EncoderService, En
         yield* checkShards("blobId", nShards)
         yield* checkLength("blobId", blob.length, nShards)
         return yield* attempt("blobId", () => {
-          const [id, root] = withEncoder(nShards, (e) => e.compute_metadata(blob)) as [ArrayLike<number>, WasmNode, unknown, unknown]
-          return { blobId: blobIdOf(id), rootHash: digest(root, "root hash") }
+          const out = withEncoder(nShards, (e) => e.compute_metadata(blob))
+          if (out.length !== 64) throw new Error(`WASM returned ${out.length} bytes of metadata, expected 64`)
+          return { blobId: blobIdOf(out.slice(0, 32)), rootHash: out.slice(32) }
         })
       }).pipe(Effect.withSpan("Encoder.blobId", { attributes: { "walrus.n_shards": nShards, "walrus.blob_size": blob.length } }))
 
@@ -263,9 +240,8 @@ export const make = (options?: EncoderOptions): Effect.Effect<EncoderService, En
         yield* checkShards("decode", nShards)
         yield* checkLength("decode", unencodedLength, nShards)
         return yield* attempt("decode", () => {
-          const out = new Uint8Array(unencodedLength)
-          // The WASM deserialises the blob id and ignores it (W4).
-          withEncoder(nShards, (e) => e.decode(new Uint8Array(BlobId.LENGTH), BigInt(unencodedLength), [...primarySlivers], out))
+          const out = withEncoder(nShards, (e) => e.decode(BigInt(unencodedLength), [...primarySlivers]))
+          if (out.length !== unencodedLength) throw new Error(`decoded ${out.length} bytes, expected ${unencodedLength}`)
           return out
         })
       }).pipe(Effect.withSpan("Encoder.decode", {
@@ -279,42 +255,21 @@ export const make = (options?: EncoderOptions): Effect.Effect<EncoderService, En
         if (!Number.isInteger(symbolSize) || symbolSize < 2 || symbolSize > Encoding.MAX_SYMBOL_SIZE || symbolSize % 2 !== 0) {
           return yield* fail(op, `symbol size must be even and in [2, ${Encoding.MAX_SYMBOL_SIZE}], got ${symbolSize}`)
         }
-        const { primary: rows, secondary: columns } = Encoding.sourceSymbols(nShards)
-        const limit = axis === "primary" ? rows : columns
-        if (slivers.length > limit) return yield* fail(op, `${slivers.length} ${axis} slivers, at most ${limit} per call`)
         if (slivers.length === 0) return []
-        // A primary sliver holds a row (`columns` symbols), a secondary one a column (`rows` symbols) (E3).
-        const symbols = axis === "primary" ? columns : rows
-        const data: Array<Uint8Array> = []
+        // A primary sliver holds a row (`secondary` symbols), a secondary one a column (`primary` symbols) (E3).
+        const source = Encoding.sourceSymbols(nShards)
+        const symbols = axis === "primary" ? source.secondary : source.primary
         for (let i = 0; i < slivers.length; i++) {
           const parsed = Messages.parseSliver(slivers[i]!)
           if (Result.isFailure(parsed)) return yield* fail(op, `sliver ${i}: ${parsed.failure.reason}`)
           const { symbolSize: s, data: d } = parsed.success
           if (s !== symbolSize) return yield* fail(op, `sliver ${i}: symbol size ${s}, expected ${symbolSize}`)
           if (d.length !== symbols * symbolSize) return yield* fail(op, `sliver ${i}: ${d.length} data bytes, expected ${symbols * symbolSize}`)
-          data.push(d)
         }
         return yield* attempt(op, () => {
-          // The crafted blob: exactly `rows × columns × symbolSize` bytes, so its symbol size is `symbolSize` (E2),
-          // with the slivers as its first rows (primary) or columns (secondary), zeros elsewhere (W6). Built
-          // inside `attempt`: at the largest sizes the allocation itself can throw (`RangeError`).
-          const blob = new Uint8Array(rows * columns * symbolSize)
-          const rowBytes = columns * symbolSize
-          if (axis === "primary") {
-            data.forEach((d, r) => blob.set(d, r * rowBytes))
-          } else {
-            data.forEach((d, c) => {
-              for (let r = 0; r < rows; r++) {
-                blob.set(d.subarray(r * symbolSize, (r + 1) * symbolSize), r * rowBytes + c * symbolSize)
-              }
-            })
-          }
-          const hashes = rawEncode(nShards, blob).metadata.metadata.V1.hashes
-          return data.map((_, i) =>
-            axis === "primary"
-              ? digest(hashes[i]!.primary_hash, `primary hash ${i}`)
-              : digest(hashes[nShards - 1 - i]!.secondary_hash, `secondary hash ${nShards - 1 - i}`)
-          )
+          const out = withEncoder(nShards, (e) => e.sliver_roots(axis === "primary", [...slivers]))
+          if (out.length !== 32 * slivers.length) throw new Error(`WASM returned ${out.length} bytes of roots for ${slivers.length} slivers`)
+          return Array.from({ length: slivers.length }, (_, i) => out.slice(32 * i, 32 * (i + 1)))
         })
       }).pipe(Effect.withSpan("Encoder.sliverRoots", {
         attributes: { "walrus.n_shards": nShards, "walrus.axis": axis, "walrus.slivers": slivers.length }
@@ -334,7 +289,7 @@ export const make = (options?: EncoderOptions): Effect.Effect<EncoderService, En
 
 /**
  * Initialises the WASM once per layer build and frees its `BlobEncoder`
- * instances when the layer's scope closes. `wasmUrl` is needed in browsers
- * only (W2; see the module comment).
+ * instances when the layer's scope closes. `wasmUrl` / `wasmFallbackUrl` are
+ * needed in browsers only (W2; see the module comment).
  */
 export const layer = (options?: EncoderOptions): Layer.Layer<Encoder, EncoderError> => Layer.effect(Encoder, make(options))
