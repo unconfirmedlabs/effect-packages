@@ -6,6 +6,11 @@
  *
  *   const certified = yield* Write.run(bytes, { epochs: 1, deletable: true, executor: Write.viaTx(signer) })
  *
+ * With `via: "relay"` an upload relay (`UploadRelay`) stores the blob instead:
+ * step 1 only computes the id, the register transaction also carries the
+ * relay's auth input and tip, and the relay's certificate is verified before
+ * it is certified.
+ *
  * Each step looks at the chain before it acts, so a write can stop anywhere
  * and continue from its last saved `Step` (or from nothing: registration
  * reuses an owned, uncertified `Blob` for the same blob). Transactions go
@@ -38,18 +43,22 @@ import { Encoder, type EncodedBlob } from "./Encoder.ts"
 import * as Encoding from "./Encoding.ts"
 import {
   type BlobTooLarge,
+  type CertificateInvalid,
   CertificateStale,
   type CommitteeMismatch,
   type EncoderError,
   NotEnoughConfirmations,
   RegistrationFailed,
-  ResumeMismatch
+  RelayError,
+  ResumeMismatch,
+  type TipTooHigh
 } from "./Errors.ts"
 import * as blob from "./generated/walrus/blob.ts"
 import * as Messages from "./Messages.ts"
 import * as Recipes from "./Recipes.ts"
 import { NodeError, retryable, StorageNodes } from "./StorageNode.ts"
 import { System, type SystemError, type SystemState } from "./System.ts"
+import { authAndTipWith, makeNonce, UploadRelay, type UploadRelayService, verifyCertificate } from "./UploadRelay.ts"
 
 // -----------------------------------------------------------------------------
 // Steps
@@ -125,13 +134,20 @@ export const viaTx = (
 
 export type Linger = Duration.Input | ((elapsed: Duration.Duration) => Duration.Input)
 
-export interface WriteOptions<E, R, E2 = never, R2 = never> {
+/** Where the data goes: straight to the storage nodes, or through an upload relay. */
+export type Via = "nodes" | "relay"
+/** What `via` adds to a write's requirements. */
+export type ViaServices<V extends Via> = V extends "relay" ? UploadRelay : never
+
+export interface WriteOptions<E, R, E2 = never, R2 = never, V extends Via = "nodes"> {
   readonly epochs: number
   readonly deletable: boolean
   readonly executor: Executor<E, R>
   /** Who receives the `Blob`. Default: the executor's sender. */
   readonly owner?: Address.Address
   readonly attributes?: Readonly<Record<string, string>>
+  /** Default `"nodes"`; `"relay"` needs an `UploadRelay` layer (and ignores `linger`, `retry` and `maxInFlightBytes`). */
+  readonly via?: V
   /** Continue from a saved step. The bytes must be the same blob: checked against `blobId`. */
   readonly resume?: Step
   /** Called after each step and awaited before the next one starts: persist here. */
@@ -159,6 +175,9 @@ export type WriteError =
   | CommitteeError
   | EncoderError
   | Recipes.RecipeError
+  | RelayError
+  | TipTooHigh
+  | CertificateInvalid
 
 /** The Rust client's default linger (`communication_config.rs`): half the time the quorum took, plus 500 ms. */
 export const defaultLinger = (elapsed: Duration.Duration): Duration.Duration =>
@@ -259,11 +278,49 @@ export const encode = (bytes: Uint8Array): Effect.Effect<{ readonly step: Encode
     return { step, encoded }
   })
 
+/**
+ * Step 1 for the relay: only the blob id and root hash (`Encoder.blobId`, no
+ * slivers) and a fresh 32-byte nonce for the relay's auth input (R3).
+ */
+export const encodeForRelay = (bytes: Uint8Array): Effect.Effect<Encoded, WriteError, System | Encoder> =>
+  Effect.gen(function*() {
+    const state = yield* systemState
+    yield* checkSize(bytes.length, state.nShards)
+    const { blobId, rootHash } = yield* (yield* Effect.service(Encoder)).blobId(state.nShards, bytes)
+    return {
+      _tag: "Encoded",
+      blobId,
+      rootHash,
+      unencodedLength: bytes.length,
+      nShards: state.nShards,
+      relayNonce: yield* makeNonce
+    } satisfies Encoded
+  })
+
 // -----------------------------------------------------------------------------
 // Step 2: register
 // -----------------------------------------------------------------------------
 
-export type RegisterOptions<E, R> = Pick<WriteOptions<E, R>, "epochs" | "deletable" | "executor" | "owner" | "attributes">
+export type RegisterOptions<E, R, V extends Via = "nodes"> =
+  & Pick<WriteOptions<E, R, never, never, V>, "epochs" | "deletable" | "executor" | "owner" | "attributes" | "via">
+  & {
+    /** With `via: "relay"`: the blob, for the relay's auth input (its SHA-256 and length). */
+    readonly blob?: Uint8Array
+  }
+
+/** The relay service when `via` is `"relay"`; a missing layer is a `RelayError`, so that `R` stays honest for direct writes. */
+const relayFor = (via: Via | undefined): Effect.Effect<UploadRelayService | undefined, RelayError> =>
+  via !== "relay" ? Effect.succeed(undefined) : Effect.flatMap(Effect.serviceOption(UploadRelay), (o) =>
+    Option.isSome(o)
+      ? Effect.succeed(o.value)
+      : Effect.fail(new RelayError({ message: 'via: "relay" needs an UploadRelay layer' })))
+
+/** Whether the relay wants a tip, i.e. a transaction carrying the auth input (R3). */
+const wantsTip = (relay: UploadRelayService) => Effect.map(relay.tipConfig, (c) => c._tag === "SendTip")
+
+/** A transaction with only the relay's auth input and tip (for a registration made earlier): its digest. */
+const sendAuth = <E, R>(relay: UploadRelayService, executor: Executor<E, R>, blob: Uint8Array, nonce: Uint8Array) =>
+  Effect.map(executor.execute(authAndTipWith(relay, { blob, nonce })), (effects) => effects.digest)
 
 /**
  * An owned `Blob` registered for this blob that can still be certified and
@@ -298,17 +355,46 @@ export const findRegistration = (
  * `findRegistration`), else execute `registerBlob` and transfer the `Blob` to
  * the owner.
  */
-export const register = <E, R>(
+export const register = <E, R, V extends Via = "nodes">(
   encoded: Encoded,
-  o: RegisterOptions<E, R>
+  o: RegisterOptions<E, R, V>
+): Effect.Effect<Registered, WriteError | E, System | Objects.Objects | R | ViaServices<V>> =>
+  Effect.flatMap(relayFor(o.via), (relay) => registerWith(relay, encoded, o))
+
+/**
+ * With a relay, the relay's auth input and tip come first in the register
+ * transaction (R3); a reused registration gets a transaction with only those
+ * (when the relay wants a tip). `Registered.digest` is then that
+ * transaction's: the one the relay checks.
+ */
+const registerWith = <E, R>(
+  relay: UploadRelayService | undefined,
+  encodedIn: Encoded,
+  o: Omit<RegisterOptions<E, R, Via>, "via">
 ): Effect.Effect<Registered, WriteError | E, System | Objects.Objects | R> =>
   Effect.gen(function*() {
+    let encoded = encodedIn
+    let auth: { readonly blob: Uint8Array; readonly nonce: Uint8Array } | undefined
+    if (relay !== undefined) {
+      const blob = o.blob
+      if (blob === undefined || blob.length !== encoded.unencodedLength) {
+        return yield* new RelayError({ message: "registering for the relay needs the blob (its digest goes into the auth input)" })
+      }
+      const nonce = encoded.relayNonce ?? (yield* makeNonce)
+      encoded = { ...encoded, relayNonce: nonce }
+      if (yield* wantsTip(relay)) auth = { blob, nonce }
+    }
     const owner = Address.normalize(o.owner ?? o.executor.sender)
     const state = yield* systemState
     const existing = yield* findRegistration(owner, encoded, { deletable: o.deletable, minEndEpoch: state.epoch + o.epochs })
-    if (existing !== undefined) return registeredOf(encoded, existing)
+    if (existing !== undefined) {
+      const digest = relay !== undefined && auth !== undefined ? yield* sendAuth(relay, o.executor, auth.blob, auth.nonce) : undefined
+      return registeredOf(encoded, existing, digest)
+    }
 
     const effects = yield* o.executor.execute(Effect.gen(function*() {
+      // Input 0 (R3): before anything else touches the builder.
+      if (relay !== undefined && auth !== undefined) yield* authAndTipWith(relay, auth)
       const registered = yield* Recipes.registerBlob({
         blobId: encoded.blobId,
         rootHash: encoded.rootHash,
@@ -507,6 +593,64 @@ export const upload = (
   })
 
 // -----------------------------------------------------------------------------
+// Step 3, through the relay
+// -----------------------------------------------------------------------------
+
+/** Relay requests that failed without an answer, with a 5xx or a 429 are tried twice more, 1 s and 2 s later. */
+const relayRetryable = (e: RelayError) => e.status === undefined || e.status >= 500 || e.status === 429
+const RELAY_RETRY = /* @__PURE__ */ Schedule.exponential("1 second")
+
+/** The committee with the system object's BLS keys: the ones `certify_blob` aggregates (C5). */
+const withSystemKeys = (committee: Committee, state: SystemState): Committee => ({
+  ...committee,
+  nodes: committee.nodes.map((n) => ({ ...n, publicKey: state.members[n.index]?.publicKey ?? n.publicKey }))
+})
+
+const uploadViaRelayWith = (
+  relay: UploadRelayService,
+  bytes: Uint8Array,
+  registered: Registered,
+  txDigest: string | undefined
+): Effect.Effect<Uploaded, WriteError, System | Committees | Encoder> =>
+  Effect.gen(function*() {
+    const tipped = yield* wantsTip(relay)
+    if (tipped && (registered.relayNonce === undefined || txDigest === undefined)) {
+      return yield* new RelayError({ message: "the relay wants a tip: the upload needs the nonce and the digest of the transaction that paid it" })
+    }
+    const certificate = yield* relay.upload({
+      blob: bytes,
+      blobId: registered.blobId,
+      ...(tipped && { nonce: registered.relayNonce!, txDigest: txDigest! }),
+      ...(registered.deletable && { deletableBlobObject: registered.blobObjectId })
+    }).pipe(Effect.retry({ schedule: RELAY_RETRY, times: 2, while: relayRetryable }))
+
+    let { committee, state } = yield* checkedCommittee
+    if (certificate.epoch > committee.epoch) {
+      // The epoch moved while the relay worked: verify against the new committee.
+      yield* refreshedState
+      yield* Effect.flatMap(Effect.service(Committees), (c) => c.refresh)
+      ;({ committee, state } = yield* checkedCommittee)
+    }
+    const message = Messages.confirmationMessage(committee.epoch, registered.blobId, persistenceOf(registered))
+    yield* verifyCertificate(certificate, message, withSystemKeys(committee, state))
+    const uploaded: Uploaded = { ...registered, _tag: "Uploaded", certificate }
+    return uploaded
+  })
+
+/**
+ * Step 3 through the relay: post the blob (with the nonce and `txDigest`,
+ * default `registered.digest`, when the relay wants a tip), then verify the
+ * returned certificate against the current committee (`verifyCertificate`)
+ * before anything is certified with it (item 16).
+ */
+export const uploadViaRelay = (
+  bytes: Uint8Array,
+  registered: Registered,
+  o: { readonly txDigest?: string } = {}
+): Effect.Effect<Uploaded, WriteError, System | Committees | Encoder | UploadRelay> =>
+  Effect.flatMap(Effect.service(UploadRelay), (relay) => uploadViaRelayWith(relay, bytes, registered, o.txDigest ?? registered.digest))
+
+// -----------------------------------------------------------------------------
 // Step 4: certify
 // -----------------------------------------------------------------------------
 
@@ -544,13 +688,28 @@ export const certify = <E, R>(
 interface Machine {
   readonly step: Step | undefined
   readonly encoded: EncodedBlob | undefined
+  /** The bytes' id was checked against the step (relay path: `Encoder.blobId`, no slivers). */
+  readonly checked: boolean
+  /** Relay path: `step.digest` is an auth transaction sent by this run (a resumed one may be too old for the relay). */
+  readonly fresh: boolean
   readonly stale: number
 }
 
 /** Certificates thrown away for an epoch change before giving up. */
 const MAX_STALE = 2
 
-const advance = <E, R>(bytes: Uint8Array, options: Omit<WriteOptions<E, R>, "onStep">) => {
+/** The bytes must be the step's blob: checked cheaply, without slivers. */
+const checkId = (bytes: Uint8Array, expected: BlobId.BlobId) =>
+  Effect.gen(function*() {
+    const state = yield* systemState
+    yield* checkSize(bytes.length, state.nShards)
+    const { blobId } = yield* (yield* Effect.service(Encoder)).blobId(state.nShards, bytes)
+    if (blobId !== expected) return yield* new ResumeMismatch({ expected, actual: blobId })
+  })
+
+type AdvanceOptions<E, R> = Omit<WriteOptions<E, R, never, never, Via>, "onStep">
+
+const advance = <E, R>(bytes: Uint8Array, options: AdvanceOptions<E, R>) => {
   const encodedFor = (machine: Machine, expected: BlobId.BlobId) =>
     Effect.gen(function*() {
       if (machine.encoded !== undefined) return machine.encoded
@@ -558,44 +717,85 @@ const advance = <E, R>(bytes: Uint8Array, options: Omit<WriteOptions<E, R>, "onS
       if (encoded.blobId !== expected) return yield* new ResumeMismatch({ expected, actual: encoded.blobId })
       return encoded
     })
+  const checkedFor = (machine: Machine, expected: BlobId.BlobId) =>
+    machine.checked || machine.encoded !== undefined ? Effect.void : checkId(bytes, expected)
+
+  /** Relay path: a nonce and an auth transaction the relay will accept for this registration. */
+  const freshAuth = (relay: UploadRelayService, step: Registered, fresh: boolean) =>
+    Effect.gen(function*() {
+      if (!(yield* wantsTip(relay))) return step
+      if (fresh && step.relayNonce !== undefined && step.digest !== undefined) return step
+      const nonce = step.relayNonce ?? (yield* makeNonce)
+      const digest = yield* sendAuth(relay, options.executor, bytes, nonce)
+      return { ...step, relayNonce: nonce, digest } satisfies Registered
+    })
+
+  /** Steps 2 → 3 checks: the `Blob` still exists, is not certified (else jump to the result) and has not expired. */
+  const checkRegistered = (step: Registered) =>
+    Effect.gen(function*() {
+      const b = yield* readBlob(step.blobObjectId)
+      if (b === undefined) return yield* new RegistrationFailed({ blobObjectId: step.blobObjectId, reason: "the Blob no longer exists" })
+      if (Option.isSome(b.certified_epoch)) return certifiedOf(step, b.certified_epoch.value, b.storage.end_epoch)
+      const state = yield* refreshedState
+      if (b.storage.end_epoch <= state.epoch) {
+        return yield* new RegistrationFailed({ blobObjectId: step.blobObjectId, reason: `storage ended at epoch ${b.storage.end_epoch}` })
+      }
+      return undefined
+    })
 
   return (machine: Machine): Effect.Effect<Machine | undefined, WriteError | E, WriteServices | R> =>
     Effect.gen(function*() {
+      const relay = yield* relayFor(options.via)
       const step = machine.step
       if (step === undefined) {
+        if (relay !== undefined) return { step: yield* encodeForRelay(bytes), encoded: undefined, checked: true, fresh: false, stale: 0 }
         const { encoded, step } = yield* encode(bytes)
-        return { step, encoded, stale: 0 }
+        return { step, encoded, checked: true, fresh: false, stale: 0 }
       }
       switch (step._tag) {
         case "Encoded": {
+          if (relay !== undefined) {
+            yield* checkedFor(machine, step.blobId)
+            const registered = yield* registerWith(relay, step, { ...options, blob: bytes })
+            return { ...machine, checked: true, fresh: true, step: registered }
+          }
           const encoded = yield* encodedFor(machine, step.blobId)
-          return { ...machine, encoded, step: yield* register(step, options) }
+          return { ...machine, encoded, step: yield* registerWith(undefined, step, options) }
         }
         case "Registered": {
+          if (relay !== undefined) {
+            yield* checkedFor(machine, step.blobId)
+            const done = yield* checkRegistered(step)
+            if (done !== undefined) return { ...machine, checked: true, step: done }
+            const authed = yield* freshAuth(relay, step, machine.fresh)
+            const uploaded = yield* uploadViaRelayWith(relay, bytes, authed, authed.digest)
+            return { ...machine, checked: true, fresh: true, step: uploaded }
+          }
           const encoded = yield* encodedFor(machine, step.blobId)
-          const b = yield* readBlob(step.blobObjectId)
-          if (b === undefined) return yield* new RegistrationFailed({ blobObjectId: step.blobObjectId, reason: "the Blob no longer exists" })
-          if (Option.isSome(b.certified_epoch)) {
-            return { ...machine, encoded, step: certifiedOf(step, b.certified_epoch.value, b.storage.end_epoch) }
-          }
-          const state = yield* refreshedState
-          if (b.storage.end_epoch <= state.epoch) {
-            return yield* new RegistrationFailed({ blobObjectId: step.blobObjectId, reason: `storage ended at epoch ${b.storage.end_epoch}` })
-          }
+          const done = yield* checkRegistered(step)
+          if (done !== undefined) return { ...machine, encoded, step: done }
           return { ...machine, encoded, step: yield* upload(encoded, step, options) }
         }
         case "Uploaded": {
           // Checks resumed bytes, and is what a stale certificate needs anyway.
-          const encoded = yield* encodedFor(machine, step.blobId)
+          const encoded = relay !== undefined ? undefined : yield* encodedFor(machine, step.blobId)
+          if (relay !== undefined) yield* checkedFor(machine, step.blobId)
           const certified = yield* certify(step, options).pipe(
             Effect.catchIf((e): e is CertificateStale => e instanceof CertificateStale, (e) => Effect.succeed(e))
           )
-          if (!(certified instanceof CertificateStale)) return { ...machine, encoded, step: certified }
+          if (!(certified instanceof CertificateStale)) return { ...machine, encoded, checked: true, step: certified }
           if (machine.stale >= MAX_STALE) return yield* certified
           // M4: a certificate is bound to its epoch. Nodes that already hold the data answer quickly.
           const { certificate: _, ...rest } = step
-          const uploaded = yield* upload(encoded, { ...rest, _tag: "Registered" }, options)
-          return { step: uploaded, encoded, stale: machine.stale + 1 }
+          const registered: Registered = { ...rest, _tag: "Registered" }
+          if (relay !== undefined) {
+            // A new epoch means time has passed: send a fresh auth transaction for the relay.
+            const authed = yield* freshAuth(relay, registered, false)
+            const uploaded = yield* uploadViaRelayWith(relay, bytes, authed, authed.digest)
+            return { ...machine, checked: true, fresh: true, step: uploaded, stale: machine.stale + 1 }
+          }
+          const uploaded = yield* upload(encoded!, registered, options)
+          return { ...machine, step: uploaded, encoded, stale: machine.stale + 1 }
         }
         case "Certified":
           return undefined
@@ -603,24 +803,15 @@ const advance = <E, R>(bytes: Uint8Array, options: Omit<WriteOptions<E, R>, "onS
     })
 }
 
-/** A resumed `Certified` step is only checked against the bytes (cheaply, without slivers). */
-const checkCertified = (bytes: Uint8Array, step: Certified) =>
-  Effect.gen(function*() {
-    const state = yield* systemState
-    yield* checkSize(bytes.length, state.nShards)
-    const { blobId } = yield* (yield* Effect.service(Encoder)).blobId(state.nShards, bytes)
-    if (blobId !== step.blobId) return yield* new ResumeMismatch({ expected: step.blobId, actual: blobId })
-  })
-
 /** The same as `run`, as a pull-driven stream of steps: the next step runs when the consumer asks for it. */
-export const stream = <E, R>(
+export const stream = <E, R, V extends Via = "nodes">(
   bytes: Uint8Array,
-  options: Omit<WriteOptions<E, R>, "onStep">
-): Stream.Stream<Step, WriteError | E, WriteServices | R> => {
+  options: Omit<WriteOptions<E, R, never, never, V>, "onStep">
+): Stream.Stream<Step, WriteError | E, WriteServices | R | ViaServices<V>> => {
   const next = advance(bytes, options)
-  const start: Machine = { step: options.resume, encoded: undefined, stale: 0 }
+  const start: Machine = { step: options.resume, encoded: undefined, checked: false, fresh: false, stale: 0 }
   const first: Effect.Effect<Machine | undefined, WriteError | E, WriteServices | R> = options.resume?._tag === "Certified"
-    ? Effect.as(checkCertified(bytes, options.resume), undefined)
+    ? Effect.as(checkId(bytes, options.resume.blobId), undefined)
     : next(start)
   return Stream.unfold(
     first as Effect.Effect<Machine | undefined, WriteError | E, WriteServices | R> | undefined,
@@ -635,18 +826,19 @@ export const stream = <E, R>(
 /**
  * Write a blob and return its `Certified` step. With `resume`, continue from
  * a saved step; `onStep` sees every step and is awaited before the next one.
+ * With `via: "relay"`, the blob goes through the `UploadRelay`.
  */
-export const run = <E, R, E2 = never, R2 = never>(
+export const run = <E, R, E2 = never, R2 = never, V extends Via = "nodes">(
   bytes: Uint8Array,
-  options: WriteOptions<E, R, E2, R2>
-): Effect.Effect<Certified, WriteError | E | E2, WriteServices | R | R2> =>
+  options: WriteOptions<E, R, E2, R2, V>
+): Effect.Effect<Certified, WriteError | E | E2, WriteServices | R | R2 | ViaServices<V>> =>
   Effect.gen(function*() {
     if (options.resume?._tag === "Certified") {
-      yield* checkCertified(bytes, options.resume)
+      yield* checkId(bytes, options.resume.blobId)
       return options.resume
     }
     const next = advance(bytes, options)
-    let machine: Machine = { step: options.resume, encoded: undefined, stale: 0 }
+    let machine: Machine = { step: options.resume, encoded: undefined, checked: false, fresh: false, stale: 0 }
     for (;;) {
       const m = yield* next(machine)
       if (m === undefined || m.step === undefined) break
