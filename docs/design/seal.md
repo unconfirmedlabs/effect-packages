@@ -1,6 +1,6 @@
 # `@unconfirmed/seal` — design
 
-Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
+Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) and S3 (configuration, key servers) implemented; see "As built (S1)" in §4.1 and §4.9 and "As built (S3)" in §4.3. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
 
 A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
 
@@ -396,6 +396,19 @@ export type KeyServerLoadError = InvalidKeyServer | Objects.ObjectNotFound | Rpc
 ```
 
 Reading: get the object, decode `KeyServerBcs`; pick the version; field id `DynamicFields.deriveId(objectId, "u64", bcs(version))`; get it, decode `Move.Field(Bcs.u64, KeyServerV{1,2}Bcs)`. `InvalidKeyServer { objectId, reason }` for: the object's type is not `…::key_server::KeyServer` or the field's value type not `…::key_server::KeyServerV{n}` (module and name only, K4); no supported version; `key_type ≠ 0`; a public key that `Bls.g2FromBytes` refuses (including infinity, C18); a configured committee server without `aggregatorUrl`, or a configured independent server with one (a committee that is not configured is fine: it has a public key and no `url`); a proof of possession that does not verify or names another id. The cache is per object id (`Cache`, capacity 256) with a TTL because URLs change (K3, item 2).
+
+**As built (S3).** Differences from the declarations above, each the smallest call that fills a gap:
+
+- `KeyServer.url` is set **only for configured servers** (the on-chain URL of an independent one, the aggregator of a committee). The comment on `KeyServers.get` said "and independent ones", which contradicted `KeyServer.url`'s own comment and open question 8; unconfigured servers get a public key and no URL.
+- `read` is stricter than listed: the object's BCS `id` must equal the id asked for; the version range must satisfy `1 ≤ first ≤ last`; the field must be exactly `0x2::dynamic_field::Field<u64, <any>::key_server::KeyServerV{n}>`, sit at `fieldId(objectId, n)` and carry name `n`; trailing bytes are refused in both (`Bcs.decode`). A missing versioned field is `InvalidKeyServer`, not `ObjectNotFound` (only a missing key server object is). Committee members' partial keys are kept as read (informational, not validated).
+- A configured independent server whose on-chain URL is not `http(s)` is `InvalidKeyServer` (an unconfigured one is never asked, so it is not checked).
+- `layerVerified`: a `/v1/service` request that fails is `InvalidKeyServer` with the `KeyServerError` kind and message in `reason` (`"proof of possession unavailable (Unavailable): …"`), so `KeyServerLoadError` keeps its three members; failures are not cached, so the next `get` asks again. Verification runs inside the cached lookup: once per load (per TTL or `refresh`), not per `get`.
+- `KeyServers.get` / `refresh` normalise the id strictly (64 hex digits); anything else is `InvalidKeyServer { reason: "not an object id" }`. `layerFromServers` answers an unknown id with `ObjectNotFound`.
+- `Config.make` also refuses an empty list, an API key header name that is not an HTTP token, an empty API key value and an aggregator URL with credentials. Ids must be exactly 64 hex digits (`0x` optional, any case); `0x2` is refused, not padded.
+- BCS field names are `@mysten/seal`'s camelCase (`firstVersion`, `keyType`, `partialPk`, `partyId`, `serverType`), not Move's snake_case; bytes are what matters.
+- Extra exports: `Config.layerFrom` (a validated config as a layer), `Config.find`, `Config.normalizeObjectId`, `Config.isHttpUrl`, `Config.MAX_TOTAL_WEIGHT`; `KeyServer.fieldId`, `chooseVersion` and `decode` (the pure halves of `read`), `resolve` (on-chain plus configuration), `verify` (the PoP check), `SUPPORTED_VERSIONS`, `KEY_TYPE_BF_BLS12381`, `CACHE_CAPACITY`, and the types `KeyServersService`, `LayerOptions`, `CommitteeMember`.
+- Fixtures (`scripts/record-chain.ts`, recorded 2026-11-27, matching §0.1): `{ network, recordedAt, keyServers: [{ objectId, name, layout, type }], objects: RecordedObject[], services: { [objectId]: { url, status?, version?, body?, error? } } }`. `services` also holds each committee's aggregator answer (testnet `400 Unsupported`, mainnet `401`). `test/fixtures.ts` exports `TESTNET_INDEPENDENT`, `objectsLayer(fixtures, overrides)` (counts `gets`) and `serviceStub(services)`, a `KeyServerApi` whose `service` answers from recordings (`fetchKey` dies).
+- `live.chain.test.ts` checks `layerVerified` through a minimal `fetch`-based `service` stand-in, because S4's `KeyServerApi.layer` was built in parallel. Once merged, S7 should switch it to `KeyServerApi.layer` and add the two aggregator assertions of §6.3 (`Rejected`, `Unauthorized`), which depend on S4's mapping.
 
 ### 4.4 Key server HTTP
 
