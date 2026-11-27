@@ -42,7 +42,7 @@ const NETWORKS = {
 } as const
 
 const chain = (network: keyof typeof NETWORKS) =>
-  SuiGrpc.layer({ baseUrl: NETWORKS[network].url }).pipe(Layer.provide(FetchHttpClient.layer))
+  SuiGrpc.layer({ url: NETWORKS[network].url }).pipe(Layer.provide(FetchHttpClient.layer))
 
 /** The real key server client (S4) over `fetch`. */
 const api = KeyServerApi.layer().pipe(Layer.provide(FetchHttpClient.layer))

@@ -28,7 +28,7 @@ export const generateRandomness: Effect.Effect<string> = Effect.sync(() =>
 /** The nonce for an ephemeral public key, the proof's `maxEpoch` and the randomness. */
 export const generate = (
   ephemeralPublicKey: SignatureScheme.PublicKey,
-  maxEpoch: number | bigint,
+  maxEpoch: bigint,
   randomness: bigint | string
 ): Effect.Effect<string, InvalidZkLoginInput> =>
   Effect.try({

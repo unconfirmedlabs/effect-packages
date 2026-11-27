@@ -121,7 +121,7 @@ export interface WaitForOptions {
    * (until the timeout). If a finite schedule runs out first, the last
    * `TransactionNotFound` is the failure.
    */
-  readonly schedule?: Schedule.Schedule<unknown>
+  readonly retry?: Schedule.Schedule<unknown>
 }
 
 /**
@@ -136,7 +136,7 @@ export const waitFor = (
   const timeout = options?.timeout ?? "60 seconds"
   return Effect.flatMap(Effect.service(Transactions), (t) =>
     t.get(digest).pipe(
-      Effect.retry({ while: (e) => e._tag === "TransactionNotFound", schedule: options?.schedule ?? Schedule.spaced("500 millis") }),
+      Effect.retry({ while: (e) => e._tag === "TransactionNotFound", schedule: options?.retry ?? Schedule.spaced("500 millis") }),
       Effect.timeoutOrElse({
         duration: timeout,
         orElse: () => Effect.fail(new TransactionWaitTimeout({ digest, timeoutMillis: Duration.toMillis(timeout) }))

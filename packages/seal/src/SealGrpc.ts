@@ -3,7 +3,7 @@
  * (key servers, package versions, approval inputs) and `Packages`
  * (`Approval.fromRecipe` argument types).
  *
- *   SealGrpc.layer({ servers: [...], grpc: { baseUrl } }).pipe(Layer.provide(FetchHttpClient.layer))
+ *   SealGrpc.layer({ servers: [...], grpc: { url } }).pipe(Layer.provide(FetchHttpClient.layer))
  *
  * `@unconfirmed/sui/grpc`'s `layer` provides every capability and so ships
  * every RPC's codec (about 90 KB minified more); a program that also builds
@@ -27,7 +27,7 @@ export const chain = (options: GrpcWebOptions): Layer.Layer<Objects.Objects | Pa
   Layer.mergeAll(ObjectsGrpc.layer, PackagesGrpc.layer).pipe(Layer.provide(GrpcWeb.layer(options)))
 
 export interface SealGrpcOptions extends Seal.SealOptions {
-  /** The full node, e.g. `{ baseUrl: "https://fullnode.testnet.sui.io:443" }`. */
+  /** The full node, e.g. `{ url: "https://fullnode.testnet.sui.io:443" }`. */
   readonly grpc: GrpcWebOptions
 }
 

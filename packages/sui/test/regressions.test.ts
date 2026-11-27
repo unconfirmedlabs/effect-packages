@@ -172,10 +172,28 @@ describe("CheckpointData.follow (review A6)", () => {
       subscribe: Stream.make(cp(10))
     })
     const e = await Effect.runPromise(
-      CheckpointData.follow(0n, { gapRetry: "1 millis", gapAttempts: 3 }).pipe(Stream.runCollect, Effect.flip, Effect.provideService(CheckpointData.CheckpointData, svc))
+      CheckpointData.follow(0n, { gapRetry: Schedule.spaced("1 millis").pipe(Schedule.upTo({ times: 3 })) }).pipe(Stream.runCollect, Effect.flip, Effect.provideService(CheckpointData.CheckpointData, svc))
     )
     expect(e._tag).toBe("CheckpointGap")
     expect(e._tag === "CheckpointGap" && [e.from, e.to]).toEqual([2n, 10n])
+  })
+
+  test("gapRetry re-lists only a gap: an RpcError from the re-list is not retried", async () => {
+    let gapLists = 0
+    const svc = CheckpointData.CheckpointData.of({
+      get: () => Effect.die("no"),
+      list: (o) => {
+        if (o?.end === undefined) return Stream.fromIterable(range(0, 2))
+        gapLists++
+        return Stream.fail(new RpcError({ method: "ListCheckpoints", code: "UNAVAILABLE", message: "down" }))
+      },
+      subscribe: Stream.make(cp(10))
+    })
+    const e = await Effect.runPromise(
+      CheckpointData.follow(0n, { gapRetry: Schedule.spaced("1 millis") }).pipe(Stream.runCollect, Effect.flip, Effect.provideService(CheckpointData.CheckpointData, svc))
+    )
+    expect(e._tag).toBe("RpcError")
+    expect(gapLists).toBe(1)
   })
 })
 
@@ -187,7 +205,7 @@ describe("Transactions.waitFor (review A7)", () => {
       get: (digest) => Effect.fail(new Transactions.TransactionNotFound({ digest }))
     })
     const e = await Effect.runPromise(
-      Transactions.waitFor("D", { schedule: Schedule.recurs(2), timeout: "10 seconds" }).pipe(Effect.flip, Effect.provideService(Transactions.Transactions, svc))
+      Transactions.waitFor("D", { retry: Schedule.recurs(2), timeout: "10 seconds" }).pipe(Effect.flip, Effect.provideService(Transactions.Transactions, svc))
     )
     expect(e._tag).toBe("TransactionNotFound")
   })

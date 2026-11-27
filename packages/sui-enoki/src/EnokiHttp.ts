@@ -19,7 +19,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse"
 import { EnokiClient, EnokiError, type EnokiErrorDetail } from "./EnokiClient.ts"
 import * as E from "./EnokiClient.ts"
 
-export const DEFAULT_API_URL = "https://api.enoki.mystenlabs.com"
+export const DEFAULT_URL = "https://api.enoki.mystenlabs.com"
 /** How long a successful `getApp` (which names the sponsor addresses) is reused. Failures aren't cached. */
 export const APP_CACHE_TTL = "5 minutes"
 const VERSION = "v1"
@@ -29,8 +29,16 @@ const REDACTED = [ZKLOGIN_HEADER, "authorization"]
 
 export interface EnokiHttpOptions {
   readonly apiKey: string
-  /** Default `https://api.enoki.mystenlabs.com`. */
-  readonly apiUrl?: string
+  /**
+   * Base URL of the Enoki API; `/v1/…` paths are appended to it, trailing slashes stripped.
+   * Default {@link DEFAULT_URL} (`https://api.enoki.mystenlabs.com`).
+   */
+  readonly url?: string
+  /**
+   * Extra headers on every request (routing, a proxy's credentials). The API key, content type,
+   * request id and the user's JWT are set by the layer and take precedence.
+   */
+  readonly headers?: Readonly<Record<string, string>>
   /** Default `additionalEpochs` for nonces. */
   readonly additionalEpochs?: number
   /**
@@ -99,7 +107,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
     EnokiClient,
     Effect.gen(function*() {
       const http = yield* HttpClient.HttpClient
-      const base = `${options.apiUrl ?? DEFAULT_API_URL}/${VERSION}`
+      const base = `${(options.url ?? DEFAULT_URL).replace(/\/+$/, "")}/${VERSION}`
       const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? "30 seconds")
 
       const call = <S extends Schema.Top & { readonly DecodingServices: never }>(
@@ -113,6 +121,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
         return Effect.gen(function*() {
           let request = HttpClientRequest.make(method)(`${base}/${path}`).pipe(
             HttpClientRequest.setHeaders({
+              ...options.headers,
               ...init.headers,
               Authorization: `Bearer ${options.apiKey}`,
               "Content-Type": "application/json",
@@ -177,7 +186,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
             body: {
               network: input.network,
               ephemeralPublicKey: suiPublicKey(input.ephemeralPublicKey),
-              maxEpoch: input.maxEpoch,
+              maxEpoch: Number(input.maxEpoch),
               randomness: input.randomness
             }
           }),

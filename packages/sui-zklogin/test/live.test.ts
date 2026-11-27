@@ -18,7 +18,7 @@ const msg = new TextEncoder().encode("zkLogin live")
 
 const registry = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, ZkLogin.scheme).pipe(
   Layer.provide(ZkLoginVerifierGrpc.layer),
-  Layer.provide(GrpcWeb.layer({ baseUrl: TESTNET })),
+  Layer.provide(GrpcWeb.layer({ url: TESTNET })),
   Layer.provide(FetchHttpClient.layer)
 )
 
@@ -28,7 +28,7 @@ const verdict = (kid?: string) =>
     const signer = yield* ZkLogin.signer({
       ephemeral,
       inputs: inputs(String(Theirs.genAddressSeed(42n, "sub", claims.sub, claims.aud)), kid),
-      maxEpoch: 100_000
+      maxEpoch: 100_000n
     })
     const { signature } = yield* Signer.signPersonalMessage(signer, msg)
     return yield* Effect.flip(Verify.personalMessage(msg, signature, { address: signer.address }))

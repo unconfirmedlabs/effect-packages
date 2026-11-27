@@ -45,7 +45,7 @@ for (const [network, { config, url }] of Object.entries(networks) as Array<[keyo
           Effect.tap(p.getFunction(t), (f) => Effect.sync(() => (functions[`${t.package}::${t.module}::${t.function}`] = f)))
       }))
   )
-  const chain = SuiGrpc.layer({ baseUrl: url }).pipe(Layer.provide(FetchHttpClient.layer))
+  const chain = SuiGrpc.layer({ url }).pipe(Layer.provide(FetchHttpClient.layer))
   const program = Effect.gen(function*() {
     const state = yield* System.load
     yield* System.loadWalType(state.packageId)

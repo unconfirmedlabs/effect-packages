@@ -21,14 +21,15 @@ import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
 import * as ZkLogin from "@unconfirmed/sui-zklogin/ZkLogin"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import { EnokiClient, type EnokiError, EnokiNetwork, type ZkLoginZkp } from "./EnokiClient.ts"
+import { EnokiClient, type EnokiError, EnokiNetwork, Epoch, type ZkLoginZkp } from "./EnokiClient.ts"
 
 /** What to persist across the OAuth redirect (with the ephemeral key, which is the app's to store). */
 export const SessionData = Schema.Struct({
   network: Schema.optionalKey(EnokiNetwork),
   nonce: Schema.String,
   randomness: Schema.String,
-  maxEpoch: Schema.Number,
+  /** A u64; encoded as a decimal string. */
+  maxEpoch: Epoch,
   /** Milliseconds since the epoch after which the proof stops working. */
   estimatedExpiration: Schema.Number
 })

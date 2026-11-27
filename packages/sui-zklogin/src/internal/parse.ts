@@ -22,13 +22,9 @@ export const seed = (value: string | bigint): bigint => {
 
 const U64_MAX = 2n ** 64n - 1n
 
-/** A `maxEpoch`: a u64, given as a bigint, a safe integer or a decimal string. */
-export const epoch = (value: bigint | number | string): bigint => {
-  let n: bigint
-  if (typeof value === "bigint") n = value
-  else if (typeof value === "number" && Number.isSafeInteger(value)) n = BigInt(value)
-  else if (typeof value === "string" && DECIMAL.test(value)) n = BigInt(value)
-  else throw new Error(`maxEpoch ${JSON.stringify(String(value))} is not an integer`)
-  if (n < 0n || n > U64_MAX) throw new Error(`maxEpoch ${n} is not a u64`)
-  return n
+/** A `maxEpoch`: a u64 (the chain's type), so a `bigint` in range; anything else (from an untyped caller) throws. */
+export const epoch = (value: bigint): bigint => {
+  if (typeof value !== "bigint") throw new Error(`maxEpoch ${JSON.stringify(String(value))} is not a bigint`)
+  if (value < 0n || value > U64_MAX) throw new Error(`maxEpoch ${value} is not a u64`)
+  return value
 }

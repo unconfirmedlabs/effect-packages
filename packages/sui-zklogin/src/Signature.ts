@@ -45,7 +45,8 @@ const decodeBody = Bcs.decode(ZkLoginSignature)
 
 export interface SerializeInput {
   readonly inputs: ZkLoginSignatureInputs
-  readonly maxEpoch: bigint | number | string
+  /** A u64. */
+  readonly maxEpoch: bigint
   /** The ephemeral signer's serialized signature (`flag || sig || pk`). */
   readonly userSignature: Uint8Array
 }

@@ -5,7 +5,7 @@
  * `GetEpoch` for where the window starts. Nothing is cached. Its own subpath,
  * so nothing else loads the gRPC code.
  *
- *   EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))
+ *   EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url })))
  *
  * Point it at the same endpoint as `Transactions`. Behind a load balancer the
  * calls may reach different nodes; use `SubmitConfig` `expiryEvidence: "never"`

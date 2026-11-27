@@ -385,7 +385,7 @@ suite("mixing transports", () => {
         Layer.provide(SuiGraphQL.SuiGraphQL.protocol({ url: GQL_TESTNET }))
       ),
       Layer.mergeAll(SuiGrpc.TransactionsGrpc.layer, SuiGrpc.ChainGrpc.layer).pipe(
-        Layer.provide(SuiGrpc.GrpcWeb.layer({ baseUrl: TESTNET }))
+        Layer.provide(SuiGrpc.GrpcWeb.layer({ url: TESTNET }))
       )
     ).pipe(Layer.provideMerge(http.layer))
 

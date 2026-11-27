@@ -96,7 +96,7 @@ describe("Quorum.run", () => {
     test("fails twice, then succeeds", async () => {
       const { world, effect } = setup(
         [{ delay: 1000, outcomes: [new NodeError("a"), new NodeError("b"), "ok"] }],
-        { schedule: Schedule.spaced("1 second") }
+        { retry: Schedule.spaced("1 second") }
       )
       const { exit, at } = await timed(effect)
       // attempts at 0-1 s, 2-3 s, 4-5 s
@@ -105,10 +105,10 @@ describe("Quorum.run", () => {
       expect(world.attempts(0)).toBe(3)
     })
 
-    test("`while` returning false ends the member after one attempt", async () => {
+    test("`retryWhile` returning false ends the member after one attempt", async () => {
       const { world, effect } = setup(
         [{ delay: 100, outcomes: [new NodeError("fatal", false)] }, { delay: 5000 }],
-        { schedule: Schedule.spaced("1 second"), while: (e) => e.retryable, threshold: 2 }
+        { retry: Schedule.spaced("1 second"), retryWhile: (e) => e.retryable, threshold: 2 }
       )
       const { exit, at } = await timed(effect)
       expect(at).toBe(100)
@@ -119,7 +119,7 @@ describe("Quorum.run", () => {
     test("an exhausted schedule records the last error", async () => {
       const { world, effect } = setup(
         [{ delay: 100, outcomes: [new NodeError("e1"), new NodeError("e2"), new NodeError("e3")] }],
-        { schedule: Schedule.recurs(2) }
+        { retry: Schedule.recurs(2) }
       )
       const { exit, at } = await timed(effect)
       expect(at).toBe(300)
@@ -127,7 +127,7 @@ describe("Quorum.run", () => {
       expect(world.attempts(0)).toBe(3)
     })
 
-    test("without a schedule, one attempt", async () => {
+    test("without `retry`, one attempt", async () => {
       const { world, effect } = setup([{ delay: 100, outcomes: [new NodeError("x"), "ok"] }])
       const { exit } = await timed(effect)
       expect(error(exit).reason).toBe("unreachable")
@@ -152,7 +152,7 @@ describe("Quorum.run", () => {
     test("a retrying member keeps its slot", async () => {
       const { world, effect } = setup(
         [{ delay: 1000, outcomes: [new NodeError("a"), "ok"] }, { delay: 100 }],
-        { concurrency: 1, threshold: 2, schedule: Schedule.spaced("1 second") }
+        { concurrency: 1, threshold: 2, retry: Schedule.spaced("1 second") }
       )
       const { exit, at } = await timed(effect)
       expect(value(exit).weight).toBe(2)
@@ -413,7 +413,7 @@ describe("Quorum.run", () => {
       const { world, effect } = setup(
         [{ delay: 100, outcomes: [new NodeError("notFound")] }, { delay: "never" }],
         {
-          schedule: Schedule.recurs(2),
+          retry: Schedule.recurs(2),
           giveUp: {
             when: (e, m) => {
               seen.push(`${m.id}:${e.code}`)
@@ -538,14 +538,14 @@ export const typeTests = () => {
     Quorum.Reached<{ id: number }, string, NodeError>,
     Quorum.QuorumFailed<{ id: number }, string, NodeError>,
     "Service"
-  > = Quorum.run(members, { weight: () => 1, run, threshold: 1, schedule: Schedule.spaced("1 second") })
+  > = Quorum.run(members, { weight: () => 1, run, threshold: 1, retry: Schedule.spaced("1 second") })
 
   const withInput: Schedule.Schedule<unknown, NodeError> = Schedule.recurs(1)
-  Quorum.run(members, { weight: () => 1, run, threshold: 1, schedule: withInput })
+  Quorum.run(members, { weight: () => 1, run, threshold: 1, retry: withInput })
 
   const wrongInput = Schedule.identity<Other>()
   // @ts-expect-error a schedule over another error type does not compile
-  Quorum.run(members, { weight: () => 1, run, threshold: 1, schedule: wrongInput })
+  Quorum.run(members, { weight: () => 1, run, threshold: 1, retry: wrongInput })
 
   return ok
 }

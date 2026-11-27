@@ -49,7 +49,7 @@ const { successes } = yield* Quorum.run(committee.nodes, {
   weight: (node) => node.shards.length,
   threshold: nShards - maxFaulty,
   run: storeAndConfirm,                            // one attempt at one member
-  schedule: nodeRetry, while: (e) => e.retryable,  // per-member retry
+  retry: nodeRetry, retryWhile: (e) => e.retryable,  // per-member retry
   concurrency: 50, order: "weightedShuffle",
   linger: (elapsed) => Duration.sum(Duration.times(elapsed, 0.5), Duration.millis(500))  // wait for stragglers
 })
@@ -74,7 +74,7 @@ import * as SuiGrpc from "@unconfirmed/sui/grpc"
 
 // System, committees, storage nodes and the encoder for one network; needs an HttpClient and a Sui client.
 const layer = Walrus.layer({ network: "testnet" }).pipe(          // or { config: { systemObjectId, stakingObjectId } }
-  Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })),
+  Layer.provideMerge(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })),
   Layer.provideMerge(FetchHttpClient.layer)
 )
 
@@ -94,8 +94,8 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
   ```ts
   const layer = Layer.mergeAll(
     Walrus.layer({ network: "testnet" }),
-    UploadRelay.layer({ host: UploadRelay.TESTNET_HOST, maxTip: 1_000n })   // required; `0n` accepts only relays that want no tip
-  ).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), Layer.provideMerge(FetchHttpClient.layer))
+    UploadRelay.layer({ url: UploadRelay.TESTNET_URL, maxTip: 1_000n })   // required; `0n` accepts only relays that want no tip
+  ).pipe(Layer.provideMerge(SuiGrpc.layer({ url })), Layer.provideMerge(FetchHttpClient.layer))
   yield* Write.run(bytes, { epochs: 5, deletable: true, executor: Write.viaTx(signer), via: "relay" })
   ```
 
@@ -147,9 +147,9 @@ import * as SealGrpc from "@unconfirmed/seal/SealGrpc"
 // (Objects, Packages) over gRPC-web; needs an HttpClient.
 const layer = SealGrpc.layer({
   servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee],
-  grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" }
+  grpc: { url: "https://fullnode.testnet.sui.io:443" }
 }).pipe(Layer.provideMerge(FetchHttpClient.layer))
-// A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), ...).
+// A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ url })), ...).
 // SuiGrpc.layer ships every service's RPCs (about 60 KB more than Seal needs).
 
 const id = Bcs.encodeSync(Bcs.Address)(signer.address)                       // account_based: the id is the user's address
@@ -184,10 +184,10 @@ A test provides only those services. A transport can implement a subset, and the
 
 ```ts
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
-SuiGrpc.layerCore({ baseUrl })                              // Chain, Objects, Coins, Packages, Transactions: all Tx.run needs
-DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl })))  // core + one more (layerCore also provides GrpcWeb)
-ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))  // just Objects
-SuiGrpc.layer({ baseUrl })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
+SuiGrpc.layerCore({ url })                              // Chain, Objects, Coins, Packages, Transactions: all Tx.run needs
+DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ url })))  // core + one more (layerCore also provides GrpcWeb)
+ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url })))  // just Objects
+SuiGrpc.layer({ url })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
 ```
 
 Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 28 KB of checkpoint, event and dynamic-field code that a transaction never calls.
@@ -297,7 +297,7 @@ import * as EvidenceGrpc from "@unconfirmed/sui-lifecycle/EvidenceGrpc"   // or 
 import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/sui-lifecycle"
 
 const layer = Layer.mergeAll(
-  EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),   // same backend (and GrpcWeb) as Transactions
+  EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ url }))),   // same backend (and GrpcWeb) as Transactions
   JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
 )
 yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
@@ -325,7 +325,7 @@ import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStor
 import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
 
 const browser = Layer.mergeAll(
-  EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),
+  EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ url }))),
   JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())),  // one connection per layer scope
   SenderLockWebLocks.layer                                                           // fails typed without navigator.locks
 )
@@ -436,6 +436,17 @@ import * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"
 ```
 
 The barrels (`import { Address } from "@unconfirmed/sui"`) exist for convenience. Only bundlers with deep scope analysis (Rolldown, Rollup, Webpack 5+; Bun in practice) shake them well. esbuild doesn't.
+
+## Conventions
+
+Every layer uses the same option names for the same thing. New packages should follow them.
+
+- **Endpoint: `url`.** A layer's main endpoint is `url`: a base URL that request paths are appended to, trailing slashes stripped (`GrpcWeb`, `SuiGrpc.layer`, `EnokiHttp`, Walrus `Aggregator` / `Publisher` / `UploadRelay`). Known endpoints are constants named `TESTNET_URL` / `MAINNET_URL`. One exception: `SuiGraphQL`'s `url` is the GraphQL endpoint itself. Queries are POSTed to it, and subscriptions go to `subscriptionUrl`, which defaults to `url` + `/subscriptions`.
+- **Timeouts: `requestTimeout?: Duration.Input`.** It applies to each request, body included, and failing it gives the layer's typed, retryable error. The default depends on the layer: 30 s for a full node, GraphQL, Enoki and storage nodes (15 s inside `Walrus.layer`), 10 s for Seal key servers, 60 s for the aggregator and the upload relay, and 5 min for the publisher. Server streams and subscriptions are never bounded.
+- **Retries: `retry?: Schedule.Schedule<unknown, E>`.** This is the schedule for another attempt. Which errors are retried is the operation's own decision (e.g. `StorageNode.retryable`). A generic combinator can't know which errors to retry, so it also takes `retryWhile?: (error: E) => boolean` (`Quorum`). A retry of one particular step gets a prefix (`CheckpointData.follow`'s `gapRetry`). The lifecycle's re-send of signed bytes is a policy (`SubmitConfig.resubmit`), not a per-call option.
+- **Headers: `headers?: Readonly<Record<string, string>>`.** These are sent with every request by each layer that has one configured endpoint (the layers above, plus `SuiGraphQL`). The layer's own headers (an API key, the content type) take precedence. Layers that fan out to many servers (storage nodes, Seal key servers) have no `headers` option, since a credential would reach every server. Seal sets `apiKeyName` / `apiKey` for each server instead.
+- **Tracer propagation: `tracerPropagation?: boolean`, default `false` everywhere.** Spans are recorded either way. The `traceparent` / `b3` headers are sent only on request, because browsers preflight them and providers with a strict CORS allow-list refuse them.
+- **Chain integers keep their width.** A u64 on chain (Sui epochs including `maxEpoch`, object versions, MIST amounts) is a `bigint` in the API, even where a wire format carries a JSON number. Smaller integers, such as Walrus epochs (u32), are `number`.
 
 ## What ships (`bun scripts/bundle-report.ts`)
 

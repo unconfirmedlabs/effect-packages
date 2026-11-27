@@ -37,8 +37,8 @@ const loadWith = (
   runSummary: boolean
 ): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> => {
   if (Config.isOnChain(p)) {
-    const baseUrl = p.url ?? Config.FULLNODES[p.network ?? "mainnet"]
-    return FromGrpc.load(p.id, { name: p.name }).pipe(Effect.provide(GrpcWeb.layer({ baseUrl })))
+    const url = p.url ?? Config.FULLNODES[p.network ?? "mainnet"]
+    return FromGrpc.load(p.id, { name: p.name }).pipe(Effect.provide(GrpcWeb.layer({ url })))
   }
   const path = resolve(dir, p.path)
   return Effect.andThen(

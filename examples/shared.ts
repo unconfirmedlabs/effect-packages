@@ -8,7 +8,7 @@ import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
 import type * as Signer from "@unconfirmed/sui/Signer"
 
 export declare const signer: Signer.Signer
-export declare const baseUrl: string
+export declare const url: string
 export declare const to: string
 export declare const recipe: Effect.Effect<void, never, PtbBuilder>
 export const SignatureSchemes = SignatureScheme.SignatureSchemes

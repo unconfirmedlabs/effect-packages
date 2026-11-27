@@ -1,15 +1,15 @@
 /**
  * `@unconfirmed/sui/grpc`: every capability over gRPC-web.
  *
- * - `layerCore({ baseUrl })`: Chain, Objects, Coins, Packages and Transactions,
+ * - `layerCore({ url })`: Chain, Objects, Coins, Packages and Transactions,
  *   everything `Tx.run` needs. Prefer it: a program ships only the RPCs it links.
- * - `layer({ baseUrl })`: all nine, adding Checkpoints, CheckpointData, Events and
+ * - `layer({ url })`: all nine, adding Checkpoints, CheckpointData, Events and
  *   DynamicFields (about 25 KB minified more).
  * - Or compose exactly what you use; each `*Grpc.layer` needs `GrpcWeb`, which
  *   `layerCore` also provides:
  *
- *     DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl })))
- *     Layer.mergeAll(ObjectsGrpc.layer, TransactionsGrpc.layer).pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))
+ *     DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ url })))
+ *     Layer.mergeAll(ObjectsGrpc.layer, TransactionsGrpc.layer).pipe(Layer.provide(GrpcWeb.layer({ url })))
  */
 import * as Layer from "effect/Layer"
 import type * as HttpClient from "effect/http/HttpClient"

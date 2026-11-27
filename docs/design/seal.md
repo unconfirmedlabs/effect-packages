@@ -645,7 +645,7 @@ Algorithm of `fetch`:
 2. Full ids are `session.packageId ‖ id` for each id of the approval, duplicates removed (H6).
 3. A server is *complete* when the session's cache holds its key for every full id. `cachedWeight` is the weight of complete servers. If `cachedWeight ≥ threshold`: return from the cache; no certificate, no request.
 4. `session.certificate` (one prompt at most), a fresh `ElGamal.generate`, `SessionKey.signRequest`. One request body serves every server.
-5. `Quorum.run` over the incomplete servers: `weight` as given, `threshold: threshold − cachedWeight`, unbounded concurrency, `schedule: retry`, `while: KeyServerApi.retryable`, and `giveUp: { when: KeyServerApi.definitive, weight: threshold, grace: denialGrace }` (§5). One member:
+5. `Quorum.run` over the incomplete servers: `weight` as given, `threshold: threshold − cachedWeight`, unbounded concurrency, `retry`, `retryWhile: KeyServerApi.retryable`, and `giveUp: { when: KeyServerApi.definitive, weight: threshold, grace: denialGrace }` (§5). One member:
    1. `KeyServers.get(objectId)`. A retryable `RpcError` is `KeyServerError "Unavailable"`; any other load failure, or a server with no `url`, is `"Unresolved"`.
    2. `KeyServerApi.fetchKey`.
    3. For each returned key: `ElGamal.decrypt`, `Bls` decoding (rejecting infinity), `Ibe.verifyUserSecretKey` against the server's public key. Any failure is `KeyServerError "InvalidKey"` for the whole server (item 9). Entries for ids we did not ask for are ignored.
@@ -737,7 +737,7 @@ export type DecryptError = FetchError | InvalidCiphertext | ApprovalMismatch | N
 `fetchKeys` groups the objects by their set of (server, shares) and threshold and runs `Keys.fetch` once per group with the whole approval. Each answer covers every id (H6), so after the first group the next ones usually find their servers complete in the cache.
 
 ```ts
-const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { baseUrl } })
+const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { url } })
   .pipe(Layer.provide(FetchHttpClient.layer))     // after review: only Objects + Packages, not SuiGrpc.layer
 
 const program = Effect.gen(function*() {
@@ -760,7 +760,7 @@ const program = Effect.gen(function*() {
 - **`decrypt` of an already-parsed object** re-applies `EncryptedObject.validate`. The consistency check loads each distinct server once (concurrently) and passes `Envelope.open` one public key per `services` entry, repeats included.
 - **`fetchKeys`** groups objects by `(threshold, askable servers with their weights)`, where the askable servers are those after the configuration filter of step 3, since that list is what `Keys.fetch` receives. It runs the groups one after another, so later groups find their servers complete in the cache. Every object is parsed and checked (`ApprovalMismatch`) before the first request.
 - `layer` is `KeyServer.layer` (or `layerVerified`) provided with, and merged with, `Config.layer(servers)` and `KeyServerApi.layer(api)`.
-- **After review.** `encrypt` runs the package check and the server loads concurrently, so with the batched `Objects.get` and the one-round `KeyServer.read` a cold `encrypt` is one round trip instead of three (SEAL-8). `encrypt({ servers })` accepts key server ids as `Config` does (`0x` optional) (SEAL-13). Spans: `Seal.encrypt`, `Seal.decrypt`, `Seal.fetchKeys`, `Seal.derivedKeys` and `KeyServer.read`, with counts and thresholds as attributes, never ids or keys; `withSpan` rather than `Effect.fn`, which would add bundle weight (SEAL-14). New module `SealGrpc`: `SealGrpc.layer({ ...SealOptions, grpc: { baseUrl } })` is `Seal.layer` with `ObjectsGrpc.layer` and `PackagesGrpc.layer` over `GrpcWeb`, the only chain capabilities Seal uses (`Packages` for `Approval.fromRecipe`); `SealGrpc.chain(options)` is those two alone. `SuiGrpc.layer` provides every capability and ships every RPC's codec (SEAL-2).
+- **After review.** `encrypt` runs the package check and the server loads concurrently, so with the batched `Objects.get` and the one-round `KeyServer.read` a cold `encrypt` is one round trip instead of three (SEAL-8). `encrypt({ servers })` accepts key server ids as `Config` does (`0x` optional) (SEAL-13). Spans: `Seal.encrypt`, `Seal.decrypt`, `Seal.fetchKeys`, `Seal.derivedKeys` and `KeyServer.read`, with counts and thresholds as attributes, never ids or keys; `withSpan` rather than `Effect.fn`, which would add bundle weight (SEAL-14). New module `SealGrpc`: `SealGrpc.layer({ ...SealOptions, grpc: { url } })` is `Seal.layer` with `ObjectsGrpc.layer` and `PackagesGrpc.layer` over `GrpcWeb`, the only chain capabilities Seal uses (`Packages` for `Approval.fromRecipe`); `SealGrpc.chain(options)` is those two alone. `SuiGrpc.layer` provides every capability and ships every RPC's codec (SEAL-2).
 
 ### 4.9 Errors
 
@@ -794,7 +794,7 @@ No error carries key material, a session secret or an API key. `ThresholdNotMet`
 
 ## 5. Quorum: what Seal uses, and the early stop
 
-`Keys.fetch` is `Quorum.run` with the server's weight, `threshold − cachedWeight`, a per-member schedule and `while`. Success on the crossing answer, interruption of the rest, fail-fast when the threshold is unreachable, and the full failure set all come from the package. Seal never sets `linger`, `order` or `concurrency` (the member count is at most 255 and in practice under ten).
+`Keys.fetch` is `Quorum.run` with the server's weight, `threshold − cachedWeight`, a per-member `retry` schedule and `retryWhile`. Success on the crossing answer, interruption of the rest, fail-fast when the threshold is unreachable, and the full failure set all come from the package. Seal never sets `linger`, `order` or `concurrency` (the member count is at most 255 and in practice under ten).
 
 **Does Seal need the early stop that Walrus reads had to build (`walrus.md` §4.5, "As built (W5)")? Yes, for low thresholds.** `Quorum.run` fails only when failed weight exceeds `total − threshold`. With `t` close to `n` (2 of 3, 3 of 5) that happens as soon as it matters. With `2t ≤ total` (1 of 3, 2 of 4) a user who is simply not allowed gets `NoAccess` from the healthy servers in half a second and then waits for the slowest server to fail for good: one 10 s timeout at best. Live today two of ten testnet servers behave exactly like that (§0.1).
 

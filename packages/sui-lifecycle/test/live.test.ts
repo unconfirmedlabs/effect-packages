@@ -31,7 +31,7 @@ const digestOf = (seed: string) => Hash.transactionDigest(new TextEncoder().enco
 
 const devnet = () =>
   EvidenceGrpc.layer.pipe(
-    Layer.provide(GrpcWeb.layer({ baseUrl: DEVNET })),
+    Layer.provide(GrpcWeb.layer({ url: DEVNET })),
     Layer.provideMerge(grpcLayer(DEVNET).layer),
     Layer.provideMerge(JournalKeyValueStore.layer().pipe(Layer.provideMerge(KeyValueStore.layerMemory)))
   )
@@ -99,7 +99,7 @@ suite("devnet", () => {
             const e = yield* Evidence.Evidence
             return yield* Effect.all([e.observe(effects.digest, 0n), e.observe(unknown, 0n)])
           }).pipe(Effect.provide(layer))
-        const grpc = yield* observe(EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl: DEVNET }).pipe(Layer.provide(FetchHttpClient.layer)))))
+        const grpc = yield* observe(EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url: DEVNET }).pipe(Layer.provide(FetchHttpClient.layer)))))
         // The indexer may trail the fullnode by a few seconds.
         const graphql = yield* observe(
           EvidenceGraphQL.layer.pipe(Layer.provide(SuiGraphQL.protocol({ url: SuiGraphQL.DEVNET }).pipe(Layer.provide(FetchHttpClient.layer))))

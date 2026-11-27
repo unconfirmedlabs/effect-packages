@@ -19,13 +19,13 @@ export const TESTNET = process.env.SUI_TESTNET_URL ?? "https://fullnode.testnet.
 export const DEVNET = process.env.SUI_DEVNET_URL ?? "https://fullnode.devnet.sui.io:443"
 
 /** All gRPC services (and `GrpcWeb`), with every HTTP request's method name recorded (to prove batching). */
-export const grpcLayer = (baseUrl: string) => {
+export const grpcLayer = (url: string) => {
   const requests: Array<string> = []
   const http = Layer.effect(
     HttpClient.HttpClient,
     Effect.map(Effect.service(HttpClient.HttpClient), HttpClient.tapRequest((req) => Effect.sync(() => requests.push(req.url.split("/").pop()!))))
   ).pipe(Layer.provide(FetchHttpClient.layer))
-  return { layer: SuiGrpc.layer({ baseUrl }).pipe(Layer.provideMerge(http)), requests }
+  return { layer: SuiGrpc.layer({ url }).pipe(Layer.provideMerge(http)), requests }
 }
 
 const FaucetResponse = Schema.Struct({

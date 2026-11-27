@@ -6,6 +6,7 @@
 import * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
+import * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
 import type { Event } from "./Events.ts"
@@ -57,13 +58,18 @@ export class CheckpointData extends /* @__PURE__ */ Context.Service<CheckpointDa
 }>()("@unconfirmed/sui/CheckpointData") {}
 
 export interface FollowOptions {
-  /** How often to re-list a gap the list index hasn't reached yet. Default 250 ms. */
-  readonly gapRetry?: Duration.Input
-  /** How many times, before failing with `CheckpointGap`. Default 120 (30 s at the default spacing). */
-  readonly gapAttempts?: number
+  /**
+   * When to re-list a gap the list index hasn't reached yet; once the schedule ends, the gap is a
+   * `CheckpointGap`. It restarts whenever a re-list makes progress. Default every 250 ms, 120 times (30 s).
+   */
+  readonly gapRetry?: Schedule.Schedule<unknown>
   /** Wait before reopening a subscription the server closed. Default 1 second. */
   readonly reconnectDelay?: Duration.Input
 }
+
+const defaultGapRetry: Schedule.Schedule<unknown> = /* @__PURE__ */ Schedule.spaced("250 millis").pipe(
+  /* @__PURE__ */ Schedule.upTo({ times: 120 })
+)
 
 /**
  * Every checkpoint from `start`, in order, forever: `list` until the tip, then
@@ -74,8 +80,7 @@ export interface FollowOptions {
 export const follow = (start: bigint, options?: FollowOptions): Stream.Stream<Checkpoint, RpcError | CheckpointGap, CheckpointData> =>
   Stream.unwrap(Effect.map(Effect.service(CheckpointData), (data) =>
     Stream.suspend(() => {
-      const retry = options?.gapRetry ?? "250 millis"
-      const attempts = options?.gapAttempts ?? 120
+      const gapRetry = options?.gapRetry ?? defaultGapRetry
       const reconnect = options?.reconnectDelay ?? "1 second"
       let next = start
       const emit = <E>(s: Stream.Stream<Checkpoint, E>) =>
@@ -83,19 +88,18 @@ export const follow = (start: bigint, options?: FollowOptions): Stream.Stream<Ch
           Stream.filter((c) => c.sequenceNumber >= next),
           Stream.tap((c) => Effect.sync(() => (next = c.sequenceNumber + 1n)))
         )
-      // The list index may trail the subscription: retry, boundedly, until the gap is closed.
-      const fill = (end: bigint, attempt: number): Stream.Stream<Checkpoint, RpcError | CheckpointGap> =>
-        Stream.suspend(() => {
-          if (next >= end) return Stream.empty
-          if (attempt > attempts) return Stream.fail(new CheckpointGap({ from: next, to: end }))
-          return Stream.concat(
-            attempt === 0 ? Stream.empty : Stream.fromEffectDrain(Effect.sleep(retry)),
-            Stream.concat(emit(data.list({ start: next, end })), fill(end, attempt + 1))
+      // The list index may trail the subscription: re-list from `next`, boundedly, until the gap is closed.
+      // Only `CheckpointGap` is retried; an `RpcError` from `list` ends the stream at once.
+      const fill = (end: bigint): Stream.Stream<Checkpoint, RpcError | CheckpointGap> =>
+        Stream.suspend(() =>
+          next >= end ? Stream.empty : Stream.concat(
+            emit(data.list({ start: next, end })),
+            Stream.suspend(() => (next >= end ? Stream.empty : Stream.fail(new CheckpointGap({ from: next, to: end }))))
           )
-        })
+        ).pipe(Stream.retry(Schedule.while(gapRetry, ({ input }) => input instanceof CheckpointGap)))
       const live = (): Stream.Stream<Checkpoint, RpcError | CheckpointGap> =>
         Stream.concat(
-          data.subscribe.pipe(Stream.flatMap((c) => Stream.concat(fill(c.sequenceNumber, 0), emit(Stream.make(c))))),
+          data.subscribe.pipe(Stream.flatMap((c) => Stream.concat(fill(c.sequenceNumber), emit(Stream.make(c))))),
           Stream.suspend(() => Stream.concat(Stream.fromEffectDrain(Effect.sleep(reconnect)), live()))
         )
       return Stream.concat(emit(data.list({ start })), live())

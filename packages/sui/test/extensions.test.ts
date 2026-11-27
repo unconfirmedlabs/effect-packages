@@ -124,7 +124,7 @@ describe("Transactions.waitFor", () => {
       Effect.suspend(() => ++calls < 3 ? Effect.fail(new Transactions.TransactionNotFound({ digest })) : Effect.succeed(effects))
     )
     const r = await Effect.runPromise(
-      Transactions.waitFor("D", { schedule: Schedule.spaced("10 millis"), timeout: "5 seconds" }).pipe(Effect.provideService(Transactions.Transactions, svc))
+      Transactions.waitFor("D", { retry: Schedule.spaced("10 millis"), timeout: "5 seconds" }).pipe(Effect.provideService(Transactions.Transactions, svc))
     )
     expect(r.digest).toBe("D")
     expect(calls).toBe(3)

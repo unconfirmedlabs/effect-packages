@@ -57,7 +57,7 @@ const http = Layer.effect(
       })))
 ).pipe(Layer.provide(FetchHttpClient.layer))
 
-const chain = SuiGrpc.layer({ baseUrl: FULLNODE })
+const chain = SuiGrpc.layer({ url: FULLNODE })
 const layer = Seal.layer({ servers: SERVERS }).pipe(Layer.provideMerge(chain), Layer.provideMerge(http))
 type Services = Layer.Success<typeof layer>
 const runLive = <A, E>(effect: Effect.Effect<A, E, Services>) => Effect.runPromise(Effect.provide(effect, layer))

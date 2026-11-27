@@ -64,7 +64,7 @@ const loadSigner = loadCliSigner
 // -----------------------------------------------------------------------------
 
 const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(
-  Layer.provideMerge(SuiGrpc.layer({ baseUrl: FULLNODE })),
+  Layer.provideMerge(SuiGrpc.layer({ url: FULLNODE })),
   Layer.provideMerge(FetchHttpClient.layer)
 )
 type Services = Layer.Success<typeof layer>

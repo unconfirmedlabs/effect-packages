@@ -44,9 +44,9 @@ interface Common<M, A, E, R> {
   /** One attempt at one member. Typed failures count against the member; defects do not (§3.6). */
   readonly run: (member: M) => Effect.Effect<A, E, R>
   /** Per-member retry policy. Absent: one attempt. */
-  readonly schedule?: Schedule.Schedule<unknown, E>
+  readonly retry?: Schedule.Schedule<unknown, E>
   /** Retry only these errors (default: all). A `false` makes the failure final at once. */
-  readonly while?: (error: E) => boolean
+  readonly retryWhile?: (error: E) => boolean
   /** Attempts in flight at once. Default `"unbounded"`. */
   readonly concurrency?: number | "unbounded" | ((progress: Progress) => number)   // a function: asked when a slot may open (as built)
   /** Start order. Default `"given"`. */
@@ -185,8 +185,8 @@ const { successes } = yield* Quorum.run(committee.nodes, {
   weight: (node) => node.shards.length,
   threshold: nShards - maxFaulty,
   run: (node) => storeAndConfirm(node),                       // Effect<Confirmation, NodeError, StorageNodes>
-  schedule: nodeRetry,                                        // a capped backoff, e.g. built from Schedule.exponential
-  while: (e) => e.retryable,
+  retry: nodeRetry,                                           // a capped backoff, e.g. built from Schedule.exponential
+  retryWhile: (e) => e.retryable,
   linger: (elapsed) => Duration.sum(Duration.times(elapsed, 0.5), Duration.millis(500))
 }).pipe(Effect.catchTag("QuorumFailed", (e) => Effect.fail(notEnoughConfirmations(e))))
 
@@ -241,12 +241,12 @@ Defects from validation are `Cause.IllegalArgumentError`s whose message starts w
 ### 3.2 Running
 
 - Members start in `order`, at most `concurrency` in flight. A member's slot covers its whole retried attempt, including the time it sleeps between retries.
-- A member's attempt is `run(m)` retried with `Effect.retry({ schedule, while })`. When it finally fails, the member is recorded in `failures` with its last error and never runs again.
+- A member's attempt is `run(m)` retried with `Effect.retry({ schedule: retry, while: retryWhile })`. When it finally fails, the member is recorded in `failures` with its last error and never runs again.
 - **Success** is checked on every member success: `reached >= threshold`. The check happens on the success that crosses the line, not on the next one (the off-by-one in `walrus/dist/client.mjs:286-291` and `:337-346`).
 - **Fail fast** is checked on every final failure: `reached + remaining < threshold`. All outstanding attempts are interrupted and `QuorumFailed` (`reason: "unreachable"`) is returned at once, without waiting for members that cannot change the answer.
 - The success check runs before the failure check, so a run in which the last member to settle reaches the threshold succeeds (the bug in `walrus/dist/client.mjs:355-358`).
 - **Give up** (`giveUp`, `run` only) is checked on every final failure, after the success and fail-fast checks: when the weight of final failures for which `when(error, member)` holds reaches `weight`. Retries do not count until the member's schedule is exhausted or `while` says no; `when` is called once per final failure. Without `grace` (or with a zero grace) the call fails at once with `QuorumFailed` (`reason: "gaveUp"`). With `grace`, the run continues exactly as before (in-flight members keep going, queued members still start) for that long, measured with `Clock` from the moment of giving up; the threshold reached in the window is a success (linger does not apply to it); the window ends early, still as `gaveUp`, when every member has settled or the threshold becomes unreachable; when it runs out the rest are interrupted and the call fails with `gaveUp`. "Unreachable" wins when it fires on the same failure or earlier. The use case is failures that judge the request rather than the member (Walrus: not found / blocked at `2f + 1`; Seal: access denied at weight `t`), where a low threshold would otherwise wait for every slow member to fail.
-- `while` only matters together with `schedule`; without a schedule every member gets one attempt.
+- `retryWhile` only matters together with `retry`; without `retry` every member gets one attempt.
 - Result lists: `successes` and `failures` are in completion order, `unsettled` in input (`index`) order.
 - When the run ends, every attempt still in flight is interrupted, and `run` returns only after those interruptions have completed (their finalizers have run). No fiber outlives the call.
 
@@ -331,7 +331,7 @@ All offline, `bun:test`, driven by `TestClock` (`import { TestClock } from "effe
 3. The last member to settle reaches the threshold: success, not failure. (Regression for `client.mjs:355-358`.)
 4. Fails fast: weights `[3, 3, 3, 1]`, threshold 7, two weight-3 members fail at 1 s, the others take 10 s. `QuorumFailed` (`unreachable`) at 1 s; the others are interrupted.
 5. Weights: one heavy member reaches the threshold alone; many light ones are needed otherwise.
-6. Retry: a member fails twice and then succeeds under `Schedule.spaced("1 second")` (success at 2 s plus its own delays); `while` returning `false` ends it after one attempt; an exhausted schedule records the last error; attempts are counted.
+6. Retry: a member fails twice and then succeeds under `Schedule.spaced("1 second")` (success at 2 s plus its own delays); `retryWhile` returning `false` ends it after one attempt; an exhausted schedule records the last error; attempts are counted.
 7. Concurrency: with `concurrency: 2` no more than two are ever in flight, members start in order, and a retrying member keeps its slot.
 8. Linger: threshold reached at 2 s, `linger: (e) => 0.5e + 500 ms` gives 1.5 s; a member finishing at 3 s is in `successes`, one finishing at 5 s is interrupted at 3.5 s; the call returns at 3.5 s. A second case where everything settles at 2.5 s returns at 2.5 s.
 9. Edge table from §3.1: empty list with threshold 0 (success) and 1 (`insufficientWeight`, `run` never called); threshold above total; zero-weight member never run; negative and `NaN` weight die; duplicates both count; invalid `concurrency` dies.
@@ -356,7 +356,7 @@ All offline, `bun:test`, driven by `TestClock` (`import { TestClock } from "effe
 
 20. Fails at once without grace when matching failures reach the weight (and a zero grace is no grace); non-matching failures do not count; a retrying member counts only when final (`when` called once); with grace, a threshold reached inside the window succeeds, and the window keeps starting queued members; the window ends in `gaveUp` at the exact time; it ends early as `gaveUp` once the threshold is unreachable; "unreachable" still wins when it comes first; invalid `weight` or `grace` dies before anything runs.
 
-Type tests (in `run.test.ts`, compile-time only): the error channel is `QuorumFailed<M, A, E>` and `R` is the members' `R`; a `schedule` whose input is not `E` does not compile.
+Type tests (in `run.test.ts`, compile-time only): the error channel is `QuorumFailed<M, A, E>` and `R` is the members' `R`; a `retry` schedule whose input is not `E` does not compile.
 
 Bundle: add a program to `scripts/bundle-report.ts` (`Quorum.run` over three `Effect.succeed` members) and record Bun / esbuild / Rolldown sizes next to the "Effect baseline" row. Expectation: under 3 KB minified on top of `Effect`, and no `Schema` in the output.
 

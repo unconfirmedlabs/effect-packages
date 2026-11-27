@@ -295,7 +295,7 @@ describe("pruned gRPC handles", () => {
   })
 
   test("layerCore provides the transaction services and GrpcWeb, and composes with more services", () => {
-    const stacked = SuiGrpc.DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl: "https://example.invalid" })))
+    const stacked = SuiGrpc.DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ url: "https://example.invalid" })))
     const program = Effect.gen(function*() {
       yield* Chain
       yield* Objects
@@ -311,7 +311,7 @@ describe("pruned gRPC handles", () => {
   })
 
   test("SuiGrpc.layer also provides its GrpcWeb (X-8)", async () => {
-    const layer = SuiGrpc.layer({ baseUrl: "https://example.invalid" }).pipe(Layer.provide(FetchHttpClient.layer))
+    const layer = SuiGrpc.layer({ url: "https://example.invalid" }).pipe(Layer.provide(FetchHttpClient.layer))
     // EvidenceGrpc / ZkLoginVerifierGrpc / Rpc escape hatches need GrpcWeb: no second transport.
     const found = await Effect.runPromise(Effect.gen(function*() {
       yield* Chain

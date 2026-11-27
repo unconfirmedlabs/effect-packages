@@ -3,7 +3,7 @@
  * in the registry and a `Signer` that wraps any ephemeral `Signer`.
  *
  *   SignatureSchemes.layer(Ed25519.scheme, ZkLogin.scheme, MultiSig.scheme)
- *     .pipe(Layer.provide(ZkLoginVerifierGrpc.layer), Layer.provide(GrpcWeb.layer({ baseUrl })))
+ *     .pipe(Layer.provide(ZkLoginVerifierGrpc.layer), Layer.provide(GrpcWeb.layer({ url })))
  *
  *   const signer = yield* ZkLogin.signer({ ephemeral, inputs, maxEpoch })
  *   yield* Tx.run(recipe, { signer })
@@ -97,8 +97,8 @@ export interface SignerOptions {
   readonly ephemeral: Signer.Signer
   /** The proof inputs from the prover (or Enoki), including `addressSeed`. */
   readonly inputs: Signature.ZkLoginSignatureInputs
-  /** The `maxEpoch` the nonce, and so the proof, was made for. */
-  readonly maxEpoch: bigint | number | string
+  /** The `maxEpoch` the nonce, and so the proof, was made for (a u64). */
+  readonly maxEpoch: bigint
   /** The account uses the legacy (unpadded-seed) address. Default `false`. */
   readonly legacyAddress?: boolean
   /** The address you expect; a mismatch (e.g. a wrong `legacyAddress`) is refused. */

@@ -336,8 +336,8 @@ export const fetch = (
         weight: (m) => m.weight,
         threshold: threshold - cachedWeight,
         run: ask,
-        schedule: options.retry ?? defaultRetry(),
-        while: retryableMember,
+        retry: options.retry ?? defaultRetry(),
+        retryWhile: retryableMember,
         giveUp: { when: KeyServerApi.definitive, weight: threshold, grace }
       })
     )
