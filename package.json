@@ -38,6 +38,8 @@
     "@unconfirmed/sui-zklogin": "workspace:*",
     "@unconfirmed/test-support": "workspace:*",
     "@unconfirmed/walrus": "workspace:*",
+    "@unconfirmed/walrus-wasm": "workspace:*",
+    "binaryen": "132.0.0",
     "effect": "4.1.6",
     "esbuild": "0.28.2",
     "rolldown": "1.3.4",

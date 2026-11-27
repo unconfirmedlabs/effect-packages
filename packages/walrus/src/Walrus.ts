@@ -12,8 +12,8 @@
  * Writes through the upload relay also need `UploadRelay.layer`; gateways
  * (`Aggregator`, `Publisher`) have their own layers and need none of this.
  * Building this layer loads the WASM (`Encoder`); see `Encoder.ts` for what
- * bundled apps must do (`wasmUrl` in browsers built with esbuild, Rolldown or
- * Bun).
+ * bundled apps must do (`wasmUrl` and `wasmFallbackUrl` in browsers built
+ * with esbuild, Rolldown or Bun).
  */
 import type * as Objects from "@unconfirmed/sui/Objects"
 import type * as Packages from "@unconfirmed/sui/Packages"
@@ -30,8 +30,10 @@ import * as StorageNode from "./StorageNode.ts"
 import * as System from "./System.ts"
 
 interface CommonOptions {
-  /** Where the web build's `walrus_wasm_bg.wasm` is served (browsers bundled with esbuild, Rolldown or Bun). Ignored on Bun and Node. */
+  /** Where the SIMD web build `walrus_wasm_bg.wasm` is served (browsers bundled with esbuild, Rolldown or Bun). Ignored on Bun and Node. */
   readonly wasmUrl?: string | URL
+  /** Where the scalar web build `walrus_wasm_nosimd_bg.wasm` is served, for browsers without WebAssembly SIMD. Ignored on Bun and Node. */
+  readonly wasmFallbackUrl?: string | URL
   /** Storage-node requests. `requestTimeout` defaults to 15 seconds here (`StorageNode.layer`'s own default is 30). */
   readonly nodes?: StorageNode.StorageNodesOptions
   readonly committees?: { readonly scheme?: "https" | "http"; readonly ttl?: Duration.Input }
@@ -62,6 +64,9 @@ export const layer = (
     System.layer,
     Committee.layer(options.committees),
     StorageNode.layer({ ...options.nodes, requestTimeout: options.nodes?.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT }),
-    Encoder.layer(options.wasmUrl === undefined ? undefined : { wasmUrl: options.wasmUrl })
+    Encoder.layer({
+      ...(options.wasmUrl === undefined ? {} : { wasmUrl: options.wasmUrl }),
+      ...(options.wasmFallbackUrl === undefined ? {} : { wasmFallbackUrl: options.wasmFallbackUrl })
+    })
   ).pipe(Layer.provideMerge(Config.layer(config)))
 }

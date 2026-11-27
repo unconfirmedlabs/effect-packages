@@ -22,7 +22,8 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app`, `@scure/base` (+ types from `@wallet-standard/base`) |
 | `@unconfirmed/quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order, an optional linger window and an optional early give-up. Knows nothing about Sui; used by Walrus and Seal | — |
 | `@unconfirmed/sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/bcs` and `@unconfirmed/sui` (runtime: `@unconfirmed/sui/Move`) | — (dev-time) |
-| `@unconfirmed/walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@mysten/walrus-wasm`, loaded on first use | `@mysten/walrus-wasm`, `@noble/hashes` |
+| `@unconfirmed/walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@unconfirmed/walrus-wasm`, loaded on first use | `@noble/hashes` |
+| `@unconfirmed/walrus-wasm` | Our WebAssembly build of `walrus-core` 1.62.0 with SIMD: RS2 encode/decode, direct per-sliver Merkle roots, BLS12-381; byte-identical to `@mysten/walrus-wasm` 0.3.1 and about 5× faster. Built artifacts committed; `bun run build` reproduces them | — |
 | `@unconfirmed/seal` | Seal: threshold identity-based encryption to key servers registered on Sui (independent and committee), session keys (key or wallet signer, one prompt), `seal_approve` approvals, key fetching over `Quorum` with every key verified, decryption. The crypto core (BLS12-381, Shamir, KDF, DEMs, the encrypted object) is pure and usable offline | `@noble/curves`, `@noble/hashes`, `@scure/base` |
 
 ### Passkeys
@@ -124,14 +125,25 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
   A patch read fetches only that file's columns, each from the node holding its shard, and verifies them together (one WASM call; `byIdentifier` verifies the index and the patch together in one) before returning anything; any missing or mismatching column falls back to `Read.blob`. `@mysten/walrus` trusts one node's unverified sliver here. `verify: false` skips the check.
 - Every failure is a typed `Schema.TaggedError` (`BlobNotFound`, `NotEnoughSlivers`, `NotEnoughConfirmations`, `EncoderError`, ...). Nothing a node, gateway or the WASM throws escapes as a defect. (`Walrus.layer` called without `network` or `config`, which TypeScript rejects, is a defect rather than a silent testnet.)
 
-**The WASM.** Erasure coding and BLS run in `@mysten/walrus-wasm`. Each call takes about 2.5 s at testnet's 1000 shards, synchronously, whatever the blob size up to a few MB: a read costs two calls, a write one. A read yields to the event loop between its calls, so the thread stalls for one call at a time (2.6 s, not 4.9 s); a worker-backed encoder is not available yet. The module is imported only when an `Encoder` layer is built, so importing the package costs nothing until then. How to load it depends on the runtime:
+**The WASM.** Erasure coding, sliver verification and BLS run in `@unconfirmed/walrus-wasm` (`packages/walrus-wasm`): `walrus-core` 1.62.0 compiled with WebAssembly SIMD, plus SIMD BLAKE2b for the Merkle trees and a SIMD Reed-Solomon engine. It produces the same bytes as `@mysten/walrus-wasm` 0.3.1 (the parity tests compare blob ids, metadata, every sliver and decoded blobs). Calls are synchronous; at testnet's 1000 shards (Bun 1.4.4, x64, blob sizes 1 KB to 10 MB):
+
+| Call at `n = 1000` | `@unconfirmed/walrus-wasm` | `@mysten/walrus-wasm` 0.3.1 |
+|---|---|---|
+| encode | 0.50–0.54 s | 2.57–2.62 s |
+| blob id (`compute_metadata`) | 0.49–0.50 s | 2.55 s |
+| decode from repair slivers | 0.57 s | 2.32 s |
+| decode from systematic slivers | 9–15 ms | 12–15 ms |
+| roots of 334 slivers (a read's blame pass) | 0.11 s | 2.6 s (crafted-blob re-encode) |
+| BLS: verify an aggregate of 667 | 12 ms | 29 ms |
+
+Node, `n = 10` and `100`, and the sizes are in `packages/walrus-wasm/README.md` (`bun packages/walrus/scripts/bench-wasm.ts`). A read costs two calls, a write one; a read yields to the event loop between its calls. The module is imported only when an `Encoder` layer is built, so importing the package costs nothing until then. How to load it depends on the runtime:
 
 | Runtime | What to do |
 |---|---|
 | Bun, Node (unbundled) | Nothing. |
-| Server bundle | Keep `@mysten/walrus-wasm` external (`--external @mysten/walrus-wasm`). A Bun bundle that inlines it works only on the machine that built it, and esbuild's ESM output fails (no `__dirname`). |
-| Browser, Vite / webpack 5 | Nothing (they emit the `.wasm`), or pass `wasmUrl` from `import wasmUrl from "@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url"` (Vite). |
-| Browser, esbuild / Rolldown / Bun | Serve `node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm` (349 KB) and pass its URL: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm" })` (or `Encoder.layer({ wasmUrl })`). |
+| Server bundle | Keep `@unconfirmed/walrus-wasm` external (`--external @unconfirmed/walrus-wasm`). A Bun bundle that inlines it works only on the machine that built it, and esbuild's ESM output fails (no `__dirname`). |
+| Browser, Vite / webpack 5 | Nothing (they emit both `.wasm` builds; one is fetched), or pass `wasmUrl` / `wasmFallbackUrl` from `import wasmUrl from "@unconfirmed/walrus-wasm/web/walrus_wasm_bg.wasm?url"` and `…/web/walrus_wasm_nosimd_bg.wasm?url` (Vite). |
+| Browser, esbuild / Rolldown / Bun | Serve `packages/walrus-wasm/web/walrus_wasm_bg.wasm` (261 KB, 98 KB gzip) and, for engines without WebAssembly SIMD, `walrus_wasm_nosimd_bg.wasm` (248 KB), and pass their URLs: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm", wasmFallbackUrl: "/walrus_wasm_nosimd_bg.wasm" })` (or `Encoder.layer({ … })`). The fallback is picked with `WebAssembly.validate`; every current browser takes the SIMD build. |
 
 **Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That uses the Sui CLI's active address (`~/.sui/sui_config`): direct, resumed and relay writes of 32-byte blobs and one 445 KB quilt, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
 
@@ -471,9 +483,9 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | One generated call (Walrus `blob.burn`) | 82 / 28 | 85 / 29 | 79 / 27 | — |
 | Walrus: read via the aggregator | 139 / 47 | 139 / 47 | 133 / 45 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
-| Walrus: read a blob from the nodes | 342 / 107 | 337 / 107 | 333 / 103 | 401 / 110 (`readBlob`) |
-| Walrus: write a blob through the nodes | 418 / 134 | 412 / 134 | 405 / 127 | 446 / 127 (`writeBlob`) |
-| Walrus: write a blob through the relay | 423 / 136 | 417 / 136 | 410 / 129 | — |
+| Walrus: read a blob from the nodes | 341 / 107 | 335 / 106 | 332 / 102 | 401 / 110 (`readBlob`) |
+| Walrus: write a blob through the nodes | 417 / 134 | 411 / 134 | 403 / 127 | 446 / 127 (`writeBlob`) |
+| Walrus: write a blob through the relay | 422 / 136 | 416 / 135 | 409 / 129 | — |
 | Seal: parse an encrypted object | 91 / 31 | 89 / 31 | 93 / 31 | — |
 | Seal: encrypt with pinned keys (`Envelope.seal`) | 176 / 63 | 175 / 63 | 177 / 62 | — |
 | Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 386 / 135 | 381 / 135 | 375 / 129 | 460 / 135 (`SealClient` + `SuiGrpcClient`) |
@@ -482,7 +494,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | zkLogin: `ZkLogin.signer` | 139 / 49 | 138 / 49 | 140 / 49 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
-- **Walrus.** JS only. Programs that read or write from the nodes also fetch the 349 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
+- **Walrus.** JS only, our WASM glue included. Programs that read or write from the nodes also fetch one WASM asset, which no bundler counts: ours is 261 KB / 98 KB gzip (SIMD build; the scalar fallback is 248 KB), `@mysten/walrus`'s 349 KB / 182 KB gzip. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
 - **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 86 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (5 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 58 KB, the RPCs of the services Seal doesn't use.
 - **With barrel imports in the app,** esbuild grows by 4–84 KB per program (24–60 KB for most; `--named`); before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
