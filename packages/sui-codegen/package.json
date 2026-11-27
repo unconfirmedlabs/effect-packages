@@ -1,0 +1,19 @@
+{
+  "name": "@unconfirmed/sui-codegen",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "sui-codegen": "./src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@unconfirmed/bcs": "workspace:*",
+    "@unconfirmed/sui": "workspace:*",
+    "effect": "4.1.6"
+  }
+}
