@@ -329,3 +329,40 @@ describe("SignatureScheme (review 12, 15)", () => {
     expect(e._tag).toBe("InvalidSignature")
   })
 })
+
+describe("Packages.getFunction type arguments", () => {
+  test("a closed generic datatype carries its type arguments; an open one does not", async () => {
+    const WAL = `${A("0xa1")}::wal::WAL`
+    const coin = (args: ReadonlyArray<object>) => ({ type: 10, type_name: `${A("0x2")}::coin::Coin`, type_parameter_instantiation: args })
+    const g = fakeGrpc({
+      unary: () =>
+        Effect.succeed({
+          function: {
+            parameters: [
+              { reference: 2, body: coin([{ type: 10, type_name: WAL }]) },
+              { reference: 0, body: coin([{ type: 11, type_parameter: 0 }]) },
+              {
+                body: {
+                  type: 10,
+                  type_name: `${A("0x2")}::vec_map::VecMap`,
+                  type_parameter_instantiation: [{ type: 1 }, { type: 9, type_parameter_instantiation: [{ type: 4 }] }]
+                }
+              },
+              { body: { type: 6 } }
+            ]
+          }
+        })
+    })
+    const f = await Effect.runPromise(
+      Effect.flatMap(Effect.service(Packages.Packages), (p) => p.getFunction({ package: A("0x2"), module: "m", function: "f" })).pipe(
+        Effect.provide(PackagesGrpc.layer.pipe(Layer.provide(g.layer)))
+      )
+    )
+    expect(f.parameters).toEqual([
+      { reference: "Mutable", typeName: `${A("0x2")}::coin::Coin`, typeArguments: [WAL] },
+      { reference: "Value", typeName: `${A("0x2")}::coin::Coin` },
+      { reference: "Value", typeName: `${A("0x2")}::vec_map::VecMap`, typeArguments: ["address", "vector<u16>"] },
+      { reference: "Value", typeName: undefined }
+    ])
+  })
+})

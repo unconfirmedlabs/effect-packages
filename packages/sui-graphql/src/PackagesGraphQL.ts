@@ -49,12 +49,41 @@ export const GetMoveFunction = GraphQL.query("GetMoveFunction", {
 
 export const group = GraphQLGroup.make(GetMoveFunction)
 
-const parameter = (s: typeof Signature.Type): Packages.Parameter => ({
-  reference: s.ref === "&" ? "Immutable" : s.ref === "&mut" ? "Mutable" : "Value",
-  typeName: isDatatype(s.body)
-    ? `${Address.normalize(s.body.datatype.package)}::${s.body.datatype.module}::${s.body.datatype.type}`
-    : undefined
-})
+const PRIMITIVES = new Set(["address", "bool", "u8", "u16", "u32", "u64", "u128", "u256"])
+
+/** A closed signature body as a type string; `undefined` if it mentions a type parameter (or is not understood). */
+const typeString = (body: unknown): string | undefined => {
+  if (typeof body === "string") return PRIMITIVES.has(body) ? body : undefined
+  if (typeof body !== "object" || body === null) return undefined
+  if ("vector" in body) {
+    const item = typeString((body as { vector: unknown }).vector)
+    return item === undefined ? undefined : `vector<${item}>`
+  }
+  if (!isDatatype(body)) return undefined
+  const d = body.datatype
+  const name = `${Address.normalize(d.package)}::${d.module}::${d.type}`
+  const args = typeArgumentsOf(body)
+  return args === undefined ? undefined : args.length === 0 ? name : `${name}<${args.join(", ")}>`
+}
+
+const typeArgumentsOf = (body: typeof Datatype.Type): ReadonlyArray<string> | undefined => {
+  const raw = (body.datatype as { typeParameters?: unknown }).typeParameters
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) return undefined
+  const args = raw.map(typeString)
+  return args.every((a) => a !== undefined) ? args as Array<string> : undefined
+}
+
+const parameter = (s: typeof Signature.Type): Packages.Parameter => {
+  const out: Packages.Parameter = {
+    reference: s.ref === "&" ? "Immutable" : s.ref === "&mut" ? "Mutable" : "Value",
+    typeName: isDatatype(s.body)
+      ? `${Address.normalize(s.body.datatype.package)}::${s.body.datatype.module}::${s.body.datatype.type}`
+      : undefined
+  }
+  const typeArguments = isDatatype(s.body) ? typeArgumentsOf(s.body) : undefined
+  return typeArguments === undefined || typeArguments.length === 0 ? out : { ...out, typeArguments }
+}
 
 /**
  * `Packages` over GraphQL. Function signatures are immutable, so successful
