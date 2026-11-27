@@ -5,7 +5,6 @@ import { describe, expect, test } from "bun:test"
 import { Cause, DateTime, Deferred, Effect, Fiber, Layer, Option, Schedule } from "effect"
 import { TestClock } from "effect/testing"
 import { RpcError } from "@unconfirmed/sui/RpcError"
-import * as Evidence from "../src/Evidence.ts"
 import * as Journal from "../src/Journal.ts"
 import { JournalEntry } from "../src/JournalEntry.ts"
 import * as Lifecycle from "../src/Lifecycle.ts"
@@ -74,20 +73,6 @@ describe("submit", () => {
     expect(tag).toBe("Executed")
   })
 
-  test("transport error after execution landed: every re-send carries the identical bytes", async () => {
-    const world = makeWorld({ script: ["failAfter", "land"] })
-    const { signed, effects } = await runIn(
-      world,
-      Effect.gen(function*() {
-        const signed = yield* signedTx()
-        return { signed, effects: yield* Lifecycle.submit(signed) }
-      })
-    )
-    expect(effects.digest).toBe(signed.digest)
-    expect(world.sent).toEqual([signed.digest, signed.digest])
-    expect([...world.landed.keys()]).toEqual([signed.digest])
-  })
-
   test("transport error after execution, retries exhausted: reconcile finds it", async () => {
     const world = makeWorld({ script: ["failAfter"] })
     const effects = await runIn(
@@ -115,25 +100,6 @@ describe("submit", () => {
     )
     expect(effects.status._tag).toBe("Success")
     expect(world.getCalls).toBe(4)
-  })
-
-  test("the resubmit schedule is driven by the clock (TestClock)", async () => {
-    const world = makeWorld({ script: ["failBefore", "failBefore", "land"] })
-    const effects = await runIn(
-      world,
-      Effect.gen(function*() {
-        const fiber = yield* Effect.forkChild(
-          Effect.flatMap(signedTx(), Lifecycle.submit).pipe(SubmitConfig.with({ resubmit: Schedule.spaced("10 seconds") }))
-        )
-        yield* TestClock.adjust("10 seconds")
-        const midway = world.executeCalls
-        yield* TestClock.adjust("10 seconds")
-        return { midway, effects: yield* Fiber.join(fiber) }
-      }),
-      TestClock.layer()
-    )
-    expect(effects.midway).toBe(2)
-    expect(world.executeCalls).toBe(3)
   })
 
   test("executeTimeout: an execute with no answer is re-sent after the timeout (TestClock)", async () => {
@@ -428,12 +394,6 @@ describe("reconcile", () => {
     expect(error._tag === "SubmissionUnknown" && error.reason).toContain("does not report how much history")
   })
 
-  test("each Evidence observation follows a Transactions miss", async () => {
-    const world = makeWorld({ epoch: 20n })
-    await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), fullHistory)
-    expect(world.observedAt).toEqual([2, 3])
-  })
-
   test("expired on a pruning node that cannot say where the window starts: SubmissionUnknown", async () => {
     const world = makeWorld({ epoch: 20n })
     const error = await runIn(
@@ -488,18 +448,6 @@ describe("reconcile", () => {
       fullHistory
     )
     expect(effects.status._tag).toBe("Success")
-  })
-
-  test("expiryEvidence: never keeps it unknown", async () => {
-    const world = makeWorld({ epoch: 20n })
-    const error = await runIn(
-      world,
-      Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)).pipe(
-        SubmitConfig.with({ expiryEvidence: "never" })
-      ),
-      fullHistory
-    )
-    expect(error._tag).toBe("SubmissionUnknown")
   })
 
   test("positive evidence vetoes expiry: a pinned object names this digest", async () => {

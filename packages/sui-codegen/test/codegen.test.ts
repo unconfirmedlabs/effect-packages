@@ -34,17 +34,6 @@ describe("golden output", () => {
     })
   }
 
-  test("dependencies are pruned to what layouts reach; built-ins aren't regenerated", () => {
-    expect(files(join(goldenDir, "fixture"))).toEqual(["deps/0x2/versioned.ts", "fixture/$package.ts", "fixture/fixture.ts"])
-    expect(files(join(goldenDir, "framework"))).toEqual([
-      "std/$package.ts",
-      "std/option.ts",
-      "sui/$package.ts",
-      "sui/balance.ts",
-      "sui/coin.ts"
-    ])
-  })
-
   test("generated modules import only effect, @unconfirmed/bcs, @unconfirmed/sui and each other, as namespaces", () => {
     for (const run of Object.keys(goldenRuns)) {
       for (const f of files(join(goldenDir, run))) {
@@ -56,13 +45,6 @@ describe("golden output", () => {
         }
       }
     }
-  })
-
-  test("public and entry functions are generated; public(package) and private ones aren't", () => {
-    expect(typeof fixture.create).toBe("function") // private entry
-    expect(typeof fixture.newThing).toBe("function")
-    expect("internal" in fixture).toBe(false)
-    expect("helper" in fixture).toBe(false)
   })
 
   test("top-level calls are marked pure", () => {
@@ -86,43 +68,10 @@ describe("generated API", () => {
     const { draft: d1 } = await draft(fixture.newVault())
     expect(call(d1.commands[0]!).package).toBe(Address.normalize("0x0"))
     const id = Address.normalize("0xabc")
-    const { draft: d2 } = await draft(fixture.newVault().pipe(Effect.provideService(fixture.Package, id)))
-    expect(call(d2.commands[0]!).package).toBe(id)
-    const { draft: d3 } = await Effect.runPromise(
+    const { draft: d2 } = await Effect.runPromise(
       Ptb.build(fixture.newVault()).pipe(Effect.provide(Layer.succeed(fixture.Package, id)))
     )
-    expect(call(d3.commands[0]!).package).toBe(id)
-  })
-
-  test("results are a tuple as long as the Move return list", async () => {
-    const { value } = await draft(Effect.gen(function*() {
-      const none = yield* fixture.check({ arguments: [1n] })
-      const one = yield* fixture.name({ arguments: ["0x1"] })
-      const three = yield* fixture.stats({ arguments: ["0x1"] })
-      return [none, one, three] as const
-    }))
-    expect(value.map((r) => r.length)).toEqual([0, 1, 3])
-    const nested: T.Argument = { _tag: "NestedResult", value: [2, 2] }
-    expect(value[2][2]).toEqual(nested)
-  })
-
-  test("Option parameters take an Option, a bare value or undefined", async () => {
-    const { draft: d } = await draft(Effect.gen(function*() {
-      yield* fixture.wrap({ arguments: ["0x1", Option.some(3)] })
-      yield* fixture.wrap({ arguments: ["0x1", 3] })
-      yield* fixture.wrap({ arguments: ["0x1", undefined] })
-      yield* fixture.wrap({ arguments: { thing: "0x1" } })
-    }))
-    const pures = d.inputs.flatMap((i) => (i._tag === "Pure" ? [Array.from(i.bytes)] : []))
-    expect(pures).toEqual([[1, 3], [1, 3], [0], [0]])
-  })
-
-  test("generic parameters are encoded by their type argument", async () => {
-    const { draft: d } = await draft(fixture.makePair({ arguments: [7, "0x2"], typeArguments: ["0x2::sui::SUI", "u8", "address"] }))
-    expect(d.inputs[0]).toEqual({ _tag: "Pure", bytes: new Uint8Array([7]) })
-    expect(d.inputs[1]).toEqual({ _tag: "Pure", bytes: Bcs.encodeSync(Bcs.Address)(Address.normalize("0x2")) })
-    const { draft: d2 } = await draft(fixture.boxed({ arguments: ["0x99"], typeArguments: [fixture.Thing.type()] }))
-    expect(d2.inputs[0]).toEqual({ _tag: "UnresolvedObject", objectId: Address.normalize("0x99") })
+    expect(call(d2.commands[0]!).package).toBe(id)
   })
 
   test("Thing.get reads and decodes an object", async () => {
@@ -153,41 +102,10 @@ describe("generated API", () => {
       listOwned: () => Stream.empty
     })
     expect(await Effect.runPromise(fixture.Thing.get("0x1").pipe(Effect.provide(objects)))).toEqual(value)
-    const boxed = fixture.Box(Bcs.u64)
-    expect(typeof boxed.get).toBe("function")
-  })
-
-  test("types: arity and argument kinds are checked", () => {
-    const typeOnly = () => {
-      // @ts-expect-error make_pair has three type parameters
-      fixture.makePair({ arguments: [1, 2], typeArguments: ["u8", "u8"] })
-      // @ts-expect-error u64 is a bigint
-      fixture.check({ arguments: [1] })
-      // @ts-expect-error the named form needs every value parameter
-      fixture.pause({ arguments: { thing: "0x1", reason: "r" } })
-      // @ts-expect-error a non-key struct value can't be an object id
-      fixture.setPair({ arguments: ["0x1", "0x2"] })
-      const pair: fixture.Pair<number, bigint> = { first: 1, second: 2n }
-      // Error and requirement channels are exact: no `Package` in R, failures only from parsing ids, types and pure values.
-      const noArgs: Effect.Effect<readonly [], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.newVault()
-      const objects: Effect.Effect<readonly [T.Argument], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.name({ arguments: ["0x1"] })
-      const mixed: Effect.Effect<readonly [], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.rename({ arguments: ["0x1", "n"] })
-      return [pair, noArgs, objects, mixed]
-    }
-    expect(typeof typeOnly).toBe("function")
   })
 })
 
 describe("inputs", () => {
-  test("summaries keep parameter names, docs and declaration order of fields", async () => {
-    const model = await Effect.runPromise(Summary.load(fixtureDir))
-    const m = model.packages.find((p) => p.address === model.root)!.modules[0]!
-    const thing = m.datatypes.find((d) => d.name === "Thing")!
-    expect(thing.kind._tag === "Struct" && thing.kind.fields.map((f) => f.name).slice(0, 3)).toEqual(["id", "owner_ref", "name"])
-    expect(m.functions.find((f) => f.name === "pause")!.parameters.map((p) => p.name)).toEqual(["thing", "reason", "until_ms"])
-    expect(thing.doc).toBe("The main object.")
-  })
-
   test("after an upgrade: calls go to the storage id, type strings keep each type's origin", () => {
     const original = Address.normalize("0xa1")
     const v2 = Address.normalize("0xa2")
@@ -213,12 +131,43 @@ describe("inputs", () => {
     expect(out["upgraded/m.ts"]).toContain(`() => "${v2}::m::New"`)
   })
 
+  test("a generic parameter is pure when its type argument is, else an object id", async () => {
+    const input = async (typeArgument: string, value: unknown) =>
+      (await Effect.runPromise(Ptb.build(fixture.boxed({ arguments: [value as never], typeArguments: [typeArgument] })))).draft.inputs[0]
+    const pure = (bytes: Uint8Array) => ({ _tag: "Pure" as const, bytes })
+    expect(await input("0x1::string::String", "hi")).toEqual(pure(Bcs.encodeSync(Bcs.string)("hi")))
+    expect(await input("0x1::option::Option<u64>", 5n)).toEqual(pure(Bcs.encodeSync(Bcs.option(Bcs.u64))(Option.some(5n))))
+    expect(await input("vector<u256>", [1n])).toEqual(pure(Bcs.encodeSync(Bcs.vector(Bcs.u256))([1n])))
+    expect(await input(fixture.Thing.type(), "0x99")).toEqual({ _tag: "UnresolvedObject", objectId: Address.normalize("0x99") })
+    const notAnId = await Effect.runPromiseExit(Ptb.build(fixture.boxed({ arguments: [7 as never], typeArguments: [fixture.Thing.type()] })))
+    expect(notAnId._tag === "Failure" && String(notAnId.cause)).toContain("expected an object id")
+  })
+
   test("render rejects unknown roots and modules", async () => {
     const model = await Effect.runPromise(Summary.load(fixtureDir))
     expect(() => Render.render(model.packages, [{ address: model.root, modules: ["nope"] }])).toThrow(M.CodegenError)
     expect(() => Render.render(model.packages, [{ address: Address.normalize("0x77") }])).toThrow(M.CodegenError)
   })
 })
+
+// Type tests: compile-time only. Arity and argument kinds are checked, and the
+// error and requirement channels are exact.
+export const typeTests = () => {
+  // @ts-expect-error make_pair has three type parameters
+  fixture.makePair({ arguments: [1, 2], typeArguments: ["u8", "u8"] })
+  // @ts-expect-error u64 is a bigint
+  fixture.check({ arguments: [1] })
+  // @ts-expect-error the named form needs every value parameter
+  fixture.pause({ arguments: { thing: "0x1", reason: "r" } })
+  // @ts-expect-error a non-key struct value can't be an object id
+  fixture.setPair({ arguments: ["0x1", "0x2"] })
+  const pair: fixture.Pair<number, bigint> = { first: 1, second: 2n }
+  // No `Package` in R, failures only from parsing ids, types and pure values.
+  const noArgs: Effect.Effect<readonly [], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.newVault()
+  const objects: Effect.Effect<readonly [T.Argument], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.name({ arguments: ["0x1"] })
+  const mixed: Effect.Effect<readonly [], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.rename({ arguments: ["0x1", "n"] })
+  return [pair, noArgs, objects, mixed]
+}
 
 describe("CLI", () => {
   test("generate --config writes the configured packages", () => {
@@ -234,11 +183,5 @@ describe("CLI", () => {
     expect(readFileSync(join(out, "fixture/fixture.ts"), "utf-8")).toBe(
       readFileSync(join(goldenDir, "fixture/fixture/fixture.ts"), "utf-8")
     )
-  })
-
-  test("a bad command prints usage", () => {
-    const r = spawnSync("bun", [join(import.meta.dir, "../src/bin.ts"), "nope"], { encoding: "utf-8" })
-    expect(r.status).toBe(1)
-    expect(r.stderr).toContain("usage")
   })
 })

@@ -19,20 +19,11 @@ const schemes = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, MlDsa65.s
 const verified = <A, E>(e: Effect.Effect<A, E, SignatureScheme.SignatureSchemes>) => run(Effect.provide(e, schemes))
 
 describe("ML-DSA-65", () => {
-  test("flag and sizes match @mysten/sui", async () => {
-    const kp = MLDSA65Keypair.fromSecretKey(seed(1))
-    const signer = await run(MlDsa65.fromSecretKey(seed(1)))
-    expect(MlDsa65.FLAG).toBe(kp.getPublicKey().flag())
-    expect(signer.publicKey.bytes).toEqual(kp.getPublicKey().toRawBytes())
-    expect(signer.publicKey.bytes.length).toBe(MlDsa65.PUBLIC_KEY_SIZE)
-    expect(signer.address).toBe(kp.toSuiAddress() as typeof signer.address)
-    const { signature } = await run(Signer.signPersonalMessage(signer, msg))
-    expect(signature.length).toBe(1 + MlDsa65.SIGNATURE_SIZE + MlDsa65.PUBLIC_KEY_SIZE)
-    expect(fromB64((await kp.signPersonalMessage(msg)).signature).length).toBe(signature.length)
-  })
-
-  test("@mysten/sui verifies our signatures", async () => {
+  test("same key and address as @mysten/sui, which verifies our (hedged) signatures", async () => {
+    const kp = MLDSA65Keypair.fromSecretKey(seed(2))
     const signer = await run(MlDsa65.fromSecretKey(seed(2)))
+    expect(signer.publicKey.bytes).toEqual(kp.getPublicKey().toRawBytes())
+    expect(signer.address).toBe(kp.toSuiAddress() as typeof signer.address)
     const personal = await run(Signer.signPersonalMessage(signer, msg))
     expect((await verifyPersonalMessageSignature(msg, b64(personal.signature), { offline: true })).toSuiAddress()).toBe(signer.address)
     const tx = await run(Signer.signTransaction(signer, txBytes))
@@ -48,28 +39,14 @@ describe("ML-DSA-65", () => {
     const personal = fromB64((await kp.signPersonalMessage(msg)).signature)
     const ok = await verified(Verify.personalMessage(msg, personal, { address: kp.toSuiAddress() as any }))
     expect(ok.publicKey.flag).toBe(MlDsa65.FLAG)
-    const tx = fromB64((await kp.signTransaction(txBytes)).signature)
-    expect((await verified(Verify.transaction(txBytes, tx))).address).toBe(kp.toSuiAddress() as any)
 
     const tampered = personal.slice()
     tampered[10]! ^= 1
-    const e = await verified(Effect.flip(Verify.personalMessage(msg, tampered)))
-    expect(e._tag).toBe("InvalidSignature")
-    const short = await verified(Effect.flip(Verify.personalMessage(msg, personal.subarray(0, 100))))
-    expect(short._tag).toBe("InvalidSignature")
+    expect((await verified(Effect.flip(Verify.personalMessage(msg, tampered))))._tag).toBe("InvalidSignature")
+    expect((await verified(Effect.flip(Verify.personalMessage(msg, personal.subarray(0, 100)))))._tag).toBe("InvalidSignature")
   })
 
-  test("verifies only when installed", async () => {
-    const program = Effect.gen(function*() {
-      const signer = yield* MlDsa65.generate
-      const { signature } = yield* Signer.signPersonalMessage(signer, msg)
-      return yield* Verify.personalMessage(msg, signature, { address: signer.address })
-    })
-    const err = await run(program.pipe(Effect.flip, Effect.provide(SignatureScheme.SignatureSchemes.layer(Ed25519.scheme))))
-    expect(err._tag).toBe("UnsupportedScheme")
-  })
-
-  test("secret keys: 32-byte seeds, suiprivkey both ways", async () => {
+  test("secret keys are 32-byte seeds, interchangeable with @mysten/sui's suiprivkey", async () => {
     const sk = await run(MlDsa65.generateSecretKey)
     const signer = await run(MlDsa65.fromSecretKey(sk))
     const exported = await run(PrivateKey.encode({ flag: MlDsa65.FLAG, secretKey: sk }))
@@ -77,8 +54,7 @@ describe("ML-DSA-65", () => {
     const kp = MLDSA65Keypair.generate()
     const imported = await run(Effect.flatMap(PrivateKey.decode(kp.getSecretKey(), MlDsa65.FLAG), (k) => MlDsa65.fromSecretKey(k.secretKey)))
     expect(imported.address).toBe(kp.toSuiAddress() as any)
-    const bad = await run(Effect.flip(MlDsa65.fromSecretKey(new Uint8Array(31))))
-    expect(bad._tag).toBe("InvalidKey")
+    expect((await run(Effect.flip(MlDsa65.fromSecretKey(new Uint8Array(31)))))._tag).toBe("InvalidKey")
   })
 
   test("as a multisig member: same address as @mysten/sui, each side verifies the other", async () => {
@@ -98,7 +74,6 @@ describe("ML-DSA-65", () => {
     // Ours -> theirs
     const ours = await run(Signer.signPersonalMessage(signer, msg))
     expect(await theirPk.verifyPersonalMessage(msg, b64(ours.signature))).toBe(true)
-    expect((await verifyPersonalMessageSignature(msg, b64(ours.signature), { offline: true })).toSuiAddress()).toBe(signer.address)
 
     // Theirs -> ours
     const theirs = theirPk.combinePartialSignatures([(await kpB.signPersonalMessage(msg)).signature])

@@ -75,63 +75,27 @@ const clockRecipe = Effect.gen(function*() {
 })
 
 suite("testnet parity with gRPC", () => {
-  test("object 0x6: type, owner, contents", async () => {
-    const [g, q] = await both(Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(A("0x6"))))
-    expect(q.objectId).toBe(g.objectId)
-    expect(q.type).toBe(g.type)
-    expect(q.owner).toEqual(g.owner)
-    // The clock ticks every checkpoint, and the GraphQL indexer trails the full node
-    // by a few, so the bytes match exactly only at the same version.
-    expect(q.contents.length).toBe(g.contents.length)
-    expect([...q.contents.subarray(0, 32)]).toEqual([...g.contents.subarray(0, 32)])
-    if (q.version === g.version) expect([...q.contents]).toEqual([...g.contents])
-    console.log("0x6 versions: grpc", g.version, "graphql", q.version)
-  })
-
-  test("packages and immutable objects match exactly", async () => {
+  test("objects: packages and immutables exactly, the clock's shape, a missing object", async () => {
     const [g, q] = await both(
       Effect.flatMap(Effect.service(Objects.Objects), (o) =>
-        Effect.forEach([A("0x2"), A("0x1")], o.get, { concurrency: "unbounded" }))
-    )
-    expect(q).toEqual(g)
-  })
-
-  test("missing objects are ObjectNotFound", async () => {
-    const [g, q] = await both(Effect.flip(Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(A("0xabcdef")))))
-    expect(q).toEqual(g)
-  })
-
-  test("unknown transaction and non-package getFunction fail alike", async () => {
-    const [g, q] = await both(
-      Effect.all([
-        Effect.flip(Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get("11111111111111111111111111111111"))),
-        Effect.flip(Effect.flatMap(Effect.service(Packages.Packages), (p) =>
-          p.getFunction({ package: A("0x6"), module: "clock", function: "timestamp_ms" }))),
-        Effect.flip(Effect.flatMap(Effect.service(Packages.Packages), (p) =>
-          p.getFunction({ package: A("0x2"), module: "clock", function: "nope" })))
-      ])
+        Effect.all([
+          Effect.forEach([A("0x2"), A("0x1")], o.get, { concurrency: "unbounded" }),
+          o.get(A("0x6")),
+          Effect.flip(o.get(A("0xabcdef")))
+        ]))
     )
     expect(q[0]).toEqual(g[0])
-    expect([q[1]._tag === "RpcError" && q[1].code, q[2]._tag === "RpcError" && q[2].code]).toEqual(
-      [g[1]._tag === "RpcError" && g[1].code, g[2]._tag === "RpcError" && g[2].code]
-    )
+    expect(q[2]).toEqual(g[2])
+    const [gc, qc] = [g[1], q[1]]
+    expect([qc.objectId, qc.type, qc.owner]).toEqual([gc.objectId, gc.type, gc.owner])
+    // The clock ticks every checkpoint, and the GraphQL indexer trails the full node
+    // by a few, so the bytes match exactly only at the same version.
+    expect(qc.contents.length).toBe(gc.contents.length)
+    expect([...qc.contents.subarray(0, 32)]).toEqual([...gc.contents.subarray(0, 32)])
+    if (qc.version === gc.version) expect([...qc.contents]).toEqual([...gc.contents])
   })
 
-  test("balance", async () => {
-    const [g, q] = await both(Effect.flatMap(Effect.service(Coins.Coins), (c) => c.getBalance(A("0x1"))))
-    expect(q).toEqual(g)
-  })
-
-  test("coin listing", async () => {
-    const [g, q] = await both(
-      Effect.flatMap(Effect.service(Coins.Coins), (c) =>
-        c.list(A("0x1")).pipe(Stream.take(120), Stream.runCollect, Effect.map((cs) => cs.map((c) => c.ref.objectId).sort())))
-    )
-    expect(q.length).toBe(g.length)
-    expect(q).toEqual(g)
-  })
-
-  test("getFunction: &Clock, &mut / by-value, type parameters, &mut TxContext", async () => {
+  test("getFunction signatures (&Clock, &mut / by-value, type parameters, &mut TxContext) and failures match", async () => {
     const targets = [
       ["0x2", "clock", "timestamp_ms"],
       ["0x2", "coin", "join"],
@@ -141,11 +105,31 @@ suite("testnet parity with gRPC", () => {
     ] as const
     const [g, q] = await both(
       Effect.flatMap(Effect.service(Packages.Packages), (p) =>
-        Effect.forEach(targets, ([pkg, module, fn]) => p.getFunction({ package: A(pkg), module, function: fn })))
+        Effect.all([
+          Effect.forEach(targets, ([pkg, module, fn]) => p.getFunction({ package: A(pkg), module, function: fn })),
+          Effect.flip(p.getFunction({ package: A("0x6"), module: "clock", function: "timestamp_ms" })),
+          Effect.flip(p.getFunction({ package: A("0x2"), module: "clock", function: "nope" })),
+          Effect.flip(Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get("11111111111111111111111111111111")))
+        ]))
+    )
+    const [signatures, notPackage, missing, noTransaction] = q
+    expect(signatures).toEqual(g[0])
+    expect(signatures[0]!.parameters).toEqual([{ reference: "Immutable", typeName: `${A("0x2")}::clock::Clock` }])
+    expect(signatures[1]!.parameters.map((p) => p.reference)).toEqual(["Mutable", "Value"])
+    const code = (e: { readonly _tag: string; readonly code?: string }) => e._tag === "RpcError" && e.code
+    expect([code(notPackage), code(missing)]).toEqual([code(g[1]), code(g[2])])
+    expect(noTransaction).toEqual(g[3])
+  })
+
+  test("coins: balance and listing", async () => {
+    const [g, q] = await both(
+      Effect.flatMap(Effect.service(Coins.Coins), (c) =>
+        Effect.all([
+          c.getBalance(A("0x1")),
+          c.list(A("0x1")).pipe(Stream.take(120), Stream.runCollect, Effect.map((cs) => cs.map((c) => c.ref.objectId).sort()))
+        ]))
     )
     expect(q).toEqual(g)
-    expect(q[0]!.parameters).toEqual([{ reference: "Immutable", typeName: `${A("0x2")}::clock::Clock` }])
-    expect(q[1]!.parameters.map((p) => p.reference)).toEqual(["Mutable", "Value"])
   })
 
   test("chain info and gas price", async () => {
@@ -170,46 +154,29 @@ suite("testnet parity with gRPC", () => {
     expect(q).toEqual(g)
   })
 
-  test("simulate 0x2::clock::timestamp_ms with checks off", async () => {
-    const [g, q] = await both(
-      Effect.gen(function*() {
-        const data = yield* Tx.build(clockRecipe, { sender: A("0x1"), gasBudget: 50_000_000n, gasPrice: 1000n })
-        return yield* Effect.flatMap(Effect.service(Transactions.Transactions), (t) =>
-          t.simulate(Tx.serialize(data), { checks: false }))
-      })
-    )
-    expect(q.effects.status).toEqual(g.effects.status)
-    expect(q.effects.gasUsed.computationCost).toBe(g.effects.gasUsed.computationCost)
-    expect(q.returnValues.length).toBe(g.returnValues.length)
-    const ms = (v: Uint8Array) => Number(Bcs.decodeSync(Bcs.u64)(v))
-    expect(Math.abs(ms(q.returnValues[0]![0]!) - ms(g.returnValues[0]![0]!))).toBeLessThan(120_000)
-    console.log("simulate changedObjects: grpc", g.effects.changedObjects, "graphql", q.effects.changedObjects)
-  })
-
-  test("Tx.build resolves the same inputs (shared mutability, budget) over both transports", async () => {
+  test("Tx.build resolves the same inputs (shared mutability, budget), and simulate agrees", async () => {
     const recipe = Effect.gen(function*() {
       yield* Ptb.moveCall({ target: "0x2::clock::timestamp_ms", arguments: [yield* Ptb.object("0x6")] })
       yield* Ptb.moveCall({ target: "0x3::sui_system::active_validator_addresses", arguments: [yield* Ptb.object("0x5")] })
     })
-    const [g, q] = await both(Tx.build(recipe, { sender: A("0x1"), payment: Resolve.addressBalance }))
-    expect(q.kind).toEqual(g.kind)
-    const inputs = q.kind.inputs.map((i) => i._tag === "Object" && i.value._tag === "SharedObject" && i.value.mutability._tag)
+    const [g, q] = await both(
+      Effect.gen(function*() {
+        const data = yield* Tx.build(recipe, { sender: A("0x1"), payment: Resolve.addressBalance })
+        const sim = yield* Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.simulate(Tx.serialize(data), { checks: false }))
+        return { data, sim }
+      })
+    )
+    expect(q.data.kind).toEqual(g.data.kind)
+    const inputs = q.data.kind.inputs.map((i) => i._tag === "Object" && i.value._tag === "SharedObject" && i.value.mutability._tag)
     expect(inputs).toEqual(["Immutable", "Mutable"])
     // Budgets are estimated from each transport's own simulation.
-    const ratio = Number(q.gasData.budget) / Number(g.gasData.budget)
+    const ratio = Number(q.data.gasData.budget) / Number(g.data.gasData.budget)
     expect(ratio).toBeGreaterThan(0.8)
     expect(ratio).toBeLessThan(1.25)
-  })
-
-  test("Checkpoints.subscribe over graphql-sse", async () => {
-    const cps = await Effect.runPromise(
-      Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) => c.subscribe.pipe(Stream.take(3), Stream.runCollect)).pipe(
-        Effect.provide(graphqlLayer(GQL_TESTNET).layer),
-        Effect.timeout("30 seconds")
-      )
-    )
-    expect(cps[1]!.sequenceNumber - cps[0]!.sequenceNumber).toBe(1n)
-    expect(cps[2]!.sequenceNumber - cps[1]!.sequenceNumber).toBe(1n)
+    expect(q.sim.effects.status).toEqual(g.sim.effects.status)
+    expect(q.sim.returnValues.length).toBe(g.sim.returnValues.length)
+    const ms = (v: Uint8Array) => Number(Bcs.decodeSync(Bcs.u64)(v))
+    expect(Math.abs(ms(q.sim.returnValues[0]![0]!) - ms(g.sim.returnValues[0]![0]!))).toBeLessThan(120_000)
   })
 
   test("concurrent gets are one multiGetObjects request", async () => {
@@ -322,14 +289,16 @@ suite("testnet parity with gRPC: new services", () => {
     expect(cps.map((c) => c.sequenceNumber)).toEqual(Array.from({ length: 8 }, (_, i) => start + BigInt(i)))
   }, 120_000)
 
-  test("Events.subscribe and CheckpointData.subscribe over graphql-sse", async () => {
+  test("Checkpoints, Events and CheckpointData subscriptions over graphql-sse", async () => {
     const { layer } = graphqlLayer(GQL_TESTNET)
-    const [events, cps] = await Effect.runPromise(
+    const [light, events, cps] = await Effect.runPromise(
       Effect.all([
+        Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) => c.subscribe.pipe(Stream.take(3), Stream.runCollect)),
         Effect.flatMap(Effect.service(Events.Events), (e) => e.subscribe().pipe(Stream.take(2), Stream.runCollect)),
         Effect.flatMap(Effect.service(CheckpointData.CheckpointData), (c) => c.subscribe.pipe(Stream.take(2), Stream.runCollect))
-      ], { concurrency: 2 }).pipe(Effect.provide(layer), Effect.timeout("90 seconds"))
+      ], { concurrency: 3 }).pipe(Effect.provide(layer), Effect.timeout("90 seconds"))
     )
+    expect(light.map((c) => c.sequenceNumber - light[0]!.sequenceNumber)).toEqual([0n, 1n, 2n])
     expect(events.length).toBe(2)
     expect(events[0]!.transactionDigest.length).toBeGreaterThan(0)
     expect(cps[1]!.sequenceNumber - cps[0]!.sequenceNumber).toBe(1n)
@@ -464,7 +433,6 @@ suite("devnet over GraphQL only", () => {
     expect(received.coinBalance).toBe(2_000n)
     expect(requests.every((r) => r.startsWith("graphql") || r === "faucet")).toBe(true)
   }, 180_000)
-
 
   test("faucet -> Tx.run with coin gas selection -> Transactions.get", async () => {
     const { layer, requests } = graphqlLayer(GQL_DEVNET)

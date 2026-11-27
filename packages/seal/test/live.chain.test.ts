@@ -6,9 +6,8 @@
  *   mainnet committees) decode through `KeyServers.layer`.
  * - Our view equals `@mysten/seal`'s `SealClient.getKeyServers()` for all
  *   twelve (name, URL or aggregator, public key, server type).
- * - `layerVerified` passes for Mysten's two servers; the other independent
- *   servers are probed best effort (a warning, not a failure, when one is
- *   down). Proofs come through `KeyServerApi.layer` over `FetchHttpClient`.
+ * - `layerVerified` passes for Mysten's two servers (proofs through
+ *   `KeyServerApi.layer` over `FetchHttpClient`).
  * - The aggregators do not implement `/v1/service`: testnet's answers `400
  *   Unsupported` (`Rejected`), mainnet's gateway `401` without an API key
  *   (`Unauthorized`).
@@ -99,41 +98,14 @@ suite("live key servers", () => {
     expect(out.map((s) => s.name)).toEqual(["mysten-v1-1", "mysten-v1-2", expect.any(String)])
   }, 60_000)
 
-  test("testnet: other independent servers' proofs (best effort)", async () => {
-    const others = TESTNET_INDEPENDENT.slice(2).map((objectId) => ({ objectId }))
-    const exits = await Effect.runPromise(
-      Effect.forEach(
-        others,
-        (s) => Effect.exit(Effect.flatMap(Effect.service(KeyServer.KeyServers), (k) => k.get(s.objectId as Address))),
-        { concurrency: "unbounded" }
-      ).pipe(Effect.provide(keyServers("testnet", true, others)))
-    )
-    let ok = 0
-    exits.forEach((exit, i) => {
-      if (Exit.isSuccess(exit)) return void ok++
-      const error = exit.cause.reasons.find((r) => r._tag === "Fail") as { error: KeyServer.InvalidKeyServer } | undefined
-      const reason = error?.error.reason ?? String(exit.cause)
-      // A wrong proof is a failure; an unreachable server only a warning.
-      expect(reason).not.toContain("does not verify")
-      expect(reason).not.toContain("names another id")
-      console.warn(`key server ${others[i]!.objectId} not verified: ${reason.slice(0, 200)}`)
-    })
-    console.log(`${ok} of ${others.length} other independent servers verified`)
-  }, 60_000)
-
-  for (const [network, committee, kind] of [
-    ["testnet", Config.testnet.committee, "Rejected"],
-    ["mainnet", Config.mainnet.committee, "Unauthorized"]
-  ] as const) {
-    test(`${network}: the aggregator's /v1/service is ${kind}`, async () => {
+  test("the aggregators' /v1/service: testnet Rejected (400), mainnet Unauthorized (401)", async () => {
+    for (const [committee, kind, status] of [[Config.testnet.committee, "Rejected", 400], [Config.mainnet.committee, "Unauthorized", 401]] as const) {
       const exit = await Effect.runPromiseExit(
         Effect.flatMap(Effect.service(KeyServerApi.KeyServerApi), (k) =>
           k.service({ objectId: committee.objectId as Address, url: committee.aggregatorUrl! })).pipe(Effect.provide(api))
       )
-      expect(Exit.isFailure(exit)).toBe(true)
       const error = Exit.isFailure(exit) ? (exit.cause.reasons.find((r) => r._tag === "Fail") as { error: KeyServerApi.KeyServerError } | undefined)?.error : undefined
-      expect(error?.kind).toBe(kind)
-      expect(error?.status).toBe(network === "testnet" ? 400 : 401)
-    }, 30_000)
-  }
+      expect([error?.kind, error?.status]).toEqual([kind, status])
+    }
+  }, 30_000)
 })

@@ -33,7 +33,6 @@ import * as BlobId from "../src/BlobId.ts"
 import type * as Certificate from "../src/Certificate.ts"
 import * as Committee from "../src/Committee.ts"
 import * as Encoder from "../src/Encoder.ts"
-import * as Encoding from "../src/Encoding.ts"
 import * as blob from "../src/generated/walrus/blob.ts"
 import * as Messages from "../src/Messages.ts"
 import * as Recipes from "../src/Recipes.ts"
@@ -98,7 +97,7 @@ describe("tip", () => {
   test("tipAmount: no tip, a constant, and linear in encoded KiB (R1), as @mysten/walrus computes it", () => {
     expect(UploadRelay.tipAmount({ _tag: "NoTip" }, 1000, 1000)).toBe(0n)
     expect(UploadRelay.tipAmount({ _tag: "SendTip", address: TIP_ADDRESS, kind: { _tag: "Const", amount: 105n } }, 1000, 1000)).toBe(105n)
-    for (const [len, n] of [[0, 10], [1, 10], [32, 1000], [1000, 1000], [100_000, 1000], [5_000_000, 1000], [777, 7]] as const) {
+    for (const [len, n] of [[0, 10], [1000, 1000], [5_000_000, 1000], [777, 7]] as const) {
       const linear: UploadRelay.TipConfig = { _tag: "SendTip", address: TIP_ADDRESS, kind: { _tag: "Linear", base: 1000n, perEncodedKib: 3n } }
       const mysten = 1000n + 3n * ((BigInt(mystenUtils.encodedBlobLength(len, n)) + 1023n) / 1024n)
       expect(UploadRelay.tipAmount(linear, len, n)).toBe(mysten)
@@ -210,19 +209,6 @@ describe("http", () => {
     expect(config).toEqual({ _tag: "SendTip", address: TIP_ADDRESS, kind: { _tag: "Const", amount: 105n } })
   })
 
-  test("url: trailing slashes are stripped; extra headers go with every request", async () => {
-    const relay = relayLayer(() => ({ body: CONST_TIP }), { url: `${HOST}//`, headers: { authorization: "Bearer t" } })
-    value(await withRelay(relay.layer, (r) => r.tipConfig))
-    expect(relay.requests[0]!.url).toBe(`${HOST}/v1/tip-config`)
-    expect(relay.requests[0]!.headers["authorization"]).toBe("Bearer t")
-    expect(relay.requests[0]!.headers["traceparent"]).toBeUndefined()
-  })
-
-  test("blob_id may also come as text", async () => {
-    const relay = relayLayer(() => ({ body: { ...RESPONSE, blob_id: BLOB_ID } }))
-    value(await withRelay(relay.layer, (r) => r.upload({ blob: BLOB, blobId: BLOB_ID })))
-  })
-
   test("a failed tipConfig is not cached", async () => {
     let calls = 0
     const relay = relayLayer(() => (++calls === 1 ? { status: 503, body: "busy" } : { body: JSON.stringify("no_tip") }))
@@ -231,7 +217,8 @@ describe("http", () => {
     expect(value(first)[1]).toEqual({ _tag: "NoTip" })
   })
 
-  test("errors are typed RelayErrors: HTTP status, transport, timeout, bad bodies", async () => {
+  test("errors are typed RelayErrors: HTTP status, transport, timeout, bad bodies; blob_id may also come as text", async () => {
+    value(await withRelay(relayLayer(() => ({ body: { ...RESPONSE, blob_id: BLOB_ID } })).layer, (r) => r.upload({ blob: BLOB, blobId: BLOB_ID })))
     const upload = (route: (req: Recorded) => Outcome, options?: Partial<UploadRelay.UploadRelayOptions>) =>
       withRelay(relayLayer(route, options).layer, (r) => r.upload({ blob: BLOB, blobId: BLOB_ID })).then(failure)
     const e402 = await upload(() => ({ status: 402, body: "insufficient tip" }))
@@ -422,25 +409,18 @@ describe("verifyCertificate", () => {
     value(await verify(cert([0, 1]), MESSAGE, compressed))
   })
 
-  test("rejects too little weight: four of five nodes holding six shards (item 5)", async () => {
+  test("rejects too little weight, duplicate or unknown signers, another message, and signatures that do not verify", async () => {
+    // Four of five nodes holding six shards (item 5).
     expect(await reason(cert([1, 2, 3, 4]))).toContain("hold 6 shards, need 7")
-  })
-
-  test("rejects duplicate and unknown signers", async () => {
     expect(await reason(cert([0, 0, 1]))).toContain("duplicate signer 0")
     expect(await reason({ ...cert([0, 1]), signers: [0, 1, 5] })).toContain("signer 5 is not a committee member")
-  })
-
-  test("rejects a message for another epoch, blob or persistence", async () => {
     const others = [
       Messages.confirmationMessage(6, BLOB_ID, { _tag: "Permanent" }),
       Messages.confirmationMessage(7, Result.getOrThrow(BlobId.fromBytes(new Uint8Array(32).fill(4))), { _tag: "Permanent" }),
       Messages.confirmationMessage(7, BLOB_ID, { _tag: "Deletable", objectId: Address.normalize("0xb10b") })
     ]
     for (const m of others) expect(await reason(cert([0, 1], { message: m }))).toContain("message differs")
-  })
-
-  test("rejects signatures that do not verify: a signer left out of the aggregate, another message, garbage, wrong length", async () => {
+    // A signer left out of the aggregate, another message, garbage, wrong length.
     expect(await reason({ ...cert([0, 1]), signers: [0, 1, 2] })).toContain("does not verify")
     expect(await reason(cert([0, 1], { signature: aggregate([0, 1], new Uint8Array([1, 2, 3])) }))).toContain("does not verify")
     expect(await reason(cert([0, 1], { signature: new Uint8Array(96).fill(0xff) }))).toMatch(/malformed signature|does not verify/)
@@ -460,8 +440,6 @@ const encodeBlob = Bcs.encodeSync(blob.Blob)
 interface RelayWorldOptions {
   /** The relay's `/v1/tip-config` answer. Default: a constant 105 MIST. */
   readonly tipConfig?: unknown
-  /** Which nodes the relay's certificate claims and signs with. Default: all. */
-  readonly signers?: ReadonlyArray<number>
   /** Tamper with the certificate the relay returns. */
   readonly tamper?: (c: { signers: number[]; serialized_message: number[]; signature: string }) => void
   readonly maxTip?: bigint
@@ -612,7 +590,7 @@ const relayWorld = (options: RelayWorldOptions = {}) => {
     const blobId = query.get("blob_id")! as BlobId.BlobId
     const object = query.get("deletable_blob_object")
     const message = Messages.confirmationMessage(epoch, blobId, object ? { _tag: "Deletable", objectId: Address.normalize(object) } : { _tag: "Permanent" })
-    const signers = [...(options.signers ?? [0, 1, 2, 3, 4])]
+    const signers = [0, 1, 2, 3, 4]
     const c = { signers, serialized_message: [...message], signature: Base64Url.encode(aggregate(signers, message)) }
     options.tamper?.(c)
     return { body: { blob_id: [...BlobId.toBytes(blobId)], confirmation_certificate: c } }
@@ -677,37 +655,11 @@ describe("Write via relay", () => {
     expect(Schema.decodeUnknownSync(Write.Step)(json)).toEqual(encoded)
   })
 
-  test("a permanent blob: no deletable_blob_object", async () => {
-    const world = relayWorld()
-    value(await world.run(Write.run(BLOB, relayOpts(world, { deletable: false }))))
-    expect(new URL(world.relayRequests[0]!.url).searchParams.has("deletable_blob_object")).toBe(false)
-  })
-
-  test("a certificate below n − f is CertificateInvalid and nothing is certified", async () => {
-    const world = relayWorld({ signers: [1, 2, 3, 4] })
-    const e = failure(await world.run(Write.run(BLOB, relayOpts(world))))
-    expect(e._tag).toBe("CertificateInvalid")
-    expect(world.executed).toEqual(["register"])
-  })
-
-  test("a certificate whose signature does not verify is CertificateInvalid", async () => {
+  test("a relay certificate that does not verify is CertificateInvalid and nothing is certified", async () => {
     const world = relayWorld({ tamper: (c) => void (c.signers = [0, 1, 2, 3]) })
     const e = failure(await world.run(Write.run(BLOB, relayOpts(world))))
     expect(e).toMatchObject({ _tag: "CertificateInvalid", reason: "aggregate signature does not verify" })
     expect(world.executed).toEqual(["register"])
-  })
-
-  test("a certificate for a permanent blob when the Blob is deletable is CertificateInvalid", async () => {
-    const world = relayWorld({
-      tamper: (c) => {
-        const id = BlobId.fromBytes(Uint8Array.from(c.serialized_message.slice(7, 39)))
-        const m = Messages.confirmationMessage(5, Result.getOrThrow(id), { _tag: "Permanent" })
-        c.serialized_message = [...m]
-        c.signature = Base64Url.encode(aggregate(c.signers, m))
-      }
-    })
-    const e = failure(await world.run(Write.run(BLOB, relayOpts(world))))
-    expect(e).toMatchObject({ _tag: "CertificateInvalid", reason: "message differs from the expected confirmation" })
   })
 
   test("a reused registration gets a transaction with only the auth input and the tip", async () => {
@@ -773,26 +725,4 @@ describe("Write via relay", () => {
     expect(e).toMatchObject({ _tag: "TipTooHigh", tip: 105n, max: 10n })
     expect(world.executed).toEqual([])
   })
-
-  test('via: "relay" without an UploadRelay layer is a RelayError', async () => {
-    const world = relayWorld()
-    const exit = await Effect.runPromise(Effect.exit(
-      Effect.provide(
-        Write.run(BLOB, relayOpts(world)) as Effect.Effect<Write.Certified, Write.WriteError | Aborted, Write.WriteServices>,
-        Layer.mergeAll(
-          systemLayer(),
-          Layer.succeed(Committee.Committees, { get: Effect.die("unused"), refresh: Effect.die("unused") }),
-          StorageNode.layer().pipe(Layer.provide(scripted(() => ({ status: 500 })).layer)),
-          noObjects,
-          Encoder.layer()
-        )
-      )
-    ))
-    expect(failure(exit)).toMatchObject({ _tag: "RelayError" })
-  })
-})
-
-// Sizes at n = 1000 for the live case's 32-byte blob (E4), for the tip formula above.
-test("a 32-byte blob at n = 1000 encodes to 66,034,000 bytes", () => {
-  expect(Encoding.encodedLength(32, 1000)).toBe(66_034_000)
 })

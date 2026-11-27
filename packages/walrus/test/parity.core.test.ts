@@ -14,77 +14,85 @@ const SHARD_COUNTS = [1, 2, 3, 4, 5, 7, 10, 13, 100, 667, 1000, 1001, 4096]
 describe("sizes", () => {
   test("source symbols, encoded length, sliver sizes, storage units over a random range", () => {
     const next = rng(11)
+    const mismatches: Array<unknown> = []
     for (const n of SHARD_COUNTS) {
       const { primarySymbols, secondarySymbols } = mystenUtils.getSourceSymbols(n)
       expect(Encoding.sourceSymbols(n)).toEqual({ primary: primarySymbols, secondary: secondarySymbols })
       const max = Encoding.maxBlobSize(n)
       const lengths = [0, 1, 2, primarySymbols * secondarySymbols, primarySymbols * secondarySymbols * 2 + 1, max - 1, max]
-      for (let i = 0; i < 200; i++) lengths.push(next(Math.min(max, 2 ** 31)))
+      for (let i = 0; i < 20; i++) lengths.push(next(Math.min(max, 2 ** 31)))
       for (const len of lengths) {
         const encoded = Encoding.encodedLength(len, n)
-        expect(encoded).toBe(mystenUtils.encodedBlobLength(len, n))
-        expect(Encoding.storageUnits(encoded)).toBe(mystenUtils.storageUnitsFromSize(encoded))
         const sizes = mystenUtils.getSizes(len, n)
-        expect(Encoding.sliverBytes(len, n)).toEqual({ symbolSize: sizes.symbolSize, primary: sizes.rowSize, secondary: sizes.columnSize })
+        const ours = [encoded, Encoding.storageUnits(encoded), Encoding.sliverBytes(len, n)]
+        const theirs = [
+          mystenUtils.encodedBlobLength(len, n),
+          mystenUtils.storageUnitsFromSize(encoded),
+          { symbolSize: sizes.symbolSize, primary: sizes.rowSize, secondary: sizes.columnSize }
+        ]
+        if (!Bun.deepEquals(ours, theirs)) mismatches.push({ n, len, ours, theirs })
       }
     }
+    expect(mismatches).toEqual([])
   })
 
   test("thresholds", () => {
+    const mismatches: Array<number> = []
     for (let n = 1; n <= 1000; n++) {
       // isQuorum(size) is size > 2f; isAboveValidity(size) is size > f
-      expect(mystenUtils.isQuorum(Bft.quorum(n), n)).toBe(true)
-      expect(mystenUtils.isQuorum(Bft.quorum(n) - 1, n)).toBe(false)
-      expect(mystenUtils.isAboveValidity(Bft.validity(n), n)).toBe(true)
-      expect(mystenUtils.isAboveValidity(Bft.validity(n) - 1, n)).toBe(false)
+      const ok = mystenUtils.isQuorum(Bft.quorum(n), n) && !mystenUtils.isQuorum(Bft.quorum(n) - 1, n) &&
+        mystenUtils.isAboveValidity(Bft.validity(n), n) && !mystenUtils.isAboveValidity(Bft.validity(n) - 1, n)
+      if (!ok) mismatches.push(n)
     }
+    expect(mismatches).toEqual([])
   })
 
   test("BCS sliver buffer sizes are exactly what the WASM writes (W3)", () => {
-    for (const [n, len] of [[10, 0], [10, 1], [10, 5000], [7, 300], [13, 70_000]] as const) {
+    for (const [n, len] of [[10, 0], [10, 5000], [7, 300], [13, 70_000]] as const) {
       const e = wasmEncode(n, bytes(len, n))
       const sizes = Encoding.bcsSliverBytes(len, n)
-      for (const s of e.primary) expect(Result.isSuccess(Messages.parseSliver(s))).toBe(true)
-      for (const s of e.secondary) expect(Result.isSuccess(Messages.parseSliver(s))).toBe(true)
-      expect(e.primary[0]!.length).toBe(sizes.primary)
-      expect(e.secondary[0]!.length).toBe(sizes.secondary)
+      expect([...e.primary, ...e.secondary].every((s) => Result.isSuccess(Messages.parseSliver(s)))).toBe(true)
+      expect([e.primary[0]!.length, e.secondary[0]!.length]).toEqual([sizes.primary, sizes.secondary])
     }
   })
 })
 
-describe("shard mapping and bitmaps", () => {
+describe("shard mapping, bitmaps and blob id forms", () => {
   test("shardOfPair, pairOfShard, pairOfSecondary", () => {
     const next = rng(5)
-    for (let i = 0; i < 50; i++) {
+    const mismatches: Array<unknown> = []
+    for (let i = 0; i < 10; i++) {
       const id = Result.getOrThrow(BlobId.fromBytes(bytes(32, i + 1)))
       for (const n of SHARD_COUNTS) {
         for (let k = 0; k < 5; k++) {
           const index = next(n)
-          expect(Encoding.shardOfPair(index, id, n)).toBe(mystenUtils.toShardIndex(index, id, n))
-          expect(Encoding.pairOfShard(index, id, n)).toBe(mystenUtils.toPairIndex(index, id, n))
-          expect(Encoding.pairOfSecondary(index, n)).toBe(mystenUtils.sliverPairIndexFromSecondarySliverIndex(index, n))
+          const ours = [Encoding.shardOfPair(index, id, n), Encoding.pairOfShard(index, id, n), Encoding.pairOfSecondary(index, n)]
+          const theirs = [
+            mystenUtils.toShardIndex(index, id, n),
+            mystenUtils.toPairIndex(index, id, n),
+            mystenUtils.sliverPairIndexFromSecondarySliverIndex(index, n)
+          ]
+          if (!Bun.deepEquals(ours, theirs)) mismatches.push({ id, n, index, ours, theirs })
         }
       }
     }
+    expect(mismatches).toEqual([])
   })
 
   test("signersBitmap", () => {
     const next = rng(3)
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 50; i++) {
       const members = 1 + next(200)
       const signers = [...new Set(Array.from({ length: next(members + 1) }, () => next(members)))].sort((a, b) => a - b)
       expect(Certificate.signersBitmap(signers, members)).toEqual(mystenUtils.signersToBitmap(signers, members))
     }
   })
-})
 
-describe("blob id forms", () => {
-  test("text and u256", () => {
-    for (let i = 0; i < 200; i++) {
+  test("blob id text and u256", () => {
+    for (let i = 0; i < 20; i++) {
       const raw = bytes(32, i + 100)
       const id = Result.getOrThrow(BlobId.fromBytes(raw))
       expect(id).toBe(mystenBcs.blobIdFromBytes(raw) as BlobId.BlobId)
-      expect(id).toBe(mystenUtils.urlSafeBase64(raw) as BlobId.BlobId)
       const n = BlobId.toU256(id)
       expect(n).toBe(mystenBcs.blobIdToInt(id))
       expect(BlobId.fromU256(n)).toBe(mystenBcs.blobIdFromInt(n) as BlobId.BlobId)

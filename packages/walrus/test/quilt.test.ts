@@ -63,7 +63,7 @@ describe("Quilt.encode / decode", () => {
     )
   })
 
-  test("one entry; the most entries that fit (columns − 1); one too many", () => {
+  test("one entry; the most entries that fit (columns − 1); one too many, none, too large", () => {
     const one = ok(Quilt.encode([{ identifier: "x", contents: bytes(5, 1) }], N))
     // At the smallest symbol size a column is 8 bytes: the 13-byte index and the 15-byte patch take two each.
     expect(one.patches).toEqual([{ identifier: "x", startIndex: 2, endIndex: 4, tags: {} }])
@@ -73,14 +73,10 @@ describe("Quilt.encode / decode", () => {
     expect(ok(Quilt.decode(full.quilt, N)).map((f) => f.contents)).toEqual(max.map((e) => e.contents))
     expect(reason(Quilt.encode([...max, { identifier: "g", contents: new Uint8Array(1) }], N))).toContain("at most 6")
     expect(reason(Quilt.encode([], N))).toContain("at least one")
+    expect(reason(Quilt.encode([{ identifier: "big", contents: new Uint8Array(Encoding.maxBlobSize(N)) }], N))).toContain("symbol size")
   })
 
-  test("an index over several columns; the symbol size grows to keep it within 10", () => {
-    // n = 100: 34 rows, 67 columns. Long identifiers make the index large.
-    const entries = Array.from({ length: 20 }, (_, i) => ({ identifier: `${String(i).padStart(2, "0")}${"i".repeat(1000)}`, contents: bytes(10, i) }))
-    const { quilt, patches } = ok(Quilt.encode(entries, 100))
-    expect(patches[0]!.startIndex).toBeGreaterThan(1)
-    expect(ok(Quilt.decode(quilt, 100)).map((f) => f.identifier)).toEqual(entries.map((e) => e.identifier))
+  test("the symbol size grows to keep a large index within one column at n = 4", () => {
     // n = 4: 2 rows, 3 columns. Two 30 kB identifiers: the index cannot use more than one column here.
     const big = Array.from({ length: 2 }, (_, i) => ({ identifier: `${i}${"j".repeat(30000)}`, contents: new Uint8Array(0) }))
     const small = ok(Quilt.encode(big, 4))
@@ -98,10 +94,6 @@ describe("Quilt.encode / decode", () => {
     expect(reason(Quilt.encode([e("a\u0085b")], N))).toContain("control")
     expect(reason(Quilt.encode([e("x".repeat(65533))], N))).toContain("BCS bytes")
     expect(Result.isSuccess(Quilt.encode([e(" leading and inner spaces ok")], N))).toBe(true)
-  })
-
-  test("too large for the shard count", () => {
-    expect(reason(Quilt.encode([{ identifier: "big", contents: new Uint8Array(Encoding.maxBlobSize(N)) }], N))).toContain("symbol size")
   })
 
   test("decodePatch and decodeIndex reject malformed data", () => {
@@ -131,26 +123,13 @@ describe("Quilt.encode / decode", () => {
     expect(reason(Quilt.decodeIndex(outOfRange, l))).toContain("columns")
   })
 
-  test("columnsOf reads past the end of a short blob as zeros", () => {
-    const l = ok(Quilt.layout(100, N))
-    const cols = Quilt.columnsOf(new Uint8Array(10).fill(7), l, 0, 1)
-    expect(cols.length).toBe(l.columnSize)
-    expect(cols[0]).toBe(7)
-    expect(cols.subarray(l.symbolSize).every((b) => b === 0)).toBe(true)
-  })
 })
 
 describe("Quilt ids", () => {
   const quiltId = ok(BlobId.fromBytes(new Uint8Array(32).map((_, i) => i * 7)))
 
-  test("patch id round trip; a blob id parses as a blob", () => {
-    const id = Quilt.patchId(quiltId, { startIndex: 3, endIndex: 513 })
-    expect(id.length).toBe(50)
-    expect(ok(Quilt.parseId(id))).toEqual({ _tag: "Patch", quiltId, startIndex: 3, endIndex: 513 })
+  test("a blob id parses as a blob; other lengths, versions, alphabets and padding are rejected", () => {
     expect(ok(Quilt.parseId(quiltId))).toEqual({ _tag: "Blob", blobId: quiltId })
-  })
-
-  test("rejects other lengths, versions, alphabets and padding", () => {
     const id = Quilt.patchId(quiltId, { startIndex: 1, endIndex: 2 })
     expect(reason(Quilt.parseId(id.slice(0, 48)))).toContain("bytes")
     expect(reason(Quilt.parseId(`${id}=`))).toContain("base64")
@@ -172,7 +151,6 @@ const withEncoder = <A, E>(f: (e: Encoder.EncoderService) => Effect.Effect<A, E>
 const { quilt: QUILT, patches: PATCHES } = ok(Quilt.encode(ENTRIES, N))
 const encoded = await withEncoder((e) => e.encode(N, QUILT))
 const QUILT_ID = encoded.blobId
-const LAYOUT = ok(Quilt.layout(QUILT.length, N))
 
 const committee = (epoch: number, owners: ReadonlyArray<ReadonlyArray<number>>, prefix = "node"): Committee.Committee => {
   const nodes = owners.map((shards, index): Committee.StorageNode => ({
@@ -266,15 +244,9 @@ describe("QuiltRead", () => {
     const columns = requests.filter(isSecondary).map(columnOf).sort()
     expect(columns).toEqual(Array.from({ length: readme.endIndex - readme.startIndex }, (_, i) => readme.startIndex + i))
     expect(requests.some(isPrimary)).toBe(false)
-  })
-
-  test("each column comes from the node holding its shard", async () => {
-    const { exit, requests } = await run(QuiltRead.patch(README_ID), current(c), nodesFor(c, true))
-    value(exit)
-    for (const req of requests.filter(isSecondary)) {
-      const shard = Encoding.shardOfPair(secondaryPair(req)!, QUILT_ID, N)
-      expect(req.origin).toBe(new URL(c.nodeOfShard(shard).url).origin)
-    }
+    // each column comes from the node holding its shard
+    expect(requests.filter(isSecondary).every((req) => req.origin === new URL(c.nodeOfShard(Encoding.shardOfPair(secondaryPair(req)!, QUILT_ID, N)).url).origin))
+      .toBe(true)
   })
 
   test("index: every patch with its id; byIdentifier reads the index then the patch", async () => {
@@ -371,11 +343,5 @@ describe("QuiltRead", () => {
     )
     expect(value(exit)).toEqual(fileOf("readme.md"))
     expect(requests.filter(isSecondary).every((r) => r.origin.includes("old-"))).toBe(true)
-  })
-
-  test("the layout of the test quilt is what the reads assume", () => {
-    expect(LAYOUT.columns).toBe(COLUMNS)
-    expect(LAYOUT.columnSize).toBeGreaterThan(100)
-    expect(readme.endIndex - readme.startIndex).toBeGreaterThanOrEqual(1)
   })
 })

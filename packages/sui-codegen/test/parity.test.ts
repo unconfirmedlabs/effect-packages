@@ -84,10 +84,12 @@ const statuses: ReadonlyArray<readonly [fixture.Status, unknown]> = [
 ]
 
 describe("struct schemas encode like @mysten/codegen's", () => {
-  test.each(statuses.map(([ours, them]) => [ours._tag, ours, them] as const))("Thing with status %s", (_, ours, them) => {
-    const bytes = Bcs.encodeSync(fixture.Thing)(thing(ours))
-    expect(hex(bytes)).toBe(hex(theirs.Thing.serialize(theirThing(them)).toBytes()))
-    expect(Bcs.decodeSync(fixture.Thing)(bytes)).toEqual(thing(ours))
+  test("Thing with every enum variant shape: unit, struct, tuple, Option some and none", () => {
+    for (const [ours, them] of statuses) {
+      const bytes = Bcs.encodeSync(fixture.Thing)(thing(ours))
+      expect(hex(bytes)).toBe(hex(theirs.Thing.serialize(theirThing(them)).toBytes()))
+      expect(Bcs.decodeSync(fixture.Thing)(bytes)).toEqual(thing(ours))
+    }
   })
 
   test("generic Pair and Box: only non-phantom parameters shape the layout", () => {

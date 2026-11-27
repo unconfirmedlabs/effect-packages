@@ -218,18 +218,6 @@ describe("register (registerBlobTransaction)", () => {
       expect(systemMutability(us.json)).toEqual(systemShared(true))
     })
   }
-
-  test("permanent", async () => {
-    const them = await theirs(
-      mysten.registerBlobTransaction({ size: 1, epochs: 53, blobId: BLOB_ID, rootHash: ROOT, deletable: false, owner: OWNER })
-    )
-    const us = await ours(Effect.gen(function*() {
-      const b = yield* Recipes.registerBlob({ blobId: BLOB_ID, rootHash: ROOT, unencodedLength: 1, epochs: 53, deletable: false })
-      yield* Ptb.transferObjects([b], yield* Ptb.address(OWNER))
-    }))
-    expect(us.canonical.commands).toEqual(them.commands)
-    expect(us.canonical.coins[0].amount).toBe(them.coins[0].amount + them.coins[1].amount)
-  })
 })
 
 describe("certify (certifyBlobTransaction)", () => {

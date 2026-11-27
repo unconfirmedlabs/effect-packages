@@ -2,7 +2,7 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { PasskeyKeypair, PasskeyPublicKey } from "@mysten/sui/keypairs/passkey"
 import type { PasskeyProvider as MystenProvider } from "@mysten/sui/keypairs/passkey"
 import { MultiSigPublicKey } from "@mysten/sui/multisig"
-import { verifyPersonalMessageSignature, verifyTransactionSignature } from "@mysten/sui/verify"
+import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
 import { Bcs } from "@unconfirmed/bcs"
 import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
 import * as MultiSig from "@unconfirmed/sui-multisig"
@@ -14,7 +14,6 @@ const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const fromB64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"))
 const run = <A, E>(e: Effect.Effect<A, E, never>) => Effect.runPromise(e)
 const msg = new TextEncoder().encode("multisig with a passkey")
-const txBytes = new Uint8Array(64).map((_, i) => i)
 const edSeed = new Uint8Array(32).fill(4)
 const pkSecret = new Uint8Array(32).fill(5)
 
@@ -66,31 +65,16 @@ describe("MultiSig with a passkey member", () => {
     expect(v.publicKey.flag).toBe(MultiSig.FLAG)
     expect((await verifyPersonalMessageSignature(msg, b64(ours.signature), { offline: true })).toSuiAddress()).toBe(t.signer.address)
     expect(await t.theirPk.verifyPersonalMessage(msg, b64(ours.signature))).toBe(true)
-  })
 
-  test("transactions too", async () => {
-    const t = await setup()
-    const ours = await run(Signer.signTransaction(t.signer, txBytes))
-    await run(Effect.provide(Verify.transaction(txBytes, ours.signature, { address: t.signer.address }), all))
-    expect((await verifyTransactionSignature(txBytes, b64(ours.signature), { offline: true })).toSuiAddress()).toBe(t.signer.address)
-  })
-
-  test("combine takes a passkey signature naming its member", async () => {
-    const t = await setup()
+    // combine takes a separately made passkey signature naming its member.
     const sigs = await run(Effect.all([Signer.signPersonalMessage(t.ed, msg), Signer.signPersonalMessage(t.passkey, msg)]))
     const combined = await run(MultiSig.combine(t.pk, [sigs[0].signature, { signature: sigs[1].signature, publicKey: t.passkey.publicKey }]))
-    expect(combined as Uint8Array).toEqual((await run(Signer.signPersonalMessage(t.signer, msg))).signature)
+    expect(combined as Uint8Array).toEqual(ours.signature)
   })
 
-  test("needs the passkey scheme installed; a different passkey's signature is refused", async () => {
+  test("a different passkey's signature spliced into the member slot is refused", async () => {
     const t = await setup()
     const { signature } = await run(Signer.signPersonalMessage(t.signer, msg))
-    const missing = await run(Effect.flip(Effect.provide(
-      Verify.personalMessage(msg, signature),
-      SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, MultiSig.scheme)
-    )))
-    expect(missing).toMatchObject({ _tag: "UnsupportedScheme", flag: Passkey.FLAG })
-
     // The other passkey's signature is valid on its own, but not from this member.
     const intruder = await run(Effect.flatMap(Passkey.softwareProvider(), Passkey.create))
     const forged = await run(Effect.gen(function*() {

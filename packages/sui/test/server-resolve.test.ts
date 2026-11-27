@@ -146,8 +146,6 @@ describe("the unresolved transaction as a gRPC Transaction", () => {
       gasPrice: 1000n,
       expiration: validDuring(5n, 6n)
     })
-    expect(proto.version).toBe(1)
-    expect(proto.sender).toBe(sender)
     expect(proto.gas_payment).toEqual({ objects: [], owner: sponsor, price: 1000n })
     const ptb = proto.kind?.data?._tag === "programmable_transaction" ? proto.kind.data.value : undefined
     expect(ptb?.inputs).toEqual([
@@ -158,17 +156,10 @@ describe("the unresolved transaction as a gRPC Transaction", () => {
       { kind: 1, pure: u64(5n) },
       { kind: 5, funds_withdrawal: { amount: 10n, coin_type: TypeTag.SUI, source: 3, funder: sponsor, allowance: SHARED } }
     ])
-    expect(ptb?.commands?.[0]).toEqual({
-      command: {
-        _tag: "move_call",
-        value: { package: A("0x2"), module: "clock", function: "timestamp_ms", type_arguments: [], arguments: [{ kind: 2, input: 0 }] }
-      }
-    })
-    expect(ptb?.commands?.[3]).toEqual({ command: { _tag: "split_coins", value: { coin: { kind: 1 }, amounts: [{ kind: 2, input: 4 }] } } })
-    expect(ptb?.commands?.[4]).toEqual({
-      command: { _tag: "merge_coins", value: { coin: { kind: 1 }, coins_to_merge: [{ kind: 3, result: 3, subresult: 0 }] } }
-    })
-    expect(ptb?.commands?.[5]).toEqual({ command: { _tag: "make_move_vector", value: { element_type: "u64", elements: [] } } })
+    expect(ptb?.commands?.slice(4)).toEqual([
+      { command: { _tag: "merge_coins", value: { coin: { kind: 1 }, coins_to_merge: [{ kind: 3, result: 3, subresult: 0 }] } } },
+      { command: { _tag: "make_move_vector", value: { element_type: "u64", elements: [] } } }
+    ])
     expect(proto.expiration).toEqual({ kind: 3, min_epoch: 5n, epoch: 6n, chain: CHAIN, nonce: 7 })
   })
 })

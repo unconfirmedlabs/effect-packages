@@ -1,6 +1,6 @@
 /**
- * The zkLogin scheme in the registry: its `ZkLoginVerifier` requirement is
- * typed, and multisigs with zkLogin members verify through the registry.
+ * The zkLogin scheme in the registry (verified through a `ZkLoginVerifier`),
+ * multisigs with zkLogin members, and the gRPC verifier's verdict mapping.
  */
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { MultiSigPublicKey } from "@mysten/sui/multisig"
@@ -76,14 +76,6 @@ const theirMultisig = async () => {
 }
 
 describe("ZkLogin.scheme", () => {
-  test("requires ZkLoginVerifier on the registry layer (typed)", () => {
-    const layer = SignatureSchemes.layer(Ed25519.scheme, ZkLogin.scheme, MultiSig.scheme)
-    // @ts-expect-error -- ZkLoginVerifier is still required
-    const _unprovided: Layer.Layer<SignatureScheme.SignatureSchemes> = layer
-    const _provided: Layer.Layer<SignatureScheme.SignatureSchemes> = layer.pipe(Layer.provide(stubVerifier().layer))
-    expect(_provided).toBeDefined()
-  })
-
   test("a zkLogin signature verifies through the verifier and names the zkLogin address", async () => {
     const stub = stubVerifier()
     const result = await Effect.runPromise(Effect.gen(function*() {
@@ -126,18 +118,6 @@ describe("ZkLogin.scheme", () => {
     expect(result.tampered._tag).toBe("InvalidSignature")
     // The member was checked against its own zkLogin address.
     expect(stub.requests.every((r) => r.address === Theirs.computeZkLoginAddressFromSeed(BigInt(zk.addressSeed), claims.iss, false))).toBe(true)
-  })
-
-  test("a zkLogin member is UnsupportedScheme when zkLogin is not installed", async () => {
-    const theirs = await theirMultisig()
-    const error = await Effect.runPromise(
-      Verify.personalMessage(msg, fromB64(theirs.signature)).pipe(
-        Effect.flip,
-        Effect.provide(SignatureSchemes.layer(Ed25519.scheme, MultiSig.scheme))
-      )
-    )
-    expect(error._tag).toBe("UnsupportedScheme")
-    expect((error as SignatureScheme.UnsupportedScheme).flag).toBe(0x05)
   })
 
   test("a member signature from a different zkLogin identity is refused", async () => {

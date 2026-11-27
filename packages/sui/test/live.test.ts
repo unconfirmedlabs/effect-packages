@@ -1,11 +1,13 @@
 /**
- * Against real full nodes over gRPC-web. Opt in with SUI_LIVE=1.
+ * Against a real full node over gRPC-web. Opt in with SUI_LIVE=1. Devnet execution
+ * is covered by core-review.live, server-resolve.live and the address-balance and
+ * allowance live tests.
  */
 import { Bcs } from "@unconfirmed/bcs"
 import { describe, expect, test } from "bun:test"
-import { Effect, Stream } from "effect"
-import { Address, Checkpoints, Coins, Ed25519, Objects, Ptb, Resolve, Transactions, Tx } from "../src/index.ts"
-import { DEVNET, faucet, grpcLayer, live, TESTNET } from "./support.ts"
+import { Effect } from "effect"
+import { Address, Objects, Ptb, Transactions, Tx } from "../src/index.ts"
+import { grpcLayer, live, TESTNET } from "./support.ts"
 
 const suite = live ? describe : describe.skip
 const Clock = Bcs.struct({ id: Bcs.Address, timestampMs: Bcs.u64 })
@@ -32,7 +34,7 @@ suite("testnet", () => {
   })
 
   test("resolve infers &Clock as an immutable shared input; simulate returns the value", async () => {
-    const { layer, requests } = grpcLayer(TESTNET)
+    const { layer } = grpcLayer(TESTNET)
     const { data, sim } = await Effect.runPromise(
       Effect.gen(function*() {
         const data = yield* Tx.build(
@@ -50,38 +52,5 @@ suite("testnet", () => {
     expect(input._tag === "Object" && input.value._tag === "SharedObject" && input.value.mutability._tag).toBe("Immutable")
     expect(sim.effects.status._tag).toBe("Success")
     expect(Number(Bcs.decodeSync(Bcs.u64)(sim.returnValues[0]![0]!))).toBeGreaterThan(Date.now() - 600_000)
-    console.log("resolve+simulate requests:", requests)
   })
-
-  test("checkpoints are a Stream", async () => {
-    const { layer } = grpcLayer(TESTNET)
-    const cps = await Effect.runPromise(
-      Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) => c.list().pipe(Stream.take(3), Stream.runCollect)).pipe(Effect.provide(layer))
-    )
-    expect(cps[2]!.sequenceNumber - cps[0]!.sequenceNumber).toBe(2n)
-  })
-})
-
-suite("devnet", () => {
-  test("faucet -> Tx.run with coin gas selection", async () => {
-    const { layer } = grpcLayer(DEVNET)
-    const effects = await Effect.runPromise(
-      Effect.gen(function*() {
-        const signer = yield* Ed25519.generate
-        yield* faucet(signer.address)
-        const effects = yield* Tx.run(
-          Effect.gen(function*() {
-            const [coin] = yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(1_000n)])
-            yield* Ptb.transferObjects([coin!], yield* Ptb.address(signer.address))
-          }),
-          { signer, payment: Resolve.coins }
-        )
-        const balance = yield* Effect.flatMap(Effect.service(Coins.Coins), (c) => c.getBalance(signer.address))
-        return { effects, balance }
-      }).pipe(Effect.provide(layer))
-    )
-    console.log("executed", effects.effects.digest, "balance", effects.balance.total)
-    expect(effects.effects.status._tag).toBe("Success")
-    expect(effects.effects.changedObjects.some((c) => c.operation === "Created")).toBe(true)
-  }, 60_000)
 })

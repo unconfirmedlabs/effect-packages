@@ -47,14 +47,14 @@ Counts: high 1, medium 5, low 8, nit 6.
 
 **Fix.** Give `System.state` the committee's TTL (1 minute), or refresh and rebuild once when a register transaction aborts. Recipes' doc already promises "the step can be rebuilt"; nothing does it. **Effort S.**
 
-**Resolution.** Fixed. `System.state` has a 1-minute TTL (`System.STATE_TTL`), and a failed register transaction refreshes `System` and is rebuilt once when prices, package id, epoch, shard count or shared version moved (otherwise the original error). Tests: TTL in `recipes.test.ts`; price change and unexplained abort in `write.test.ts` (fake chain checks the exact WAL payment).
+**Resolution.** Fixed. `System.state` has a 1-minute TTL (`System.STATE_TTL`), and a failed register transaction refreshes `System` and is rebuilt once when prices, package id, epoch, shard count or shared version moved (otherwise the original error). Tests: TTL in `committee.test.ts`; price change and unexplained abort in `write.test.ts` (fake chain checks the exact WAL payment).
 
 ### WAL-4 · medium · tests · measured, mechanism PLAUSIBLE (not caught in the act)
-`packages/walrus/test/live.gateway.test.ts:37-42`, `live.read.test.ts:62-67`
+`packages/walrus/test/live.gateway.test.ts:37-42`, `live.read.test.ts:62-67` (as reviewed; both cases are now one test in `live.read.test.ts`)
 
 See "Investigated item 1" below for the measurements. The candidate filter keeps deletable blobs; on testnet 73% of the newest certified blobs are deleted 11–104 s after certification, and the metadata pre-check passes as long as one node still has the metadata. **Fix.** Filter `!c.deletable` (the helper already decodes it), take `recentCertified(200)` (only ~10% are permanent), and on a failed candidate log the failure kinds and try the next one. **Effort S.**
 
-**Resolution.** Fixed (tests), plus the optional check. Live tests take `recentCertified(200)` filtered to permanent, non-extension blobs (`readableCandidates`), log each failed candidate with its failure kinds (`describeReadFailure`) and try the next (up to 20). `Read.blob` / `Read.locate` ending in `NotEnoughSlivers` or `NoMetadata` ask the status once and return `BlobNotFound` when it is `Nonexistent`. `SUI_LIVE=1` gateway test passed 4 of 4 runs.
+**Resolution.** Fixed (tests), plus the optional check. Live tests take `recentCertified(200)` filtered to permanent, non-extension blobs (`readableCandidates`), log each failed candidate with its failure kinds (`describeReadFailure`) and try the next (up to 20). `Read.blob` / `Read.locate` ending in `NotEnoughSlivers` or `NoMetadata` ask the status once and return `BlobNotFound` when it is `Nonexistent`. `SUI_LIVE=1` gateway test passed 4 of 4 runs. (The gateway test has since been merged into `live.read.test.ts`, which now reads through `Walrus.layer` and compares with `Aggregator.verified`.)
 
 ### WAL-5 · medium · performance · CONFIRMED (measured)
 `packages/walrus/src/Encoder.ts:143-144` (every call), `Read.ts:478-483`

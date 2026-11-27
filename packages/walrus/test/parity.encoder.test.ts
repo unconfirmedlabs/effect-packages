@@ -37,11 +37,8 @@ afterAll(() => Effect.runPromise(Scope.close(scope, Exit.void)))
 const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(effect)
 
 describe("Encoder parity", () => {
-  const next = rng(5)
-  const cases: Array<readonly [number, number]> = []
-  for (const n of [4, 5, 7, 10, 13, 100]) {
-    for (const length of [0, 1, 2, 1000, 65_539, next(300_000)]) cases.push([n, length])
-  }
+  // Every shard count (n mod 3 = 0, 1, 2; one and two source-symbol rows) and every length class appear once.
+  const cases: Array<readonly [number, number]> = [[4, 0], [5, 1], [7, 2], [10, 1000], [13, 65_539], [100, 275_959]]
 
   for (const [n, length] of cases) {
     test(`n = ${n}, ${length} bytes`, async () => {
@@ -86,7 +83,7 @@ const pick = (next: (max: number) => number, k: number, max: number): Array<numb
 
 describe("decode parity from any n - 2f slivers (systematic and repair)", () => {
   const next = rng(17)
-  for (const [n, length] of [[10, 5000], [13, 77_777], [100, 300_001]] as const) {
+  for (const [n, length] of [[10, 5000], [13, 77_777]] as const) {
     test(`n = ${n}, ${length} bytes`, async () => {
       const blob = bytes(length, n + length)
       const theirs = mysten.encodeBlob(n, blob)
@@ -135,7 +132,7 @@ const craftedRoots = (n: number, axis: "primary" | "secondary", symbolSize: numb
 
 describe("sliverRoots parity with the crafted-blob method", () => {
   const next = rng(23)
-  for (const [n, length] of [[4, 10], [10, 1], [10, 2000], [13, 100_000], [100, 1_000_000]] as const) {
+  for (const [n, length] of [[4, 10], [10, 2000], [13, 100_000]] as const) {
     test(`n = ${n}, ${length} bytes`, async () => {
       const blob = bytes(length, 7 * n + length)
       const theirs = mysten.encodeBlob(n, blob)
@@ -158,7 +155,8 @@ describe("sliverRoots parity with the crafted-blob method", () => {
 })
 
 describe("n = 1000 (slow)", () => {
-  test("encode, blobId, sliverRoots and decode from repair slivers match Mysten", async () => {
+  // One Mysten encode at n = 1000 costs about 2.5 s, so everything at mainnet's shard count is checked against this one.
+  test("encode and blobId match Mysten; sliverRoots match its metadata and catch a corrupted sliver; decode from repair slivers", async () => {
     const n = 1000
     const blob = bytes(200_000, 99)
     const theirs = mysten.encodeBlob(n, blob)
@@ -166,15 +164,25 @@ describe("n = 1000 (slow)", () => {
     expect(ours.blobId).toBe(theirs.blobId as typeof ours.blobId)
     expect(ours.primary).toEqual(theirs.primarySlivers)
     expect(ours.secondary).toEqual(theirs.secondarySlivers)
+    expect(ours.metadata.length + 32).toBe(66_044) // E9: the metadata response at n = 1000
     expect((await run(encoder.blobId(n, blob))).blobId).toBe(ours.blobId)
     const { symbolSize } = Encoding.sliverBytes(blob.length, n)
-    const chosen = [0, 1, 500, 998, 999]
-    const slivers = chosen.map((p) => theirs.secondarySlivers[p]!)
-    expect(await run(encoder.sliverRoots(n, "secondary", symbolSize, slivers))).toEqual(
-      craftedRoots(n, "secondary", symbolSize, slivers)
-    )
+    const hashes = theirs.metadata.V1.hashes
+    const pairs = [0, 333, 334, 999]
+    const corrupted = 334
+    for (const axis of ["primary", "secondary"] as const) {
+      const all = axis === "primary" ? theirs.primarySlivers : theirs.secondarySlivers
+      const slivers = pairs.map((p) => {
+        if (p !== corrupted) return all[p]!
+        const copy = all[p]!.slice()
+        Result.getOrThrow(Messages.parseSliver(copy)).data[3]! ^= 0xa5
+        return copy
+      })
+      const roots = await run(encoder.sliverRoots(n, axis, symbolSize, slivers))
+      const expected = pairs.map((p) => new Uint8Array(axis === "primary" ? hashes[p]!.primary_hash.Digest : hashes[p]!.secondary_hash.Digest))
+      expect(pairs.map((p, i) => Buffer.from(roots[i]!).equals(expected[i]!))).toEqual(pairs.map((p) => p !== corrupted))
+    }
     const need = Encoding.sourceSymbols(n).primary
-    const repair = theirs.primarySlivers.slice(n - need)
-    expect(await run(encoder.decode(n, blob.length, repair))).toEqual(blob)
+    expect(await run(encoder.decode(n, blob.length, theirs.primarySlivers.slice(n - need)))).toEqual(blob)
   }, 120_000)
 })

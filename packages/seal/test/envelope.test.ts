@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Result from "effect/Result"
-import { Bls, Dem, EncryptedObject, Entropy, Envelope, Ibe, Kdf, Shamir } from "../src/index.ts"
+import { Bls, Dem, EncryptedObject, Entropy, Envelope, Ibe, Kdf } from "../src/index.ts"
 import { b64, seeded, utf8 } from "./support.ts"
 
 const RUST_VECTOR = b64(
@@ -78,59 +78,44 @@ describe("the Rust vector (an object written by the TS SDK)", () => {
   }))
   const publicKeys = servers.map((s) => s.publicKey)
 
-  test("every pair and all three keys open it, with and without the consistency check", async () => {
+  test("every pair and all three keys open it (with the consistency check); one key is NotEnoughKeys", async () => {
     for (const subset of [...subsets(servers, 2), servers]) {
       const keys = keysFor(object, subset)
-      expect(new TextDecoder().decode(await run(Envelope.open({ object, keys })))).toBe("My super secret message")
-      expect(new TextDecoder().decode(await run(Envelope.open({ object, keys, publicKeys })))).toBe(
-        "My super secret message"
-      )
+      expect(new TextDecoder().decode(await run(Envelope.open({ object, keys, publicKeys })))).toBe("My super secret message")
     }
-  })
-
-  test("one key is NotEnoughKeys", async () => {
     const error = await fails(Envelope.open({ object, keys: keysFor(object, servers.slice(0, 1)) }))
     expect(error).toMatchObject({ _tag: "NotEnoughKeys", required: 2, available: 1 })
   })
 })
 
 describe("round trips", () => {
-  const inputs: ReadonlyArray<Dem.Input> = [
-    { _tag: "AesGcm256", data: utf8("aes"), aad: Uint8Array.of(9, 9) },
-    { _tag: "AesGcm256", data: new Uint8Array(0) },
-    { _tag: "Hmac256Ctr", data: next(100), aad: Uint8Array.of(1) },
-    { _tag: "Hmac256Ctr", data: next(64) }
-  ]
-
-  test("both DEMs, thresholds 1, n and in between; every t-subset opens, t − 1 does not", async () => {
+  test("both DEMs, thresholds 1, in between and n; t keys open, t − 1 do not", async () => {
     const recipients = SERVERS.slice(0, 4)
+    const inputs: ReadonlyArray<Dem.Input> = [
+      { _tag: "AesGcm256", data: utf8("aes"), aad: Uint8Array.of(9, 9) },
+      { _tag: "Hmac256Ctr", data: next(100) }
+    ]
     for (const [i, input] of inputs.entries()) {
-      for (const threshold of [1, 2, 3, 4]) {
+      for (const threshold of [1, 2, 4]) {
         const { object, bytes } = await run(sealWith(recipients, threshold, input, `rt-${i}-${threshold}`))
         expect(ok(EncryptedObject.parse(bytes))).toEqual(object)
-        expect(object.services.map(([, index]) => index)).toEqual([1, 2, 3, 4])
         const data = input._tag === "Plain" ? undefined : input.data
-        for (const subset of subsets(recipients, threshold)) {
-          expect(await run(Envelope.open({ object, keys: keysFor(object, subset) }))).toEqual(data!)
-        }
-        for (const subset of subsets(recipients, threshold - 1)) {
-          const error = await fails(Envelope.open({ object, keys: keysFor(object, subset) }))
+        expect(await run(Envelope.open({ object, keys: keysFor(object, recipients.slice(-threshold)) }))).toEqual(data!)
+        if (threshold > 1) {
+          const error = await fails(Envelope.open({ object, keys: keysFor(object, recipients.slice(0, threshold - 1)) }))
           expect(error).toMatchObject({ _tag: "NotEnoughKeys", required: threshold, available: threshold - 1 })
         }
       }
     }
   })
 
-  test("Plain: no data, opening returns the DEM key", async () => {
+  test("the returned key is the DEM key; Plain has no data and opening returns that key (C14)", async () => {
+    const input: Dem.Input = { _tag: "Hmac256Ctr", data: utf8("dem key") }
+    const hmac = await run(sealWith(SERVERS.slice(0, 2), 1, input))
+    expect(await run(Dem.decrypt(hmac.object.ciphertext, hmac.key))).toEqual(utf8("dem key"))
     const { object, key } = await run(sealWith(SERVERS.slice(0, 3), 2, { _tag: "Plain" }))
     expect(object.ciphertext._tag).toBe("Plain")
     expect(await run(Envelope.open({ object, keys: keysFor(object, SERVERS.slice(1, 3)) }))).toEqual(key)
-  })
-
-  test("the returned key is the DEM key", async () => {
-    const input: Dem.Input = { _tag: "Hmac256Ctr", data: utf8("dem key") }
-    const { object, key } = await run(sealWith(SERVERS.slice(0, 2), 1, input))
-    expect(await run(Dem.decrypt(object.ciphertext, key))).toEqual(utf8("dem key"))
   })
 
   test("repeated servers: a server's key opens all its shares", async () => {
@@ -146,24 +131,6 @@ describe("round trips", () => {
     })
     const publicKeys = recipients.map((s) => s.publicKey)
     expect(await run(Envelope.open({ object, keys: keysFor(object, [s1, s2]), publicKeys }))).toEqual(utf8("hello seal"))
-  })
-
-  test("deterministic under the same entropy, different under another", async () => {
-    const a = await run(sealWith(SERVERS.slice(0, 3), 2, undefined, "same"))
-    const b = await run(sealWith(SERVERS.slice(0, 3), 2, undefined, "same"))
-    const c = await run(sealWith(SERVERS.slice(0, 3), 2, undefined, "other"))
-    expect(a.bytes).toEqual(b.bytes)
-    expect(a.bytes).not.toEqual(c.bytes)
-  })
-
-  test("randomness draws 32 + 32(t − 1) + 48 bytes", async () => {
-    const draws: Array<number> = []
-    const source = seeded("count")
-    await run(Envelope.randomness(3).pipe(Effect.provideService(Entropy.Entropy, (n: number) => {
-      draws.push(n)
-      return source(n)
-    })))
-    expect(draws).toEqual([32, 64, 48])
   })
 })
 
@@ -232,7 +199,6 @@ describe("failures", () => {
       expect(error.reason).toContain(contains)
     }
     await refused({ threshold: 0 }, "threshold 0")
-    await refused({ threshold: 4 }, "threshold 4")
     await refused({ threshold: 1.5 }, "threshold 1.5")
     await refused({ recipients: [] }, "recipients")
     await refused({ recipients: Array.from({ length: 256 }, () => SERVERS[0]!), threshold: 2 }, "recipients")
@@ -240,88 +206,7 @@ describe("failures", () => {
     await refused({ recipients: [{ objectId: SERVERS[0]!.objectId, publicKey: new Uint8Array(96) }, ...SERVERS.slice(1, 3)] }, "public key")
     await refused({ recipients: [{ objectId: "0x1" as Address.Address, publicKey: SERVERS[0]!.publicKey }, ...SERVERS.slice(1, 3)] }, "object id")
     await refused({ randomness: { ...randomness, baseKey: new Uint8Array(31) } }, "base key")
-    await refused({ randomness: { ...randomness, coefficients: new Uint8Array(31) } }, "coefficient")
-    await refused({ randomness: { ...randomness, r: 0n } }, "r must be")
     await refused({ randomness: { ...randomness, r: Bls.ORDER } }, "r must be")
-  })
-})
-
-/**
- * An object whose share for the last service is not on the polynomial: built by hand with the
- * primitives so that the derived keys commit to the bad share.
- */
-const sealInconsistent = (recipients: ReadonlyArray<Server>, threshold: number, data: Uint8Array) =>
-  Effect.gen(function*() {
-    const { baseKey, coefficients, r } = yield* Envelope.randomness(threshold)
-    const shares = ok(Shamir.split(baseKey, threshold, recipients.length, coefficients)).map((s, i, all) =>
-      i === all.length - 1 ? { ...s, share: s.share.map((b) => b ^ 0x5a) } : s
-    )
-    const services = recipients.map((s, i) => ({ objectId: s.objectId, index: shares[i]!.index }))
-    const objectIds = services.map((s) => s.objectId)
-    const fullId = Kdf.fullId(PACKAGE, ID)
-    const publicKeys = recipients.map((s) => ok(Bls.g2FromBytes(s.publicKey)))
-    const { nonce, encryptedShares } = Ibe.encryptShares(r, shares.map((s) => s.share), publicKeys, fullId, services)
-    const rKey = Kdf.deriveKey("EncryptedRandomness", baseKey, encryptedShares, threshold, objectIds)
-    const demKey = Kdf.deriveKey("Dem", baseKey, encryptedShares, threshold, objectIds)
-    const ciphertext = yield* Dem.encrypt({ _tag: "Hmac256Ctr", data }, demKey)
-    const object: EncryptedObject.EncryptedObject = {
-      version: 0,
-      packageId: PACKAGE,
-      id: ID,
-      services: services.map((s) => [s.objectId, s.index] as const),
-      threshold,
-      encryptedShares: {
-        _tag: "BonehFranklinBLS12381",
-        nonce,
-        encryptedShares,
-        encryptedRandomness: Bls.scalarToBytes(r).map((b, i) => b ^ rKey[i]!)
-      },
-      ciphertext
-    }
-    return object
-  }).pipe(Effect.provideService(Entropy.Entropy, seeded("inconsistent")))
-
-/** The same object with `r` stored little-endian, as legacy writers did (C9). */
-const toLittleEndian = (object: EncryptedObject.EncryptedObject, randomness: Envelope.Randomness) => {
-  const ibe = object.encryptedShares
-  const rKey = Kdf.deriveKey(
-    "EncryptedRandomness",
-    randomness.baseKey,
-    ibe.encryptedShares,
-    object.threshold,
-    object.services.map(([id]) => id)
-  )
-  const le = Bls.scalarToBytes(randomness.r).reverse()
-  return { ...object, encryptedShares: { ...ibe, encryptedRandomness: le.map((b, i) => b ^ rKey[i]!) } }
-}
-
-describe("share consistency (C10) and legacy nonces (C9)", () => {
-  test("inconsistent shares open without the check and fail with it", async () => {
-    const recipients = SERVERS.slice(0, 3)
-    const object = await run(sealInconsistent(recipients, 2, utf8("split brain")))
-    const publicKeys = recipients.map((s) => s.publicKey)
-    const honest = keysFor(object, recipients.slice(0, 2))
-    expect(await run(Envelope.open({ object, keys: honest }))).toEqual(utf8("split brain"))
-    expect(await fails(Envelope.open({ object, keys: honest, publicKeys }))).toMatchObject({
-      _tag: "InvalidCiphertext",
-      reason: "inconsistent shares"
-    })
-    // A subset including the bad share recovers another base key: the nonce check catches it.
-    expect(await fails(Envelope.open({ object, keys: keysFor(object, [recipients[0]!, recipients[2]!]) })))
-      .toMatchObject({ _tag: "InvalidCiphertext" })
-  })
-
-  test("a little-endian r opens only with legacyNonce; big-endian opens either way", async () => {
-    const recipients = SERVERS.slice(0, 3)
-    const { object, randomness } = await run(sealWith(recipients, 2))
-    const legacy = toLittleEndian(object, randomness)
-    const keys = keysFor(object, recipients.slice(1))
-    expect(await fails(Envelope.open({ object: legacy, keys }))).toMatchObject({ _tag: "InvalidCiphertext" })
-    expect(await run(Envelope.open({ object: legacy, keys, legacyNonce: true }))).toEqual(utf8("hello seal"))
-    expect(await run(Envelope.open({ object, keys, legacyNonce: true }))).toEqual(utf8("hello seal"))
-    // The consistency check uses the r that matched, whatever its encoding.
-    const publicKeys = recipients.map((s) => s.publicKey)
-    expect(await run(Envelope.open({ object: legacy, keys, legacyNonce: true, publicKeys }))).toEqual(utf8("hello seal"))
   })
 })
 

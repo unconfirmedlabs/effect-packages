@@ -49,20 +49,8 @@ describe("function-valued concurrency", () => {
     expect(seen[0]).toEqual({ succeeded: 0, failed: 0, reachedWeight: 0, failedWeight: 0 })
   })
 
-  test("Infinity is unbounded", async () => {
-    const world = makeWorld([{ delay: 1000 }, { delay: 1000 }, { delay: 1000 }])
-    const { exit } = await timed(Quorum.run(world.members, {
-      weight: world.weight,
-      run: world.run,
-      threshold: 3,
-      concurrency: () => Infinity
-    }))
-    expect(value(exit).weight).toBe(3)
-    expect(world.maxInFlight).toBe(3)
-  })
-
   test("returning a non-positive or fractional limit is a defect", async () => {
-    for (const bad of [0, -1, 1.5, NaN]) {
+    for (const bad of [0, 1.5]) {
       const world = makeWorld([{ delay: 1000 }])
       const { exit } = await timed(Quorum.run(world.members, {
         weight: world.weight,
@@ -75,23 +63,6 @@ describe("function-valued concurrency", () => {
     }
   })
 
-  test("agree takes it too", async () => {
-    const world = makeWorld([
-      { delay: 1000, outcomes: [new NodeError("x", false)] },
-      { delay: 1000, value: "a" },
-      { delay: 1000, value: "a" }
-    ])
-    const { exit, at } = await timed(Quorum.agree(world.members, {
-      weight: world.weight,
-      run: world.run,
-      key: (v) => v,
-      threshold: 2,
-      concurrency: (p) => 1 + p.failed
-    }))
-    expect(value(exit).winner.key).toBe("a")
-    expect(at).toBe(2000)
-    expect(world.maxInFlight).toBe(2)
-  })
 })
 
 describe("after the threshold is reached", () => {

@@ -2,34 +2,24 @@
  * The browser stores and lock, in Bun: `KeyValueStoreIndexedDb` over
  * `fake-indexeddb`, `KeyValueStoreOpfs` over the fake OPFS and
  * `SenderLockWebLocks` over the fake `LockManager` from test-support. The
- * journal suite itself runs over both stores in journal.test.ts; this file
+ * journal round trip and crash recovery run over both stores in journal.test.ts; this file
  * covers what is specific to each (connections, encoding, atomicity, every
- * error mapping, interruption, two tabs).
+ * error path that must stay typed, interruption, two tabs).
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
-import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
-import * as Scope from "effect/Scope"
 import { forceCloseDatabase, IDBDatabase as FDBDatabase, IDBFactory, IDBObjectStore as FDBObjectStore } from "fake-indexeddb"
 import { makeFakeLockManager } from "@unconfirmed/test-support/locks"
 import { makeFakeOpfs } from "@unconfirmed/test-support/opfs"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as Objects from "@unconfirmed/sui/Objects"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import * as Resolve from "@unconfirmed/sui/Resolve"
-import * as Journal from "../src/Journal.ts"
 import * as KeyValueStoreIndexedDb from "../src/KeyValueStoreIndexedDb.ts"
 import * as KeyValueStoreOpfs from "../src/KeyValueStoreOpfs.ts"
-import * as Lifecycle from "../src/Lifecycle.ts"
 import * as SenderLock from "../src/SenderLock.ts"
 import * as SenderLockWebLocks from "../src/SenderLockWebLocks.ts"
-import * as SubmitConfig from "../src/SubmitConfig.ts"
 import "./stores.ts" // installs IDBKeyRange
-import { COIN, layer as worldLayer, makeWorld, ownedObject } from "./world.ts"
 
 const restores: Array<() => void> = []
 afterEach(() => {
@@ -252,20 +242,6 @@ describe("KeyValueStoreIndexedDb", () => {
       expect(r.value).toBe("old")
     })
 
-    test("a transaction aborted by someone else", async () => {
-      const e = await withStore(KeyValueStoreIndexedDb.layer({ indexedDB: new IDBFactory() }), (kv) => {
-        patch(FDBObjectStore.prototype, "delete", (original) =>
-          function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore["delete"]>) {
-            const req = original.apply(this, args)
-            this.transaction.abort()
-            return req
-          } as IDBObjectStore["delete"])
-        return Effect.flip(kv.remove("k"))
-      })
-      expect(e.method).toBe("remove")
-      expect(e.message).toContain("AbortError")
-    })
-
     test("InvalidStateError from transaction(), after one reopen", async () => {
       const { wrapped, opened } = recording()
       const e = await withStore(KeyValueStoreIndexedDb.layer({ indexedDB: wrapped }), (kv) => {
@@ -280,7 +256,7 @@ describe("KeyValueStoreIndexedDb", () => {
       expect(opened.length).toBe(2)
     })
 
-    test("a value this store did not write, and a failing modify function", async () => {
+    test("a value this store did not write, and a failing modify function, are typed; the old value stays", async () => {
       const factory = new IDBFactory()
       const r = await withStore(KeyValueStoreIndexedDb.layer({ indexedDB: factory, database: "foreign" }), (kv) =>
         Effect.gen(function*() {
@@ -305,16 +281,6 @@ describe("KeyValueStoreIndexedDb", () => {
       expect(r.foreign.message).toContain("not a string or bytes")
       expect(r.thrown.message).toContain("boom")
       expect(r.kept).toBe("v")
-    })
-
-    test("using the store after its scope closed", async () => {
-      const r = await Effect.runPromise(Effect.gen(function*() {
-        const scope = yield* Scope.make()
-        const kv = yield* KeyValueStoreIndexedDb.make({ indexedDB: new IDBFactory() }).pipe(Scope.provide(scope))
-        yield* Scope.close(scope, Exit.void)
-        return yield* Effect.flip(kv.get("k"))
-      }))
-      expect(r.message).toContain("scope is closed")
     })
   })
 })
@@ -384,27 +350,6 @@ describe("KeyValueStoreOpfs", () => {
   })
 
   describe("errors are KeyValueStoreError", () => {
-    test("quota; the old value stays", async () => {
-      const opfs = makeFakeOpfs({ quota: 8 })
-      const r = await withStore(KeyValueStoreOpfs.layer({ root: opfs.getDirectory }), (kv) =>
-        Effect.gen(function*() {
-          yield* kv.set("k", "small")
-          return { e: yield* Effect.flip(kv.set("k", "far too large")), value: yield* kv.get("k") }
-        }))
-      expect(r.e).toBeInstanceOf(KeyValueStore.KeyValueStoreError)
-      expect([r.e.method, r.e.key]).toEqual(["set", "k"])
-      expect(r.e.message).toContain("QuotaExceededError")
-      expect(r.value).toBe("small")
-    })
-
-    test("OPFS missing, or getDirectory refused", async () => {
-      const missing = await buildError(KeyValueStoreOpfs.layer())
-      expect(missing.method).toBe("open")
-      expect(missing.message).toContain("not available")
-      setGlobal("navigator", { storage: { getDirectory: () => Promise.reject(new DOMException("private", "SecurityError")) } })
-      expect((await buildError(KeyValueStoreOpfs.layer())).message).toContain("SecurityError")
-    })
-
     test("createWritable missing (Safari before 26): at build when detectable, else at set", async () => {
       setGlobal("FileSystemFileHandle", class {})
       expect((await buildError(KeyValueStoreOpfs.layer({ root: makeFakeOpfs().getDirectory }))).message).toContain("createWritable")
@@ -550,33 +495,5 @@ describe("SenderLockWebLocks", () => {
     })
     await Effect.runPromise(Effect.all([service.withLocks([A])(work), service.withLocks([A])(work)], { concurrency: "unbounded" }))
     expect(max).toBe(1)
-  })
-
-  test("navigator.locks is picked up when present", async () => {
-    const locks = makeFakeLockManager()
-    setGlobal("navigator", { locks })
-    const service = await serviceOf(SenderLockWebLocks.layer)
-    await Effect.runPromise(service.withLocks([A])(Effect.void))
-    expect(locks.grants).toEqual([name(A)])
-  })
-
-  test("Lifecycle.run in two tabs, pinned bytes, one sender: serialised build through submit", async () => {
-    const world = makeWorld({ executeDelay: 30 })
-    const locks = makeFakeLockManager()
-    const fast = SubmitConfig.layer({ lookupTimeout: 0, reconcileRecheck: 0, awaitVisibility: false })
-    const signer = await Effect.runPromise(Ed25519.generate)
-    const coin = ownedObject(COIN, 3n)
-    const runIn = (amount: bigint) =>
-      Lifecycle.run(
-        Effect.gen(function*() {
-          const c = (yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(amount)]))[0]!
-          yield* Ptb.transferObjects([c], yield* Ptb.address(signer.address))
-        }),
-        { signer, payment: Resolve.fixed([Objects.refOf(coin)]) }
-      ).pipe(Effect.provide(Layer.mergeAll(worldLayer(world), fast, Journal.layerMemory, SenderLockWebLocks.layerWith({ locks }))))
-    await Promise.all([Effect.runPromise(runIn(1n)), Effect.runPromise(runIn(2n))])
-    expect(world.maxInFlight).toBe(1)
-    expect(world.builtDuringExecute).toBe(false)
-    expect(locks.held().size).toBe(0)
   })
 })

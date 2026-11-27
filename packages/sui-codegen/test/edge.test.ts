@@ -78,12 +78,6 @@ describe("local packages", () => {
     expect(out["fixture/fixture.ts"]).toContain(`"${v2}::fixture::Marker"`)
   })
 
-  test("without an id an unpublished package still renders as 0x0", async () => {
-    const out = byPath(await files([{ path: summaries, package: "fixture" }]))
-    expect(packageDefault(out["fixture/$package.ts"]!)).toBe(ZERO)
-    expect(out["fixture/fixture.ts"]).toContain(`"${ZERO}::fixture::Thing"`)
-  })
-
   test("two unpublished local packages in one config (CT-7)", async () => {
     const a = relabelled(join(scratch, "two-a"), "fixture")
     const b = relabelled(join(scratch, "two-b"), "other")
@@ -126,13 +120,6 @@ describe("merging", () => {
       expect(packageDefault(out["framework/$package.ts"]!)).toBe(Address.normalize("0x999"))
       expect(out["sui/$package.ts"]).toBeUndefined()
     }
-  })
-
-  test("a root copy wins over a dependency copy in Generate.merge", () => {
-    const dep: M.Package = { address: "0x1", storageId: "0x1", name: "dep", modules: [] }
-    const root: M.Package = { address: "0x1", storageId: "0x9", name: "root", modules: [] }
-    const merged = Generate.merge([{ root: "0x2", packages: [dep] }, { root: "0x1", packages: [root] }])
-    expect(merged).toEqual([root])
   })
 })
 

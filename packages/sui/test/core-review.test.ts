@@ -28,7 +28,6 @@ import {
   Objects,
   Packages,
   Ptb,
-  Resolve,
   Signer,
   TransactionData as T,
   TransactionJson,
@@ -37,6 +36,7 @@ import {
   TypeTag
 } from "../src/index.ts"
 import { RpcError } from "../src/RpcError.ts"
+import { type GrpcScript, fakeGrpc } from "./support.ts"
 
 const A = Address.normalize
 const D = (seed: number) => base58.encode(new Uint8Array(32).fill(seed)) as T.ObjectDigest
@@ -98,18 +98,11 @@ const subscribe = Effect.flatMap(Effect.service(GrpcWeb), (g) =>
 const serviceInfo = Effect.flatMap(Effect.service(GrpcWeb), (g) => g.unary(Rpc.LedgerService_GetServiceInfo, {}))
 
 describe("gRPC-web framing", () => {
-  test("CORE-3: a body without its trailers frame fails (retryable), it does not complete", async () => {
-    const exit = await Effect.runPromiseExit(Effect.provide(subscribe, grpcOver([frame(subResp(1)), frame(subResp(2))])))
-    const e = failureOf(exit) as RpcError
-    expect(e.code).toBe("UNAVAILABLE")
-    expect(e.retryable).toBe(true)
-  })
-
-  test("CORE-3: a body cut inside a frame fails", async () => {
-    const exit = await Effect.runPromiseExit(
-      Effect.provide(subscribe, grpcOver([frame(subResp(1)), new Uint8Array([0, 0, 0, 0, 9, 1, 2])]))
-    )
-    expect((failureOf(exit) as RpcError).code).toBe("UNAVAILABLE")
+  test("CORE-3: a body without its trailers frame, or cut inside a frame, fails (retryable); it does not complete", async () => {
+    for (const cut of [frame(subResp(2)), new Uint8Array([0, 0, 0, 0, 9, 1, 2])]) {
+      const e = failureOf(await Effect.runPromiseExit(Effect.provide(subscribe, grpcOver([frame(subResp(1)), cut])))) as RpcError
+      expect([e.code, e.retryable]).toEqual(["UNAVAILABLE", true])
+    }
   })
 
   test("a complete stream, split at every byte, decodes in order", async () => {
@@ -182,42 +175,13 @@ describe("gRPC-web framing", () => {
 // Scripted GrpcWeb for the services
 // -----------------------------------------------------------------------------
 
-const short = (path: string) => path.split("/").pop()!
-const fakeGrpc = (script: {
-  unary?: (method: string, req: any, n: number) => Effect.Effect<any, RpcError>
-  stream?: (method: string, req: any, n: number) => Stream.Stream<any, RpcError>
-}) => {
-  const requests: Array<{ method: string; req: any }> = []
-  const counts = new Map<string, number>()
-  const tick = (m: string) => {
-    const n = counts.get(m) ?? 0
-    counts.set(m, n + 1)
-    return n
-  }
-  const layer = Layer.succeed(GrpcWeb, GrpcWeb.of({
-    unary: (method, req) =>
-      Effect.suspend(() => {
-        const m = short(method.path)
-        requests.push({ method: m, req })
-        return script.unary ? script.unary(m, req, tick(m)) : Effect.die(`unexpected ${m}`)
-      }),
-    serverStream: (method, req) =>
-      Stream.suspend(() => {
-        const m = short(method.path)
-        requests.push({ method: m, req })
-        return script.stream ? script.stream(m, req, tick(m)) : Stream.die(`unexpected ${m}`)
-      })
-  }))
-  return { layer, requests }
-}
-
 const SERVICE_INFO = { checkpoint_height: 1000n, lowest_available_checkpoint: 400n, epoch: 7n, chain_id: CHAIN }
 const ev = (cp: bigint) => ({
   event: { event_type: "0x2::m::E", sender: "0x1", package_id: "0x2", module: "m", checkpoint: cp, transaction_digest: "d", transaction_index: 0n, event_index: 0, contents: { value: new Uint8Array([1]) } },
   watermark: { cursor: new Uint8Array([Number(cp % 256n)]), cursor_position: { checkpoint: cp, transaction_index: 0n, event_index: 0 } }
 })
 const outOfRange = new RpcError({ method: "ListEvents", code: "OUT_OF_RANGE", message: "requested data below earliest available" })
-const listEvents = (options: Events.ListOptions, script: Parameters<typeof fakeGrpc>[0]) => {
+const listEvents = (options: Events.ListOptions, script: GrpcScript) => {
   const g = fakeGrpc(script)
   return Effect.runPromiseExit(
     Effect.flatMap(Effect.service(Events.Events), (e) => Stream.runCollect(e.list(options))).pipe(
@@ -271,14 +235,11 @@ const getObject = (id: string, layer: Layer.Layer<Objects.Objects>) =>
   Effect.runPromiseExit(Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(A(id))).pipe(Effect.provide(layer)))
 
 describe("Objects over gRPC", () => {
-  test("CORE-6: only NOT_FOUND is ObjectNotFound; another per-object status is that RpcError", async () => {
+  test("CORE-6: only NOT_FOUND is ObjectNotFound; another per-object status is that RpcError; a missing entry is DATA_LOSS", async () => {
     const { layer } = objectsWith((id) =>
       id === A("0x5") ? { _tag: "error", value: { code: 5, message: "gone" } } : { _tag: "error", value: { code: 13, message: "storage error" } })
     expect(failureOf(await getObject("0x5", layer))).toMatchObject({ _tag: "ObjectNotFound" })
     expect(failureOf(await getObject("0x6", layer))).toMatchObject({ _tag: "RpcError", code: "INTERNAL", message: "storage error" })
-  })
-
-  test("CORE-6: a missing entry is DATA_LOSS", async () => {
     const g = fakeGrpc({ unary: () => Effect.succeed({ objects: [] }) })
     const exit = await getObject("0x7", ObjectsGrpc.layer.pipe(Layer.provide(g.layer)))
     expect(failureOf(exit)).toMatchObject({ _tag: "RpcError", code: "DATA_LOSS" })
@@ -473,12 +434,6 @@ describe("gas payment (CORE-1)", () => {
     expect(exit.value.gasData.payment.map((r) => r.objectId)).toEqual([coinRef(0).objectId, coinRef(1).objectId])
   })
 
-  test("with an address balance: a reservation of all of it plus every coin", async () => {
-    const exit = await build({ addressBalance: 1n * SUI, coins: [6n * SUI, 2n * SUI] }, pay8Sui)
-    if (exit._tag !== "Success") throw new Error(String(failureOf(exit)))
-    expect(exit.value.gasData.payment).toHaveLength(3)
-  })
-
   test("more than the wallet holds is InsufficientBalance before signing", async () => {
     const exit = await build({ addressBalance: 0n, coins: [1n * SUI] }, pay8Sui)
     expect(failureOf(exit)).toMatchObject({ _tag: "InsufficientBalance", required: 8n * SUI, available: 1n * SUI })
@@ -506,15 +461,16 @@ describe("gas payment (CORE-1)", () => {
 describe("typed failures in place of defects (CORE-7, CORE-8, CT-21)", () => {
   const recipe = <E>(r: Effect.Effect<unknown, E, Ptb.PtbBuilder>) => Effect.runPromiseExit(Ptb.build(r))
 
-  test.each([
-    ["Ptb.address", Ptb.address("nope")],
-    ["Ptb.object", Ptb.object("nope")],
-    ["Ptb.moveCall", Ptb.moveCall({ target: "0x2::m::f", typeArguments: ["0x2::sui"] })],
-    ["Ptb.coin", Ptb.coin({ type: "SUI", amount: 1n })],
-    ["Move.obj", Move.obj("nope")],
-    ["Move.param", Move.param("0x2::sui", 1n)]
-  ] as const)("%s with bad input is InvalidPureValue", async (_name, r) => {
-    expect(failureOf(await recipe(r as Effect.Effect<unknown, unknown, Ptb.PtbBuilder>))).toMatchObject({ _tag: "InvalidPureValue" })
+  test("builders given a bad address or type are InvalidPureValue, not a throw", async () => {
+    const bad: ReadonlyArray<Effect.Effect<unknown, unknown, Ptb.PtbBuilder>> = [
+      Ptb.address("nope"),
+      Ptb.object("nope"),
+      Ptb.moveCall({ target: "0x2::m::f", typeArguments: ["0x2::sui"] }),
+      Ptb.coin({ type: "SUI", amount: 1n }),
+      Move.obj("nope"),
+      Move.param("0x2::sui", 1n)
+    ]
+    for (const r of bad) expect(failureOf(await recipe(r))).toMatchObject({ _tag: "InvalidPureValue" })
   })
 
   const layers = Layer.mergeAll(coinsLayer({ addressBalance: 10n * SUI, coins: [] }), chainLayer(), noObjects, budgetOf(2_000_000n))

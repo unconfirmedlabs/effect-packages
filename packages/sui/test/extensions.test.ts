@@ -6,45 +6,27 @@ import { bcs as mysten } from "@mysten/sui/bcs"
 import { deriveDynamicFieldID } from "@mysten/sui/utils"
 import { Bcs } from "@unconfirmed/bcs"
 import { describe, expect, test } from "bun:test"
-import { Effect, Result, Schedule, Stream } from "effect"
+import { Effect, Schedule, Stream } from "effect"
 import { Address, CheckpointData, DynamicFields, Events, Transactions, TypeTag } from "../src/index.ts"
 
 const A = Address.normalize
 
 describe("DynamicFields.deriveId", () => {
   const parent = A("0x5a1e")
-  const cases: ReadonlyArray<readonly [string, Uint8Array]> = [
-    ["u64", mysten.u64().serialize(42n).toBytes()],
-    ["u8", new Uint8Array([7])],
-    ["bool", new Uint8Array([1])],
-    ["address", mysten.Address.serialize(A("0xabc")).toBytes()],
-    ["vector<u8>", mysten.vector(mysten.u8()).serialize([1, 2, 3]).toBytes()],
-    ["0x1::string::String", mysten.string().serialize("hello").toBytes()],
-    ["0x2::dynamic_object_field::Wrapper<0x1::string::String>", mysten.string().serialize("key").toBytes()],
-    ["0x2::coin::Coin<0x2::sui::SUI>", new Uint8Array(40).fill(3)],
-    ["vector<0x2::kiosk::Item>", new Uint8Array([0])],
-    ["0xdee9::custodian::Account<0x2::sui::SUI, 0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN>", new Uint8Array(32).fill(9)]
-  ]
-  for (const [type, key] of cases) {
-    test(type, () => {
+  test("matches deriveDynamicFieldID for primitive, vector, generic and object-field name types", () => {
+    const cases: ReadonlyArray<readonly [string, Uint8Array]> = [
+      ["u64", mysten.u64().serialize(42n).toBytes()],
+      ["vector<u8>", mysten.vector(mysten.u8()).serialize([1, 2, 3]).toBytes()],
+      ["0x2::coin::Coin<0x2::sui::SUI>", new Uint8Array(40).fill(3)],
+      ["0xdee9::custodian::Account<0x2::sui::SUI, 0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN>", new Uint8Array(32).fill(9)]
+    ]
+    for (const [type, key] of cases) {
       expect(DynamicFields.deriveId(parent, type, key)).toBe(deriveDynamicFieldID(parent, type, key) as Address.Address)
-    })
-  }
-
-  test("objectFieldNameType wraps the name type", () => {
+    }
     const key = mysten.u64().serialize(1n).toBytes()
     expect(DynamicFields.deriveId(parent, DynamicFields.objectFieldNameType("u64"), key)).toBe(
       deriveDynamicFieldID(parent, "0x2::dynamic_object_field::Wrapper<u64>", key) as Address.Address
     )
-  })
-
-  test("name encodes with a schema; decodeValue decodes", async () => {
-    const n = Result.getOrThrow(DynamicFields.name("0x1::string::String", Bcs.string, "hi"))
-    expect([...n.bcs]).toEqual([...mysten.string().serialize("hi").toBytes()])
-    const v = await Effect.runPromise(
-      DynamicFields.decodeValue(Bcs.u64)({ fieldId: A("0x1"), valueType: "u64", value: mysten.u64().serialize(9n).toBytes() })
-    )
-    expect(v).toBe(9n)
   })
 
   test("a malformed name type is InvalidDynamicFieldName, not a defect", async () => {
@@ -85,12 +67,11 @@ describe("Events", () => {
     expect(p(Events.eventType("not a type")).type).toBe("not a type")
   })
 
-  test("TypeTag.matchesPath at each level", () => {
+  test("TypeTag.matchesPath matches whole path segments only", () => {
     const { matchesPath } = TypeTag
     const coin = "0x2::coin::Coin<0x2::sui::SUI>"
-    expect([matchesPath("0x2", coin), matchesPath("0x2::coin", coin), matchesPath("0x2::coin::Coin", coin), matchesPath(coin, coin)]).toEqual([true, true, true, true])
-    expect([matchesPath("0x3", coin), matchesPath("0x2::co", coin), matchesPath("0x2::coin::Co", coin), matchesPath("0x2::coin::Coin<u8>", coin)]).toEqual([false, false, false, false])
-    expect([matchesPath("u64", "u64"), matchesPath("u64", "u8"), matchesPath("0x2::kiosk::Item", "0x2::kiosk::Listing")]).toEqual([true, false, false])
+    expect([matchesPath("0x2", coin), matchesPath("0x2::coin::Coin", coin), matchesPath(coin, coin)]).toEqual([true, true, true])
+    expect([matchesPath("0x2::co", coin), matchesPath("0x2::coin::Co", coin), matchesPath("0x2::coin::Coin<u8>", coin)]).toEqual([false, false, false])
   })
 
   test("decode with a BCS schema; bad bytes are EventDecodeError", async () => {

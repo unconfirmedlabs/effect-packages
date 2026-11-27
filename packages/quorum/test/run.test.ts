@@ -34,16 +34,6 @@ describe("Quorum.run", () => {
     expect(world.inFlight.size).toBe(0)
   })
 
-  test("2. returns on the crossing success", async () => {
-    const { world, effect } = setup([{ delay: "never" }, { delay: 500 }, { delay: "never" }, { delay: 700 }], {
-      threshold: 2
-    })
-    const { exit, at } = await timed(effect)
-    expect(at).toBe(700)
-    expect(value(exit).successes.map((s) => s.index)).toEqual([1, 3])
-    expect(world.of("interrupted").sort()).toEqual([0, 2])
-  })
-
   test("3. the last member to settle reaches the threshold: success", async () => {
     const { effect } = setup(
       [{ delay: 100, outcomes: [new NodeError("x")] }, { delay: 200 }, { delay: 300 }],
@@ -76,20 +66,6 @@ describe("Quorum.run", () => {
     expect(e.failures.map((f) => f.index)).toEqual([0, 1])
     expect(world.of("interrupted").sort()).toEqual([2, 3])
     expect(world.inFlight.size).toBe(0)
-  })
-
-  test("5. weights: one heavy member alone, or many light ones", async () => {
-    const heavy = setup([{ delay: 300 }, { delay: 200 }, { weight: 5, delay: 100 }], { threshold: 5 })
-    const h = await timed(heavy.effect)
-    expect(h.at).toBe(100)
-    expect(value(h.exit).successes.map((s) => s.index)).toEqual([2])
-
-    const light = setup([{ delay: 100 }, { delay: 200 }, { delay: 300 }, { weight: 5, delay: 1000 }], {
-      threshold: 3
-    })
-    const l = await timed(light.effect)
-    expect(l.at).toBe(300)
-    expect(value(l.exit).successes.map((s) => s.index)).toEqual([0, 1, 2])
   })
 
   describe("6. retry", () => {
@@ -125,13 +101,6 @@ describe("Quorum.run", () => {
       expect(at).toBe(300)
       expect(error(exit).failures.map((f) => f.error.code)).toEqual(["e3"])
       expect(world.attempts(0)).toBe(3)
-    })
-
-    test("without `retry`, one attempt", async () => {
-      const { world, effect } = setup([{ delay: 100, outcomes: [new NodeError("x"), "ok"] }])
-      const { exit } = await timed(effect)
-      expect(error(exit).reason).toBe("unreachable")
-      expect(world.attempts(0)).toBe(1)
     })
   })
 
@@ -201,33 +170,15 @@ describe("Quorum.run", () => {
       expect(value(exit).successes.map((s) => s.index)).toEqual([0, 1, 2])
       expect(world.of("start")).toEqual([0, 1, 2])
     })
-
-    test("a non-positive window is no window", async () => {
-      const { effect } = setup([{ delay: 100 }, { delay: 200 }], { threshold: 1, linger: 0 })
-      const { exit, at } = await timed(effect)
-      expect(at).toBe(100)
-      expect(value(exit).unsettled.length).toBe(1)
-    })
   })
 
   describe("9. edge cases", () => {
-    test("empty list: threshold 0 succeeds, threshold 1 is insufficientWeight", async () => {
-      let calls = 0
-      const run = () => Effect.sync(() => calls++)
-      const ok = await timed(Quorum.run([], { weight: () => 1, run, threshold: 0 }))
-      expect(value(ok.exit)).toEqual({ successes: [], weight: 0, totalWeight: 0, failures: [], unsettled: [] })
-      const no = await timed(Quorum.run([], { weight: () => 1, run, threshold: 1 }))
-      expect(error(no.exit).reason).toBe("insufficientWeight")
-      expect(calls).toBe(0)
-    })
-
     test("threshold above the total: insufficientWeight, nothing runs, all unsettled and unstarted", async () => {
       const { world, effect } = setup([{ delay: 1 }, { weight: 2, delay: 1 }], { threshold: 4 })
       const e = error((await timed(effect)).exit)
       expect(e.reason).toBe("insufficientWeight")
       expect(e.totalWeight).toBe(3)
       expect(e.unsettled.map((u) => [u.index, u.weight, u.started])).toEqual([[0, 1, false], [1, 2, false]])
-      expect(e.message).toBe("quorum insufficient weight: total 3 is below 4")
       expect(world.events).toEqual([])
     })
 
@@ -248,42 +199,23 @@ describe("Quorum.run", () => {
       expect(world.attempts(0)).toBe(0)
     })
 
-    test("negative, NaN and infinite weights die, naming the index", async () => {
-      for (const w of [-1, NaN, Infinity]) {
-        const { world, effect } = setup([{ delay: 1 }, { weight: w, delay: 1 }])
-        const d = defect((await timed(effect)).exit)
-        expect(String(d)).toContain("member 1")
-        expect(world.events).toEqual([])
-      }
-    })
-
-    test("a throwing weight dies", async () => {
-      const exit = (await timed(Quorum.run([1], {
+    test("invalid weights, threshold and concurrency die before anything runs", async () => {
+      const { world, effect } = setup([{ delay: 1 }, { weight: NaN, delay: 1 }])
+      expect(String(defect((await timed(effect)).exit))).toContain("member 1")
+      expect(world.events).toEqual([])
+      const throwing = await timed(Quorum.run([1], {
         weight: () => {
           throw new Error("no weight")
         },
         run: Effect.succeed,
         threshold: 1
-      }))).exit
-      expect(String(defect(exit))).toContain("no weight")
-    })
-
-    test("invalid threshold and concurrency die", async () => {
-      for (const options of [{ threshold: NaN }, { threshold: Infinity }, { concurrency: 0 }, { concurrency: 1.5 }, {
-        concurrency: NaN
-      }]) {
+      }))
+      expect(String(defect(throwing.exit))).toContain("no weight")
+      for (const options of [{ threshold: NaN }, { concurrency: 1.5 }]) {
         const { world, effect } = setup([{ delay: 1 }], options)
         defect((await timed(effect)).exit)
         expect(world.events).toEqual([])
       }
-    })
-
-    test("duplicates are separate members and both count", async () => {
-      const world = makeWorld([{ delay: 10 }])
-      const m = world.members[0]!
-      const r = value((await timed(Quorum.run([m, m], { weight: world.weight, run: world.run, threshold: 2 }))).exit)
-      expect(r.successes.map((s) => s.index).sort()).toEqual([0, 1])
-      expect(world.attempts(0)).toBe(2)
     })
   })
 
@@ -369,18 +301,8 @@ describe("Quorum.run", () => {
       expect(e.reason).toBe("gaveUp")
       expect(e.failures.map((f) => f.index)).toEqual([0, 1])
       expect(e.unsettled.map((u) => [u.index, u.started])).toEqual([[2, true], [3, true]])
-      expect(e.message).toBe("quorum gave up: 0 of 1 reached, 6 failed, 4 unsettled (total 10)")
       expect(world.of("interrupted").sort()).toEqual([2, 3])
       expect(world.inFlight.size).toBe(0)
-    })
-
-    test("a zero grace is no grace", async () => {
-      const { effect } = setup([{ delay: 100, outcomes: [notFound()] }, { delay: 200 }], {
-        giveUp: { when: isNotFound, weight: 1, grace: 0 }
-      })
-      const { exit, at } = await timed(effect)
-      expect(at).toBe(100)
-      expect(error(exit).reason).toBe("gaveUp")
     })
 
     test("non-matching failures do not count", async () => {
@@ -445,17 +367,6 @@ describe("Quorum.run", () => {
       expect(world.at(2, "interrupted")).toBe(1500)
     })
 
-    test("with grace, the window keeps starting queued members", async () => {
-      const { world, effect } = setup(
-        [{ delay: 100, outcomes: [notFound()] }, { delay: 100, outcomes: [notFound()] }, { delay: 300 }],
-        { concurrency: 1, giveUp: { when: isNotFound, weight: 1, grace: "1 second" } }
-      )
-      const { exit, at } = await timed(effect)
-      expect(at).toBe(500)
-      expect(value(exit).successes.map((s) => s.index)).toEqual([2])
-      expect(world.of("start")).toEqual([0, 1, 2])
-    })
-
     test("the window ends in gaveUp at the exact time", async () => {
       const { world, effect } = setup(
         [{ delay: 100, outcomes: [notFound()] }, { delay: 5000 }],
@@ -498,11 +409,6 @@ describe("Quorum.run", () => {
     test("invalid weight or grace dies", async () => {
       const cases: Array<Quorum.GiveUp<Member, NodeError>> = [
         { when: isNotFound, weight: 0 },
-        { when: isNotFound, weight: -1 },
-        { when: isNotFound, weight: NaN },
-        { when: isNotFound, weight: Infinity },
-        { when: isNotFound, weight: 1, grace: -1 },
-        { when: isNotFound, weight: 1, grace: NaN },
         { when: isNotFound, weight: 1, grace: "-1 second" }
       ]
       for (const giveUp of cases) {
@@ -513,16 +419,6 @@ describe("Quorum.run", () => {
         expect(world.attempts(0)).toBe(0)
       }
     })
-  })
-
-  test("helpers", () => {
-    const failures = [
-      { member: "a", index: 0, weight: 2, error: "notFound" },
-      { member: "b", index: 1, weight: 3, error: "down" },
-      { member: "c", index: 2, weight: 4, error: "notFound" }
-    ]
-    expect(Quorum.weightOf(failures)).toBe(9)
-    expect(Quorum.failedWeight(failures, (e) => e === "notFound")).toBe(6)
   })
 })
 

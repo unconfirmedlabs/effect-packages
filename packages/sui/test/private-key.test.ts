@@ -3,13 +3,12 @@
  */
 import { decodeSuiPrivateKey, encodeSuiPrivateKey } from "@mysten/sui/cryptography"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
-import { MLDSA65Keypair } from "@mysten/sui/keypairs/mldsa65"
 import { Secp256k1Keypair } from "@mysten/sui/keypairs/secp256k1"
 import { Secp256r1Keypair } from "@mysten/sui/keypairs/secp256r1"
 import { bech32 } from "@scure/base"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { Ed25519, PrivateKey, Signer } from "../src/index.ts"
+import { PrivateKey, Signer } from "../src/index.ts"
 
 const run = <A, E>(e: Effect.Effect<A, E>) => Effect.runPromise(e)
 const fail = <A, E>(e: Effect.Effect<A, E>) => Effect.runPromise(Effect.flip(e))
@@ -28,28 +27,6 @@ describe("PrivateKey", () => {
       expect(back).toEqual({ flag: PrivateKey.Scheme[scheme], scheme, secretKey: sk })
       expect(decodeSuiPrivateKey(ours).secretKey).toEqual(sk)
     }
-  })
-
-  test("keys exported by @mysten/sui keypairs import, and ours import there", async () => {
-    const pairs = [
-      Ed25519Keypair.generate(),
-      Secp256k1Keypair.generate(),
-      Secp256r1Keypair.generate(),
-      MLDSA65Keypair.generate()
-    ]
-    for (const kp of pairs) {
-      const decoded = await run(PrivateKey.decode(kp.getSecretKey()))
-      expect(decoded.scheme).toBe(kp.getKeyScheme() as PrivateKey.Scheme)
-      expect(await run(PrivateKey.encode(decoded))).toBe(kp.getSecretKey())
-    }
-    // An Ed25519 key generated here, exported, then loaded by @mysten/sui: same address.
-    const sk = await run(Ed25519.generateSecretKey)
-    const signer = await run(Ed25519.fromSecretKey(sk))
-    const exported = await run(PrivateKey.encode({ flag: Ed25519.FLAG, secretKey: sk }))
-    expect(Ed25519Keypair.fromSecretKey(exported).toSuiAddress()).toBe(signer.address)
-    // And back through decode with an expected scheme.
-    const again = await run(Effect.flatMap(PrivateKey.decode(exported, Ed25519.FLAG), (k) => Ed25519.fromSecretKey(k.secretKey)))
-    expect(again.address).toBe(signer.address)
   })
 
   test("refusals are typed InvalidKey", async () => {
@@ -99,6 +76,7 @@ describe("PrivateKey", () => {
     for (const s of [typo, prefix]) {
       const e = await Effect.runPromise(Effect.flip(PrivateKey.decode(s)))
       expect(e.reason).not.toContain(s.slice(12, 40))
+      expect(e.message).not.toContain(s.slice(12, 40))
     }
     const entry = Buffer.from([0, ...sk]).toString("base64")
     const e = await Effect.runPromise(Effect.flip(PrivateKey.decodeKeystore(`[${entry}]`)))

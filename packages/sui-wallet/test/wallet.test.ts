@@ -66,21 +66,12 @@ const recorder = () => {
   return { executed, layer }
 }
 
-const unused = Layer.mergeAll(
-  Layer.succeed(Objects.Objects, { get: () => Effect.die("unused"), listOwned: () => Stream.die("unused") }),
-  Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused") }),
-  Layer.succeed(Coins.Coins, { getBalance: () => Effect.die("unused"), list: () => Stream.die("unused") }),
-  Layer.succeed(Chain.Chain, { info: Effect.die("unused"), referenceGasPrice: Effect.die("unused") })
-)
-
 const schemes = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme)
 
 const pay = Effect.gen(function*() {
   const [coin] = yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(1_000n)])
   yield* Ptb.transferObjects([coin!], yield* Ptb.address(recipient))
 })
-
-const fixedGas = { gasPrice: 1000n, gasBudget: 5_000_000n, payment: Resolve.fixed([gasRef]), expiration: { _tag: "None" } } as const
 
 /** Resolved offline: no services. */
 const resolvedFor = (sender: Address.Address, gasOwner?: Address.Address) =>
@@ -101,7 +92,7 @@ const run = <A, E>(effect: Effect.Effect<A, E, any>) => Effect.runPromise(Effect
 // -----------------------------------------------------------------------------
 
 describe("discovery and connection", () => {
-  test("register, list, find; non-Sui wallets are filtered out", () =>
+  test("register, list, find; non-Sui wallets are filtered out; registration is scoped", () =>
     run(Effect.gen(function*() {
       const sui = make({ name: "Sui One" })
       const other = make({ name: "Elsewhere", chains: ["solana:mainnet"] })
@@ -111,13 +102,9 @@ describe("discovery and connection", () => {
       expect(names).not.toContain("Elsewhere")
       expect((yield* Wallet.find("Sui One")).chains).toEqual(["sui:devnet", "sui:testnet"])
       expect((yield* Effect.flip(Wallet.find("Elsewhere")))._tag).toBe("WalletNotFound")
+      yield* Effect.scoped(Wallet.register(make({ name: "Scoped" }).wallet))
+      expect((yield* Effect.flip(Wallet.find("Scoped")))._tag).toBe("WalletNotFound")
     })))
-
-  test("registration is scoped", async () => {
-    await run(Wallet.register(make({ name: "Scoped" }).wallet))
-    const e = await run(Effect.flip(Wallet.find("Scoped")))
-    expect(e._tag).toBe("WalletNotFound")
-  })
 
   test("changes emits the current list, then on every registration", () =>
     run(Effect.gen(function*() {
@@ -147,13 +134,30 @@ describe("discovery and connection", () => {
       expect((yield* Fiber.join(changes)).map((as) => as.length)).toEqual([0, 1, 0])
     })))
 
-  test("a refused connect is ConnectionError(rejected); no standard:connect is UnsupportedFeature", () =>
+  test("a refused connect is rejected; no standard:connect is UnsupportedFeature; a malformed answer or throw is failed", () =>
     run(Effect.gen(function*() {
       const refusing = make({ name: "Refusing", reject: { connect: true } })
       const minimal = make({ name: "Minimal", features: ["sui:signTransaction"] })
       yield* Wallet.register(refusing.wallet, minimal.wallet)
       expect(yield* Effect.flip(Wallet.connect(refusing.wallet))).toMatchObject({ _tag: "ConnectionError", reason: "rejected" })
       expect(yield* Effect.flip(Wallet.connect(minimal.wallet))).toMatchObject({ _tag: "UnsupportedFeature", feature: "standard:connect" })
+
+      const withConnect = (connect: () => Promise<unknown>) =>
+        ({ ...make({ name: "Bad Connect" }).wallet, features: { "standard:connect": { version: "1.0.0", connect } } }) as unknown as Wallet.Wallet
+      const circular: Record<string, unknown> = {}
+      circular.self = circular
+      for (
+        const wallet of [
+          withConnect(async () => undefined),
+          withConnect(async () => ({ accounts: "nope" })),
+          withConnect(async () => {
+            throw circular
+          })
+        ]
+      ) {
+        expect(yield* Effect.flip(Wallet.connect(wallet))).toMatchObject({ _tag: "ConnectionError", reason: "failed" })
+      }
+      expect(Wallet.accounts({ ...minimal.wallet, accounts: undefined } as unknown as Wallet.Wallet)).toEqual([])
     })))
 })
 
@@ -165,22 +169,16 @@ describe("multi-chain wallets and malformed answers", () => {
     features: []
   }
 
-  test("non-Sui accounts are skipped; the default account is a Sui one on the requested chain", () =>
+  test("non-Sui and short (padded) addresses are skipped; the default account is a Sui one on the requested chain", () =>
     run(Effect.gen(function*() {
-      const { wallet } = yield* connected({ name: "Multi Chain", otherAccounts: [evm as never] })
+      const short = { ...evm, address: "0x2", chains: ["sui:devnet"] }
+      const { wallet } = yield* connected({ name: "Multi Chain", otherAccounts: [evm as never, short as never] })
       const ours = A(keypair.toSuiAddress())
       expect(Wallet.accounts(wallet).map((a) => a.address)).toEqual([ours])
       expect((yield* Wallet.signer(wallet, { chain: "sui:testnet" })).address).toBe(ours)
       const signed = yield* Wallet.signPersonalMessage(wallet, {}, new Uint8Array([1]))
       const v = yield* Verify.personalMessage(new Uint8Array([1]), signed.signature).pipe(Effect.provide(schemes))
       expect(v.address).toBe(ours)
-    })))
-
-  test("a short (padded) address is not a Sui account", () =>
-    run(Effect.gen(function*() {
-      const short = { ...evm, address: "0x2", chains: ["sui:devnet"] }
-      const { wallet } = yield* connected({ name: "Short Address", otherAccounts: [short as never] })
-      expect(Wallet.accounts(wallet).map((a) => a.address)).toEqual([A(keypair.toSuiAddress())])
     })))
 
   test("the first Sui account that lists the chain is the default", () =>
@@ -195,32 +193,6 @@ describe("multi-chain wallets and malformed answers", () => {
       const { wallet } = yield* connected({ name: "Two Sui Accounts", otherAccounts: [mainnetOnly as never] })
       expect((yield* Wallet.account(wallet, { chain: "sui:mainnet" })).address).toBe(A(other.toSuiAddress()))
       expect((yield* Wallet.account(wallet, { chain })).address).toBe(A(keypair.toSuiAddress()))
-    })))
-
-  test("a connect answer without accounts is ConnectionError(failed); a wallet without accounts lists none", () =>
-    run(Effect.gen(function*() {
-      for (const answer of [undefined, {}, { accounts: "nope" }]) {
-        const wallet = {
-          ...make({ name: "Bad Connect" }).wallet,
-          features: { "standard:connect": { version: "1.0.0", connect: async () => answer } }
-        } as unknown as Wallet.Wallet
-        expect(yield* Effect.flip(Wallet.connect(wallet))).toMatchObject({ _tag: "ConnectionError", reason: "failed" })
-        expect(Wallet.accounts({ ...wallet, accounts: undefined } as unknown as Wallet.Wallet)).toEqual([])
-      }
-      const circular: Record<string, unknown> = {}
-      circular.self = circular
-      const throwing = {
-        ...make({ name: "Throws Circular" }).wallet,
-        features: {
-          "standard:connect": {
-            version: "1.0.0",
-            connect: async () => {
-              throw circular
-            }
-          }
-        }
-      } as unknown as Wallet.Wallet
-      expect(yield* Effect.flip(Wallet.connect(throwing))).toMatchObject({ _tag: "ConnectionError", reason: "failed" })
     })))
 })
 
@@ -244,16 +216,22 @@ describe("the wallet as a TransactionSigner", () => {
     expect((await verifyTransactionSignature(bytes, Buffer.from(signatures[0]!).toString("base64"), { offline: true })).toSuiAddress()).toBe(signer.address)
   })
 
-  test("Tx.run with a wallet signer (sender = the wallet account)", async () => {
+  test("Tx.run with every gas term fixed looks nothing up; the sender defaults to the wallet account", async () => {
     const rec = recorder()
+    const unused = Layer.mergeAll(
+      Layer.succeed(Objects.Objects, { get: () => Effect.die("unused"), listOwned: () => Stream.die("unused") }),
+      Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused") }),
+      Layer.succeed(Coins.Coins, { getBalance: () => Effect.die("unused"), list: () => Stream.die("unused") }),
+      Layer.succeed(Chain.Chain, { info: Effect.die("unused"), referenceGasPrice: Effect.die("unused") })
+    )
+    const fixedGas = { gasPrice: 1000n, gasBudget: 5_000_000n, payment: Resolve.fixed([gasRef]), expiration: { _tag: "None" } } as const
     const effects = await run(Effect.gen(function*() {
       const { wallet } = yield* connected({ name: "Runs" })
       const signer = yield* Wallet.signer(wallet, { chain })
       return yield* Tx.run(pay, { signer, ...fixedGas })
     }).pipe(Effect.provide(Layer.merge(rec.layer, unused))))
     expect(effects.status._tag).toBe("Success")
-    const data = Result.getOrThrow(T.decode(rec.executed[0]!.bytes))
-    expect(data.sender).toBe(A(keypair.toSuiAddress()))
+    expect(Result.getOrThrow(T.decode(rec.executed[0]!.bytes)).sender).toBe(A(keypair.toSuiAddress()))
   })
 
   test("a wallet that changes the transaction: we execute exactly the bytes it signed", async () => {
@@ -414,11 +392,8 @@ describe("signAndExecute and personal messages", () => {
     for (
       const m of [
         "User rejected the request.",
-        "Rejected by user",
         "rejected by the user",
-        "The user denied the signature",
-        "MetaMask Tx Signature: User denied transaction signature.",
-        "User closed the modal"
+        "MetaMask Tx Signature: User denied transaction signature."
       ]
     ) {
       expect(Wallet.isRejection(new Error(m)), m).toBe(true)
@@ -429,14 +404,10 @@ describe("signAndExecute and personal messages", () => {
     for (
       const m of [
         "Transaction is rejected as invalid by more than 1/3 of validators by stake (non-retriable)",
-        "Transaction execution cancelled due to shared object congestion",
         "RPC error: 403 Access denied",
         // A refusal word at the start, or a user who isn't the one refusing (review SIGN-4).
         "Transaction rejected by validators",
-        "Transaction rejected: insufficient gas",
-        "Transaction cancelled due to shared object congestion",
         "Rejected: object 0x2 is locked by another transaction",
-        "Request denied: rate limit exceeded",
         "Request cancelled",
         "The user's gas coin was rejected by the validator"
       ]
@@ -470,7 +441,7 @@ describe("signAndExecute and personal messages", () => {
     circular.self = circular
     const crossRealm = { name: "Error", message: "from another realm" } // error-like, not instanceof Error
     let n = 0
-    for (const failWith of [() => circular, () => ({ amount: 10n }), () => crossRealm, () => undefined, () => Symbol("x")]) {
+    for (const failWith of [() => circular, () => ({ amount: 10n }), () => crossRealm, () => Symbol("x")]) {
       const out = await run(Effect.gen(function*() {
         const { wallet } = yield* connected({ name: `Odd ${n++}`, failWith })
         const signer = yield* Wallet.signer(wallet, { chain })

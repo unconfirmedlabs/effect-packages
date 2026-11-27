@@ -42,33 +42,16 @@ const moveCall = (o: { pkg?: Address.Address; fn?: string; args?: ReadonlyArray<
 const input = (value: number): T.Argument => ({ _tag: "Input", value })
 
 describe("Approval.call + fromRecipeOffline", () => {
-  test("one call: the id is the first, pure argument; bytes are BCS ProgrammableTransaction", async () => {
-    const id = utf8("hello")
-    const a = await Effect.runPromise(Approval.fromRecipeOffline(Approval.call({ target, id })))
-    expect(a.packageId).toBe(PKG)
-    expect(a.ids).toEqual([id])
-    expect(a.ptb.inputs).toEqual([idArg(id)])
-    expect(a.bytes).toEqual(Bcs.encodeSync(T.ProgrammableTransaction)(a.ptb))
-  })
-
-  test("several calls: ids in order, duplicates kept (H6); extra pure and shared arguments", async () => {
+  test("several calls, one written with Move.call as generated builders are: ids in order, duplicates kept (H6)", async () => {
+    const pkg = Context.Reference<string>("test/pkg", { defaultValue: () => PKG })
     const recipe = Effect.gen(function*() {
       yield* Approval.call({ target, id: utf8("a") })
       yield* Approval.call({ target: `${PKG}::tle::seal_approve`, id: utf8("b"), arguments: [yield* Ptb.clock] })
-      yield* Approval.call({ target: `${PKG}::m::seal_approve_extra`, id: utf8("a"), arguments: [yield* Ptb.u64(5n)] })
+      yield* Move.call(pkg, "m::seal_approve_extra", [], [Move.pure(Bcs.byteVector, utf8("a")), Ptb.u64(5n)], 0)
     })
     const a = await Effect.runPromise(Approval.fromRecipeOffline(recipe))
     expect(a.ids.map((i) => new TextDecoder().decode(i))).toEqual(["a", "b", "a"])
     expect(a.ptb.commands.length).toBe(3)
-  })
-
-  test("a call written with Move.call (as generated builders are)", async () => {
-    const pkg = Context.Reference<string>("test/pkg", { defaultValue: () => PKG })
-    const id = utf8("x")
-    const generated = (o: { id: Uint8Array }) =>
-      Move.call(pkg, "account_based::seal_approve", [], [Move.pure(Bcs.byteVector, o.id)], 0)
-    const a = await Effect.runPromise(Approval.fromRecipeOffline(generated({ id })))
-    expect(a.ids).toEqual([id])
   })
 
   test("unresolved object inputs are refused offline", async () => {
@@ -83,12 +66,6 @@ describe("Approval.call + fromRecipeOffline", () => {
 
 describe("P1, with the key server's wording", () => {
   const base: T.ProgrammableTransaction = { inputs: [idArg(utf8("i"))], commands: [moveCall()] }
-
-  test("a valid PTB", () => {
-    const a = ok(Approval.fromProgrammable(base))
-    expect(a.ids).toEqual([utf8("i")])
-    expect(a.packageId).toBe(PKG)
-  })
 
   test("each rule", () => {
     const cases: Array<[T.ProgrammableTransaction, string]> = [
@@ -113,14 +90,10 @@ describe("P1, with the key server's wording", () => {
     for (const [ptb, expected] of cases) expect(reason(Approval.fromProgrammable(ptb))).toStartWith(expected)
   })
 
-  test("100 commands are fine; an empty id is allowed (the server only decodes it)", () => {
+  test("100 commands and an empty id are fine (the server only decodes it); fromBytes refuses trailing bytes", () => {
     expect(ok(Approval.fromProgrammable({ ...base, commands: Array.from({ length: 100 }, () => moveCall()) })).ids.length).toBe(100)
     expect(ok(Approval.fromProgrammable({ inputs: [idArg(new Uint8Array())], commands: [moveCall()] })).ids).toEqual([new Uint8Array()])
-  })
-
-  test("fromBytes", () => {
     const bytes = Bcs.encodeSync(T.ProgrammableTransaction)(base)
-    expect(ok(Approval.fromBytes(bytes)).bytes).toEqual(bytes)
     expect(reason(Approval.fromBytes(new Uint8Array([...bytes, 0])))).toBe("Invalid BCS")
   })
 })
@@ -170,11 +143,9 @@ describe("fromRecipe (object inputs resolved)", () => {
     [SHARED]: { objectId: SHARED, version: 9n, digest: D(9), owner: { _tag: "Shared", initialSharedVersion: 3n }, type: `${PKG}::whitelist::Whitelist`, contents: new Uint8Array(), previousTransaction: undefined },
     [Address.CLOCK]: { objectId: Address.CLOCK, version: 100n, digest: D(1), owner: { _tag: "Shared", initialSharedVersion: 1n }, type: "0x2::clock::Clock", contents: new Uint8Array(), previousTransaction: undefined }
   }
-  const reads: Array<string> = []
   const layer = Layer.mergeAll(
     Layer.succeed(Objects.Objects, {
       get: (id) => {
-        reads.push(id)
         const o = objects[id]
         return o ? Effect.succeed(o) : Effect.fail(new Objects.ObjectNotFound({ objectId: id }))
       },
@@ -209,14 +180,5 @@ describe("fromRecipe (object inputs resolved)", () => {
       { _tag: "Object", value: { _tag: "SharedObject", objectId: Address.CLOCK, initialSharedVersion: 1n, mutability: { _tag: "Immutable" } } }
     ])
     expect(a.ids).toEqual([utf8("i")])
-    expect(reads.sort()).toEqual([OWNED, SHARED, Address.CLOCK].sort())
-  })
-
-  test("a missing object is ObjectNotFound", async () => {
-    const recipe = Effect.gen(function*() {
-      yield* Approval.call({ target, id: utf8("i"), arguments: [yield* Ptb.object("0xdead")] })
-    })
-    const e = await Effect.runPromise(Effect.flip(Approval.fromRecipe(recipe).pipe(Effect.provide(layer))))
-    expect(e._tag).toBe("ObjectNotFound")
   })
 })

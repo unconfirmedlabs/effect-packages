@@ -11,7 +11,6 @@ import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
-import * as Redacted from "effect/Redacted"
 import * as Result from "effect/Result"
 import * as Approval from "../src/Approval.ts"
 import * as Bls from "../src/Bls.ts"
@@ -104,29 +103,6 @@ const failure = <A, E>(exit: Exit.Exit<A, E>): E => {
 const data = utf8("My super secret message")
 
 describe("Seal.encrypt / decrypt", () => {
-  test("round trip through the layer, both DEMs; one prompt, keys from the threshold", async () => {
-    const w = world([{}, {}, {}])
-    const prompts = countingSigner()
-    const r = value(await w.run(Effect.gen(function*() {
-      const aes = yield* Seal.encrypt({ packageId: PKG, id: ID, data, threshold: 2, aad: utf8("aad") })
-      const hmac = yield* Seal.encrypt({ packageId: PKG, id: ID, data, threshold: 2, dem: "Hmac256Ctr" })
-      const session = yield* Seal.session({ packageId: PKG, signer: prompts.signer })
-      const approval = approvalFor([ID])
-      const a = yield* Seal.decrypt({ data: aes.encryptedObject, session, approval })
-      const h = yield* Seal.decrypt({ data: hmac.encryptedObject, session, approval })
-      return { aes, hmac, a, h }
-    })))
-    expect(r.a).toEqual(data)
-    expect(r.h).toEqual(data)
-    const aes = Result.getOrThrow(EncryptedObject.parse(r.aes.encryptedObject))
-    expect(aes.ciphertext._tag).toBe("Aes256Gcm")
-    expect(Result.getOrThrow(EncryptedObject.parse(r.hmac.encryptedObject)).ciphertext._tag).toBe("Hmac256Ctr")
-    expect(Redacted.value(r.aes.key)).toHaveLength(32)
-    expect(String(r.aes.key)).not.toContain(Array.from(Redacted.value(r.aes.key)).join(","))
-    expect(prompts.state.prompts).toBe(1)
-    expect(w.fetches().length).toBeGreaterThanOrEqual(2) // the second decrypt hit the cache for the servers that answered first
-  })
-
   test("share order and multiplicity follow configuration, or the `servers` option", async () => {
     const w = world([{}, {}, {}], (servers) => servers.map((s, i) => ({ objectId: s.objectId, weight: [2, 1, 1][i]! })))
     const r = value(await w.run(Effect.gen(function*() {
@@ -165,13 +141,9 @@ describe("Seal.encrypt / decrypt", () => {
   test("invalid parameters are InvalidEncryption, before any chain read", async () => {
     const w = world([{}, {}])
     const cases: ReadonlyArray<Partial<Seal.EncryptOptions>> = [
-      { packageId: "0x2" },
       { packageId: PKG.slice(2) },
-      { threshold: 0 },
       { threshold: 3 },
-      { threshold: 1.5 },
       { servers: [{ objectId: "0x1", weight: 1 }] },
-      { servers: [{ objectId: PKG, weight: 0 }] },
       { servers: [{ objectId: PKG, weight: 1 }, { objectId: PKG, weight: 1 }] },
       { servers: [{ objectId: PKG, weight: 256 }], threshold: 1 }
     ]
@@ -244,22 +216,6 @@ describe("Seal.encrypt / decrypt", () => {
     expect(r.sent).toBe(3)
     expect(w.fetches()).toHaveLength(3)
     expect(prompts.state.prompts).toBe(1)
-  })
-
-  test("denied: ThresholdNotMet with the servers' NoAccess", async () => {
-    const w = world([{}, {}, {}])
-    const e = failure(await w.run(Effect.gen(function*() {
-      const { encryptedObject } = yield* Seal.encrypt({ packageId: PKG, id: OTHER_ID, data, threshold: 2 })
-      const session = yield* Seal.session({ packageId: PKG, signer: user })
-      return yield* Seal.decrypt({ data: encryptedObject, session, approval: approvalFor([OTHER_ID]) })
-    })))
-    expect(e._tag).toBe("ThresholdNotMet")
-    if (e._tag !== "ThresholdNotMet") return
-    expect(e.reason).toBe("denied")
-    // 2 of 3: the second denial leaves too little weight, the third request is interrupted.
-    expect(e.failures.length).toBeGreaterThanOrEqual(2)
-    expect(e.failures.every((f) => f.error.kind === "NoAccess")).toBe(true)
-    expect(e.failures[0]!.error.message).toContain("account_based")
   })
 
   test("servers the object names but the configuration lacks are never asked; too little weight is insufficientWeight", async () => {

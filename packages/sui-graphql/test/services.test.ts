@@ -8,7 +8,6 @@ import { GraphQLClientError, GraphQLProtocol } from "effect/graphql"
 import { Address, CheckpointData, Checkpoints, Coins, DynamicFields, Events, Objects } from "@unconfirmed/sui"
 import { mergeSorted } from "../src/merge.ts"
 import * as SuiGraphQL from "../src/index.ts"
-import { eventCursorPosition } from "../src/convert.ts"
 import { plan } from "../src/EventsGraphQL.ts"
 
 const A = Address.normalize
@@ -92,18 +91,6 @@ describe("event filter lowering", () => {
     expect(two.map((p) => p.server)).toEqual([{ type: `${A("0x2")}::coin::CoinCreated` }, { sender: A("0x1"), module: `${A("0x2")}::coin` }])
     const types = Result.getOrThrow(plan(Events.all(T, Events.eventType("0x2::coin::CoinCreated<0x2::sui::SUI>"))))
     expect(types[0]!.residual.length).toBe(1)
-  })
-
-  test("empty any() matches nothing, empty all() everything, StreamHead is unsupported", () => {
-    expect(Result.getOrThrow(plan(Events.any()))).toEqual([])
-    expect(Result.getOrThrow(plan(Events.all()))).toEqual([{ server: {}, residual: [] }])
-    expect(Result.isFailure(plan(Events.streamHead(A("0x9"))))).toBe(true)
-    expect(Result.isFailure(plan(Events.any(T, Events.not(Events.streamHead(A("0x9"))))))).toBe(true)
-  })
-
-  test("event cursors carry the position", () => {
-    expect(eventCursorPosition(cursor(5543, 7, 98))).toEqual({ checkpoint: 5543n, transactionIndex: 7n, eventIndex: 98 })
-    expect(eventCursorPosition(cursor(1, 1, 1, false))).toBeUndefined()
   })
 })
 

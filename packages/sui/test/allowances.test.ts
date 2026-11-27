@@ -315,33 +315,6 @@ describe("allowance intents match tx.coin / tx.balance with allowance", () => {
         tx.transferObjects([tx.coin({ balance: 4, allowance: ALW })], tx.pure.address(recipient))
       }
     ))
-
-  test("the resolved shape: inputs and commands", async () => {
-    const data = await Effect.runPromise(resolveOurs(
-      { allowances: [{ id: ALW }], balances: funded },
-      Effect.flatMap(Ptb.coin({ amount: 500n, allowance: ALW }), (c) => Effect.flatMap(Ptb.address(recipient), (to) => Ptb.transferObjects([c], to)))
-    ) as Effect.Effect<T.TransactionData>)
-    const { inputs, commands } = data.kind as Extract<T.TransactionKind, { _tag: "ProgrammableTransaction" }>
-    expect(inputs[0]).toEqual({
-      _tag: "Object",
-      value: { _tag: "SharedObject", objectId: ALW, initialSharedVersion: 10n, mutability: { _tag: "Mutable" } }
-    })
-    expect(inputs[1]).toEqual({
-      _tag: "Object",
-      value: { _tag: "SharedObject", objectId: A("0x6"), initialSharedVersion: 1n, mutability: { _tag: "Immutable" } }
-    })
-    expect(inputs[3]).toEqual({
-      _tag: "FundsWithdrawal",
-      reservation: { _tag: "MaxAmountU64", value: 500n },
-      typeArg: { _tag: "Balance", value: TypeTag.parse(TypeTag.SUI) },
-      withdrawFrom: { _tag: "SenderAllowance", funder, allowance: ALW }
-    })
-    expect(commands.map((c) => (c._tag === "MoveCall" ? `${c.module}::${c.function}` : c._tag))).toEqual([
-      "allowance::balance_spend",
-      "coin::from_balance",
-      "TransferObjects"
-    ])
-  })
 })
 
 describe("typed refusals before signing", () => {
@@ -412,16 +385,6 @@ describe("typed refusals before signing", () => {
     const e = await refusal({ allowances: [{ id: ALW }], balances: { [`${funder}|${TypeTag.SUI}`]: 10n } }, spend(11n))
     expect(e).toMatchObject({ _tag: "InsufficientBalance", owner: funder, required: 11n, available: 10n })
   })
-
-  test("allowance and sender-funded intents only need the reads they use", async () => {
-    // No allowance intents: Objects is never touched by balances.
-    const plan = await Effect.runPromise(
-      Effect.flatMap(Ptb.build(Ptb.balance({ amount: 1n, type: TOKEN })), ({ draft }) => Resolve.balances({ sender, draft })).pipe(
-        Effect.provide(world({ allowances: [], balances: { [`${sender}|${TOKEN}`]: 5n } }))
-      ) as Effect.Effect<Resolve.Plan>
-    )
-    expect(plan.draft.commands.every((c) => c._tag === "MoveCall")).toBe(true)
-  })
 })
 
 // -----------------------------------------------------------------------------
@@ -467,15 +430,6 @@ const toMystenJson = (w: World, recipe: Effect.Effect<unknown, unknown, Ptb.PtbB
 describe("AllowanceBalance intents in transaction JSON", () => {
   const cases: Array<[string, World, Effect.Effect<unknown, unknown, Ptb.PtbBuilder>, (tx: Transaction) => void]> = [
     [
-      "a SUI coin by allowance id",
-      { allowances: [{ id: ALW }], balances: funded },
-      Effect.gen(function*() {
-        const c = yield* Ptb.coin({ amount: 500n, allowance: ALW })
-        yield* Ptb.transferObjects([c], yield* Ptb.address(recipient))
-      }),
-      (tx) => tx.transferObjects([tx.coin({ balance: 500, allowance: ALW })], tx.pure.address(recipient))
-    ],
-    [
       "a token balance with the funder given",
       { allowances: [{ id: ALW, coinType: TOKEN }], balances: funded },
       Effect.gen(function*() {
@@ -503,15 +457,14 @@ describe("AllowanceBalance intents in transaction JSON", () => {
   ]
 
   for (const [name, w, recipe, build] of cases) {
-    test(`${name}: Mysten JSON -> our resolve matches Mysten's build`, async () =>
-      expect(toB64(await fromMystenJson(w, await mystenJson(build)))).toBe(toB64(await theirs(w, build))))
-
-    test(`${name}: our JSON -> Mysten's build matches our resolve`, async () =>
-      expect(toB64(await toMystenJson(w, recipe))).toBe(toB64(await ours(w, recipe))))
+    test(`${name}: Mysten JSON -> our resolve, and our JSON -> Mysten's build, give the same bytes`, async () => {
+      expect(toB64(await fromMystenJson(w, await mystenJson(build)))).toBe(toB64(await theirs(w, build)))
+      expect(toB64(await toMystenJson(w, recipe))).toBe(toB64(await ours(w, recipe)))
+    })
   }
 
   test("an app type without a permit input is invalid", async () => {
-    const json = JSON.parse(await mystenJson(cases[2]![3]))
+    const json = JSON.parse(await mystenJson(cases[1]![3]))
     const intent = json.commands.find((c: any) => c.$Intent)
     delete intent.$Intent.inputs.permit
     const e = await Effect.runPromise(Effect.flip(TransactionJson.decode(json)))

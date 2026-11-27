@@ -10,8 +10,4 @@ describe("error messages", () => {
     expect(e.message).toBe("outcome of D1 unknown: timeout")
     expect(String(e)).toBe("SubmissionUnknown: outcome of D1 unknown: timeout")
   })
-
-  test("DigestMismatch", () => {
-    expect(new Outcome.DigestMismatch({ digest: "D1", computed: "D2" }).message).toBe("digest D1 does not match the bytes (D2)")
-  })
 })

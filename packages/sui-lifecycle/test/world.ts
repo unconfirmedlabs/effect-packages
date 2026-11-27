@@ -29,15 +29,12 @@ export const evidence = (
   Evidence.layer({
     observe: (digest, fromEpoch) =>
       Effect.gen(function*() {
-        world.observedAt.push(world.getCalls)
-        const hidden = world.evidenceHideFor > 0
-        if (hidden) world.evidenceHideFor--
         const gap = yield* Evidence.historyGap(
           history.lowest ?? Option.some(0n),
           fromEpoch,
           () => Effect.succeed(history.first ?? Option.none())
         )
-        return Option.some({ epoch: world.evidenceEpoch ?? world.epoch, found: !hidden && world.landed.has(digest), gap })
+        return Option.some({ epoch: world.evidenceEpoch ?? world.epoch, found: world.landed.has(digest), gap })
       })
   })
 
@@ -82,10 +79,6 @@ export interface World {
   onGet: (digest: string) => Effect.Effect<void>
   /** What the `Evidence` backend (see `evidence`) sees: its epoch (default: `epoch`). */
   evidenceEpoch: bigint | undefined
-  /** `Evidence.observe` reports a miss this many times even when landed. */
-  evidenceHideFor: number
-  /** `getCalls` at each `Evidence.observe`. */
-  observedAt: Array<number>
   objectsInFlight: number
   objectsMaxInFlight: number
 }
@@ -108,8 +101,6 @@ export const makeWorld = (overrides: Partial<World> = {}): World => ({
   builtDuringExecute: false,
   onGet: () => Effect.void,
   evidenceEpoch: undefined,
-  evidenceHideFor: 0,
-  observedAt: [],
   objectsInFlight: 0,
   objectsMaxInFlight: 0,
   ...overrides

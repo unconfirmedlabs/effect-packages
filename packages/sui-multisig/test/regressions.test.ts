@@ -63,7 +63,7 @@ const zkFixture = async () => {
 }
 
 describe("zkLogin members (review 11/14)", () => {
-  test("MultiSig.signer stores the zkLogin member signature with its flag, byte-for-byte with @mysten", async () => {
+  test("MultiSig.signer and a named combine store the zkLogin member signature with its flag, byte-for-byte with @mysten", async () => {
     const f = await zkFixture()
     expect(MultiSig.address(f.ours)).toBe(f.theirs.toSuiAddress() as Address.Address)
     const zkSigner: Signer.Signer = {
@@ -74,12 +74,7 @@ describe("zkLogin members (review 11/14)", () => {
     const signed = await Effect.runPromise(
       Effect.flatMap(MultiSig.signer(f.ours, [zkSigner]), (s) => Signer.signPersonalMessage(s, msg))
     )
-    expect(signed.signature.length).toBe(f.reference.length)
     expect(b64(signed.signature)).toBe(b64(f.reference))
-  })
-
-  test("combine with a named zkLogin member matches @mysten's combinePartialSignatures", async () => {
-    const f = await zkFixture()
     const combined = await Effect.runPromise(MultiSig.combine(f.ours, [{ signature: f.zkSignature, publicKey: f.zkMember }]))
     expect(b64(combined)).toBe(b64(f.reference))
   })
@@ -125,25 +120,18 @@ describe("verify validates the multisig public key like validators (review 13)",
     Effect.runSync(key(n).sign(Hash.personalMessageIntent(msg))).subarray(1, 65)
   const verdict = (sig: Uint8Array) => Effect.runPromise(Verify.personalMessage(msg, sig).pipe(Effect.flip, Effect.provide(all)))
 
-  test("threshold 0 with no signatures is rejected", async () => {
-    expect((await verdict(raw([{ pubKey: key(1).publicKey.bytes, weight: 1 }], 0, [], 0)))._tag).toBe("InvalidSignature")
-  })
-
-  test("zero weight, duplicate members and more than 10 members are rejected", async () => {
+  test("threshold 0, zero weight, duplicate members and more than 10 members are rejected", async () => {
     const k1 = key(1).publicKey.bytes
+    const thresholdZero = raw([{ pubKey: k1, weight: 1 }], 0, [], 0)
     const zeroWeight = raw([{ pubKey: k1, weight: 1 }, { pubKey: key(2).publicKey.bytes, weight: 0 }], 1, [sign(1)], 1)
     const duplicate = raw([{ pubKey: k1, weight: 1 }, { pubKey: k1, weight: 1 }], 1, [sign(1)], 1)
     const eleven = raw(Array.from({ length: 11 }, (_, i) => ({ pubKey: key(i + 1).publicKey.bytes, weight: 1 })), 1, [sign(1)], 1)
-    for (const sig of [zeroWeight, duplicate, eleven]) {
-      const e = await verdict(sig)
-      expect(e._tag).toBe("InvalidSignature")
-      expect(e._tag === "InvalidSignature" && e.reason).toContain("invalid multisig public key")
+    for (const sig of [thresholdZero, zeroWeight, duplicate, eleven]) {
+      expect((await verdict(sig))._tag).toBe("InvalidSignature")
     }
-  })
-
-  test("a valid 1-of-2 still verifies", async () => {
-    const sig = raw([{ pubKey: key(1).publicKey.bytes, weight: 1 }, { pubKey: key(2).publicKey.bytes, weight: 1 }], 1, [sign(1)], 1)
-    const v = await Effect.runPromise(Verify.personalMessage(msg, sig).pipe(Effect.provide(all)))
+    // The same encoding of a valid 1-of-2 verifies, so the refusals above are the key checks.
+    const ok = raw([{ pubKey: k1, weight: 1 }, { pubKey: key(2).publicKey.bytes, weight: 1 }], 1, [sign(1)], 1)
+    const v = await Effect.runPromise(Verify.personalMessage(msg, ok).pipe(Effect.provide(all)))
     expect(v.publicKey.flag).toBe(MultiSig.FLAG)
   })
 })

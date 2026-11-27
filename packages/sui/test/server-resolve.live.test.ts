@@ -41,19 +41,19 @@ buildSuite("server-side resolution on testnet (build only)", () => {
     expect(data.gasData.budget).toBeGreaterThan(0n)
   })
 
-  test("a clock call: the simulation and the signature read run at once; &Clock stays immutable", async () => {
-    const { data, requests } = await runOn(TESTNET, (requests) =>
-      Effect.map(Tx.build(clock, { sender: FUNDED }), (data) => ({ data, requests: [...requests] })))
+  test("a clock call: the simulation and the signature read run at once; &Clock stays immutable; the client path agrees but for gas", async () => {
+    const { data, requests, client } = await runOn(TESTNET, (requests) =>
+      Effect.gen(function*() {
+        const data = yield* Tx.build(clock, { sender: FUNDED })
+        const seen = [...requests]
+        const client = yield* Tx.build(clock, { sender: FUNDED, resolve: "client" })
+        return { data, requests: seen, client }
+      }))
     expect([...requests].sort()).toEqual(["GetFunction", "SimulateTransaction"])
     const input = data.kind.inputs[0]!
     expect(input._tag === "Object" && input.value._tag === "SharedObject" && input.value.mutability._tag).toBe("Immutable")
-  })
-
-  test("the client path and the server path agree on everything but the gas choice", async () => {
-    const [server, client] = await runOn(TESTNET, () =>
-      Effect.all([Tx.build(clock, { sender: FUNDED }), Tx.build(clock, { sender: FUNDED, resolve: "client" })]))
-    expect(server.kind).toEqual(client.kind)
-    expect(server.gasData.price).toBe(client.gasData.price)
+    expect(data.kind).toEqual(client.kind)
+    expect(data.gasData.price).toBe(client.gasData.price)
   })
 
   test("a Ptb.coin intent is sourced client-side, then resolved on the node", async () => {

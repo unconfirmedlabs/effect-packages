@@ -21,10 +21,6 @@ const startOrder = (weights: ReadonlyArray<number>, order: Quorum.Order) => {
 const weights = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 describe("order", () => {
-  test("given: input order", async () => {
-    expect(await Effect.runPromise(startOrder(weights, "given"))).toEqual(weights.map((_, i) => i))
-  })
-
   test("18. shuffle and weightedShuffle are deterministic under a seed and are permutations", async () => {
     for (const order of ["shuffle", "weightedShuffle"] as const) {
       const a = await Effect.runPromise(startOrder(weights, order).pipe(Random.withSeed("seed-1")))

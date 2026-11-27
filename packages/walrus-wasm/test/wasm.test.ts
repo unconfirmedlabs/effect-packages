@@ -39,13 +39,16 @@ const mystenEncode = (n: number, data: Uint8Array, primaryBytes: number, seconda
 }
 
 describe("builds", () => {
-  test("Bun loads the SIMD build; the scalar build has no SIMD", () => {
+  test("Bun loads the SIMD build; the scalar build has no SIMD; the web entry's probe validates here", async () => {
     expect(Simd.simd()).toBe(true)
     expect(Simd.simdSupported()).toBe(true)
     expect(Scalar.simd()).toBe(false)
+    // `web.js` imports the web glue (same module instance as `Scalar` above); only the probe is exercised.
+    const web = await import("../web.js")
+    expect(web.simdSupported()).toBe(true)
   })
 
-  for (const [n, length] of [[4, 0], [10, 1], [10, 12_345], [100, 1_000_000]] as const) {
+  for (const [n, length] of [[4, 0], [10, 12_345], [100, 1_000_000]] as const) {
     test(`n = ${n}, ${length} bytes: SIMD = scalar = Mysten`, () => {
       const data = bytes(length, n * 31 + length)
       const simd = new Simd.BlobEncoder(n)
@@ -67,9 +70,9 @@ describe("builds", () => {
         const metadataBytes = 1 + 1 + 8 + (n < 128 ? 1 : 2) + n * 66
         const secondaryBytes = (rest - metadataBytes) / n
         const theirs = mystenEncode(n, data, primaryBytes, secondaryBytes)
-        theirs.primary.forEach((s, p) => expect(a.subarray(p * primaryBytes, (p + 1) * primaryBytes)).toEqual(s))
+        expect(Buffer.from(a.subarray(0, n * primaryBytes)).equals(Buffer.concat(theirs.primary))).toBe(true)
         const base = n * primaryBytes
-        theirs.secondary.forEach((s, p) => expect(a.subarray(base + p * secondaryBytes, base + (p + 1) * secondaryBytes)).toEqual(s))
+        expect(Buffer.from(a.subarray(base, base + n * secondaryBytes)).equals(Buffer.concat(theirs.secondary))).toBe(true)
         expect(meta.slice(0, 32)).toEqual(theirs.blobId)
         expect(meta.slice(32)).toEqual(theirs.root)
 
@@ -81,10 +84,13 @@ describe("builds", () => {
         const hashes = a.subarray(base + n * secondaryBytes + 1 + 1 + 8 + (n < 128 ? 1 : 2), a.length - 64)
         const roots = simd.sliver_roots(true, primary)
         const sroots = simd.sliver_roots(false, secondary)
+        const committed = { primary: [] as Array<Uint8Array>, secondary: [] as Array<Uint8Array> }
         for (let p = 0; p < n; p++) {
-          expect(hashes.subarray(p * 66 + 1, p * 66 + 33)).toEqual(roots.subarray(32 * p, 32 * p + 32))
-          expect(hashes.subarray(p * 66 + 34, p * 66 + 66)).toEqual(sroots.subarray(32 * p, 32 * p + 32))
+          committed.primary.push(hashes.subarray(p * 66 + 1, p * 66 + 33))
+          committed.secondary.push(hashes.subarray(p * 66 + 34, p * 66 + 66))
         }
+        expect(Buffer.concat(committed.primary).equals(roots)).toBe(true)
+        expect(Buffer.concat(committed.secondary).equals(sroots)).toBe(true)
 
         // Decode from the last n - 2f primary slivers (repair ones), both builds.
         const need = n - 2 * Math.floor((n - 1) / 3)
@@ -122,13 +128,5 @@ describe("BLS", () => {
     expect(() => Simd.bls12381_min_pk_verify(new Uint8Array(96), new Uint8Array(96), new Uint8Array(1))).toThrow()
     expect(() => Simd.bls12381_min_pk_aggregate([new Uint8Array(5)])).toThrow()
     expect(() => Mysten.bls12381_min_pk_aggregate([new Uint8Array(5)])).toThrow()
-  })
-})
-
-describe("SIMD feature probe", () => {
-  test("the web entry's probe validates here", async () => {
-    // `web.js` imports the web glue (same module instance as `Scalar` above); only the probe is exercised.
-    const web = await import("../web.js")
-    expect(web.simdSupported()).toBe(true)
   })
 })

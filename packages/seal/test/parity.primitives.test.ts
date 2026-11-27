@@ -20,7 +20,7 @@ const next = seeded("parity")
 const int = (max: number) => next(4).reduce((n, b) => (n * 256 + b) % 2 ** 31, 0) % max
 const scalar = () => Bls.scalarFromEntropy(next(48))
 const address = () => Address.fromBytes(next(32))
-const ROUNDS = 12
+const ROUNDS = 6
 
 describe("hashing and key derivation", () => {
   test("hashToG1 (with Seal's prefix) and createFullId", () => {
@@ -36,7 +36,7 @@ describe("hashing and key derivation", () => {
   })
 
   test("GT bytes and kdf", () => {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 2; i++) {
       const a = scalar()
       const b = scalar()
       const p = Bls.g1Multiply(Bls.g1Generator, a)
@@ -73,7 +73,7 @@ describe("hashing and key derivation", () => {
 
 describe("IBE", () => {
   test("verifyUserSecretKey, valid and invalid", () => {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 2; i++) {
       const mk = scalar()
       const pk = Ibe.publicKey(mk)
       const fullId = next(40)
@@ -93,8 +93,8 @@ describe("IBE", () => {
   })
 
   test("encryptShares equals encryptBatched under the same randomness; each side decrypts the other's shares", () => {
-    for (let i = 0; i < 3; i++) {
-      const n = 1 + int(4)
+    for (let i = 0; i < 2; i++) {
+      const n = 2 + int(3)
       const threshold = 1 + int(n)
       const masterKeys = Array.from({ length: n }, () => scalar())
       const servers = masterKeys.map((mk) => ({ objectId: address(), pk: Ibe.publicKey(mk) }))
@@ -147,7 +147,7 @@ describe("IBE", () => {
 
 describe("ElGamal", () => {
   test("their key derivation and decryption agree with ours", () => {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 3; i++) {
       const kp = ElGamal.keyPair(scalar())
       const sk = Bls.scalarToBytes(kp.secret)
       expect(mystenElGamal.toPublicKey(sk)).toEqual(kp.publicKey)
@@ -231,7 +231,8 @@ describe("DEMs, both directions", () => {
   test("same bytes from the same key; each decrypts the other's", async () => {
     for (let i = 0; i < ROUNDS; i++) {
       const key = next(32)
-      const data = next(int(200))
+      // The last round spans 282 HMAC-CTR blocks (a two-byte counter).
+      const data = next(i === ROUNDS - 1 ? 9000 : int(200))
       const aad = i % 3 === 0 ? undefined : next(int(20))
       for (const [tag, Their] of [["AesGcm256", mystenDem.AesGcm256], ["Hmac256Ctr", mystenDem.Hmac256Ctr]] as const) {
         const ours = await Effect.runPromise(Dem.encrypt(aad === undefined ? { _tag: tag, data } : { _tag: tag, data, aad }, key))

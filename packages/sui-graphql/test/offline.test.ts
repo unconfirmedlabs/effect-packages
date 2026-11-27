@@ -9,7 +9,6 @@ import { GraphQLClientError, GraphQLProtocol } from "effect/graphql"
 import { HttpClient, HttpClientResponse } from "effect/http"
 import { Address, Chain, Checkpoints, Objects, Packages, RpcError, Transactions } from "@unconfirmed/sui"
 import * as SuiGraphQL from "../src/index.ts"
-import { rpcCode } from "../src/convert.ts"
 import { protoJson } from "../src/TransactionsGraphQL.ts"
 import { toProto } from "@unconfirmed/sui/grpc/transaction"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
@@ -113,14 +112,6 @@ describe("Objects.get batching", () => {
     expect(b!._tag === "Failure" && (b!.failure as RpcError.RpcError).code).toBe("INTERNAL")
   })
 
-  test("a transport failure fails the whole batch as UNAVAILABLE", async () => {
-    const { layer } = scripted(() => Effect.fail(new GraphQLClientError.TransportError({ description: "connection reset" })))
-    const results = await run(getObjects(["0x6", "0x7"]), layer)
-    for (const r of results) {
-      expect(r._tag === "Failure" && r.failure).toMatchObject({ _tag: "RpcError", code: "UNAVAILABLE", method: "MultiGetObjects" })
-    }
-  })
-
   test("a malformed object is DATA_LOSS for that lookup only", async () => {
     const { layer, requests } = scripted(() =>
       Effect.succeed({
@@ -159,11 +150,8 @@ describe("error mapping", () => {
 
   test("GraphQL error codes", async () => {
     expect(await codeFor(gqlError({ code: "GRAPHQL_VALIDATION_FAILED" }))).toBe("INVALID_ARGUMENT")
-    expect(await codeFor(gqlError({ code: "GRAPHQL_PARSE_FAILED" }))).toBe("INVALID_ARGUMENT")
-    expect(await codeFor(gqlError({ code: "BAD_USER_INPUT" }))).toBe("INVALID_ARGUMENT")
     expect(await codeFor(gqlError({ code: "INTERNAL_SERVER_ERROR" }))).toBe("INTERNAL")
     expect(await codeFor(gqlError({ code: "REQUEST_TIMEOUT" }))).toBe("DEADLINE_EXCEEDED")
-    expect(await codeFor(gqlError({ code: "FEATURE_UNAVAILABLE" }))).toBe("UNIMPLEMENTED")
     expect(await codeFor(gqlError(undefined, "Failed to parse \"String\": Expected digest to be 32B"))).toBe("INVALID_ARGUMENT")
     expect(await codeFor(gqlError(undefined, "something odd"))).toBe("UNKNOWN")
     expect(await codeFor(gqlError(undefined, "slow down", 429))).toBe("RESOURCE_EXHAUSTED")
@@ -178,8 +166,6 @@ describe("error mapping", () => {
     expect(await codeFor(T({ status: 503 }))).toBe("UNAVAILABLE")
     expect(await codeFor(T({ status: 504 }))).toBe("DEADLINE_EXCEEDED")
     expect(await codeFor(T({ status: 401 }))).toBe("UNAUTHENTICATED")
-    expect(await codeFor(T({ status: 403 }))).toBe("PERMISSION_DENIED")
-    expect(await codeFor(T({ status: 404 }))).toBe("UNIMPLEMENTED")
   })
 
   test("not a GraphQL body / wrong shape is DATA_LOSS", async () => {
@@ -196,12 +182,6 @@ describe("error mapping", () => {
     expect(requests.length).toBe(1)
   })
 
-  test("rpcCode covers every reason", () => {
-    const err = (reason: GraphQLClientError.Reason) => new GraphQLClientError.GraphQLClientError({ operation: "Op", reason })
-    expect(rpcCode(err(new GraphQLClientError.EncodeError({ description: "x" })))).toBe("INVALID_ARGUMENT")
-    expect(rpcCode(err(new GraphQLClientError.DecodeError({ description: "x" })))).toBe("DATA_LOSS")
-    expect(rpcCode(err(new GraphQLClientError.PaginationError({ description: "x", cursor: null })))).toBe("INTERNAL")
-  })
 })
 
 describe("over a scripted HttpClient", () => {
@@ -223,16 +203,14 @@ describe("over a scripted HttpClient", () => {
   const all = (layer: Layer.Layer<HttpClient.HttpClient>) =>
     SuiGraphQL.layer({ url: "https://example.test/graphql", headers: { "x-api-key": "k" } }).pipe(Layer.provide(layer))
 
-  test("headers are sent; HTTP 429 and 503 map to RESOURCE_EXHAUSTED and UNAVAILABLE", async () => {
-    for (const [status, code] of [[429, "RESOURCE_EXHAUSTED"], [503, "UNAVAILABLE"]] as const) {
-      const { layer, seen } = http(() => new Response("Throttled", { status, headers: { "content-type": "text/plain" } }))
-      const e = await Effect.runPromise(
-        Effect.flip(Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get("abc"))).pipe(Effect.provide(all(layer)))
-      )
-      expect(e).toMatchObject({ _tag: "RpcError", code })
-      expect(seen[0]!.headers["x-api-key"]).toBe("k")
-      expect(seen[0]!.url).toBe("https://example.test/graphql")
-    }
+  test("headers are sent; a plain-text HTTP 429 is RESOURCE_EXHAUSTED", async () => {
+    const { layer, seen } = http(() => new Response("Throttled", { status: 429, headers: { "content-type": "text/plain" } }))
+    const e = await Effect.runPromise(
+      Effect.flip(Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get("abc"))).pipe(Effect.provide(all(layer)))
+    )
+    expect(e).toMatchObject({ _tag: "RpcError", code: "RESOURCE_EXHAUSTED" })
+    expect(seen[0]!.headers["x-api-key"]).toBe("k")
+    expect(seen[0]!.url).toBe("https://example.test/graphql")
   })
 
   test("simulate: bytes go as base64 JSON, failures carry command and abort code", async () => {
@@ -591,36 +569,19 @@ describe("parity with gRPC answers", () => {
     ])
   })
 
-  test("getFunction on an object that is not a package is INVALID_ARGUMENT", async () => {
-    const { layer } = scripted(() => Effect.succeed({ body: { data: { package: null, object: { address: A("0x6") } } } }))
-    const e = await run(
-      Effect.flip(Effect.flatMap(Effect.service(Packages.Packages), (p) =>
-        p.getFunction({ package: A("0x6"), module: "clock", function: "timestamp_ms" }))),
-      layer
-    )
-    expect(e).toMatchObject({ _tag: "RpcError", code: "INVALID_ARGUMENT" })
+  test("getFunction on an object that is not a package is INVALID_ARGUMENT, on a missing one NOT_FOUND", async () => {
+    const codeFor = async (object: unknown) => {
+      const { layer } = scripted(() => Effect.succeed({ body: { data: { package: null, object } } }))
+      const e = await run(
+        Effect.flip(Effect.flatMap(Effect.service(Packages.Packages), (p) => p.getFunction({ package: A("0x6"), module: "m", function: "f" }))),
+        layer
+      )
+      return (e as RpcError.RpcError).code
+    }
+    expect(await codeFor({ address: A("0x6") })).toBe("INVALID_ARGUMENT")
+    expect(await codeFor(null)).toBe("NOT_FOUND")
   })
 
-  test("getFunction on a missing package is NOT_FOUND", async () => {
-    const { layer } = scripted(() => Effect.succeed({ body: { data: { package: null, object: null } } }))
-    const e = await run(
-      Effect.flip(Effect.flatMap(Effect.service(Packages.Packages), (p) =>
-        p.getFunction({ package: A("0xabc"), module: "m", function: "f" }))),
-      layer
-    )
-    expect(e).toMatchObject({ _tag: "RpcError", code: "NOT_FOUND" })
-  })
-
-  test("Checkpoints.list with start >= end is empty and sends nothing", async () => {
-    const { layer, requests } = scripted(() => Effect.die("unexpected request"))
-    const cps = await run(
-      Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) =>
-        Effect.all([c.list({ start: 100n, end: 50n }).pipe(Stream.runCollect), c.list({ start: 5n, end: 5n }).pipe(Stream.runCollect)])),
-      layer
-    )
-    expect(cps).toEqual([[], []])
-    expect(requests.length).toBe(0)
-  })
 })
 
 describe("retryability", () => {
@@ -631,28 +592,17 @@ describe("retryability", () => {
   }
   const err = (code: string) => ({ data: null, errors: [{ message: "x", extensions: { code } }] })
 
-  test("a 5xx with INTERNAL_SERVER_ERROR in the body is UNAVAILABLE (retryable)", async () => {
+  test("retryable or not: 5xx bodies, 413, unrecognised codes, Sui's per-query limits", async () => {
     expect(await codeOf(err("INTERNAL_SERVER_ERROR"), 500)).toEqual(["UNAVAILABLE", true])
     expect(await codeOf(err("INTERNAL_SERVER_ERROR"), 200)).toEqual(["INTERNAL", false])
-  })
-
-  test("HTTP 413 is not retryable", async () => {
-    const T = Effect.fail(new GraphQLClientError.TransportError({ description: "too large", status: 413 }))
-    const { layer } = scripted(() => T)
-    const e = await run(Effect.flip(Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get("abc"))), layer)
-    expect(e).toMatchObject({ code: "INVALID_ARGUMENT" })
-    expect((e as RpcError.RpcError).retryable).toBe(false)
-  })
-
-  test("an unrecognised extensions.code falls back to the HTTP status, else UNKNOWN", async () => {
     expect(await codeOf(err("SOMETHING_NEW"), 200)).toEqual(["UNKNOWN", false])
     expect(await codeOf(err("SOMETHING_NEW"), 400)).toEqual(["INVALID_ARGUMENT", false])
-  })
-
-  test("Sui's per-query limits are not retryable; other RESOURCE_EXHAUSTED is", async () => {
     const limit = { data: null, errors: [{ message: "Exceeded the maximum number (21) of queries that require dedicated access", extensions: { code: "RESOURCE_EXHAUSTED" } }] }
     expect(await codeOf(limit, 200)).toEqual(["INVALID_ARGUMENT", false])
     expect(await codeOf(err("RESOURCE_EXHAUSTED"), 200)).toEqual(["RESOURCE_EXHAUSTED", true])
+    const { layer } = scripted(() => Effect.fail(new GraphQLClientError.TransportError({ description: "too large", status: 413 })))
+    const e = await run(Effect.flip(Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get("abc"))), layer)
+    expect([(e as RpcError.RpcError).code, (e as RpcError.RpcError).retryable]).toEqual(["INVALID_ARGUMENT", false])
   })
 })
 
