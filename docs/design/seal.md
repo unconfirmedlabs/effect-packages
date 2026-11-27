@@ -1,6 +1,6 @@
 # `@unconfirmed/seal` — design
 
-Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. S2 (`EncryptedObject`, `Envelope`) implemented; see "As built (S2)" in §4.2. S3 (configuration, key servers) implemented; see "As built (S3)" in §4.3. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
+Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. S2 (`EncryptedObject`, `Envelope`) implemented; see "As built (S2)" in §4.2. S3 (configuration, key servers) implemented; see "As built (S3)" in §4.3. S5 (`SessionKey`, `Approval`) implemented; see "As built (S5)" in §4.5 and §4.6. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
 
 A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
 
@@ -547,6 +547,18 @@ export const fromExported: (exported: Exported, options?: { readonly signer?: Me
 - `make` does no I/O. Whether `packageId` is a first version is checked by `Seal.session` (§4.8).
 - Each session owns a derived-key cache (§4.7), reachable only through `SessionKey.keyCache(session)` (marked `@internal`, used by `Keys`). It is not exported with the session and dies with it.
 
+**As built (S5).** Differences from the declarations above, each the smallest call that fills a gap:
+
+- **Ids are strict.** `packageId` and `address` (in `make` and `fromExported`) must be `0x` followed by exactly 64 hex digits; either case is accepted and normalised to lower case. Short forms (`0x2`) and unprefixed hex are `InvalidSessionKey` (item 14: the server rebuilds the message from the canonical id, so anything else could only fail later). `normalizeId` is exported.
+- **Pure formats are exported**: `personalMessage({ packageName, ttlMin, creationTime, sessionVk })` (R1) and `requestMessage(ptb, encKey, encVerificationKey)` (R4). Both Rust vectors pass through them; the R1 vector's 60-digit id is passed already padded.
+- `MessageSigner = Signer.Signer | PersonalMessageSigner`, the second named and exported. A value with `signPersonalMessage` signs through it, anything else through `Signer.signPersonalMessage`. A failure of the former that is not a `Signer.SigningError` becomes `SigningError { reason: "unavailable", message: "<tag>: <message>" }`. The type test (`test/session-key.test.ts`) checks `Wallet.WalletSigner` and `Signer.Signer` against it through the root devDependency; the wallet case also runs against `packages/sui-wallet/test/FakeWallet.ts`.
+- The certificate signer is `Effect.cachedWithTTL` (success forever, failure zero): ten concurrent `certificate` calls prompt once (tested under `TestClock`). The expiry check runs before the cache on every call. A signature obtained by signing is remembered, so `toExported` includes it.
+- The secret, the signer, the signature and the cache are held in a module-private `WeakMap` keyed by the session value, not as properties: a spread copy (`{ ...session }`) is not a session, and every function given one dies.
+- `isExpired` and every check that a session is live (certificate, `signRequest`, `fromExported`, the cache) use `now ≥ expiresAt − 10 s` (`EXPIRY_MARGIN_MS`).
+- `Exported.mvrName` and `personalMessageSignature` are `Schema.optional`, not `optionalKey`: `@mysten/seal`'s `export()` writes those keys with `undefined`. `fromExported(input: unknown)` decodes through `Exported`; it also accepts the decoded form (a `Redacted` `sessionKey`) by unwrapping it first. It also checks `creationTimeMs` (a non-negative integer) and the signature's shape.
+- `withSignature` and `fromExported` check the signature's *shape*: a known flag (Ed25519, secp256k1, secp256r1, multisig, zkLogin, passkey, ML-DSA-65) and the exact length for the three single-key schemes. The `withSignature` result shares the original's secret and cache.
+- **The derived-key cache** is a small LRU `Map` (default 1024 entries), not an Effect `Cache`: entries are written by `Keys`, never computed by a lookup function, and they all die together when the session expires. `SessionKey.keyCache(session): KeyCache` (`@internal`) gives `get(fullId, server)` → `Option`, `lookup(fullId)` → every server's key, `set(fullId, server, key)`, `clear`, `size`. Each of `get` / `lookup` / `set` first checks the session: expired → `SessionKeyExpired` and the cache is emptied; a cache whose owner and package are not the session's → defect. A full id of another package is never found, and `set` of one is a defect. Keys are copied in and out. A new session, or one from `fromExported`, starts empty.
+
 ### 4.6 The approval transaction
 
 ```ts
@@ -575,6 +587,14 @@ export const fromTransactionKindBytes: (bytes: Uint8Array) => Result.Result<Appr
 ```
 
 `InvalidApproval { reason }` reproduces every rule of P1 with the server's wording, so a bad PTB fails before any request. Generated call builders (`@unconfirmed/sui-codegen`) work as recipes too: their first argument is the id.
+
+**As built (S5).**
+
+- `call`'s `arguments` may also be recipe steps (`Ptb.clock`, `Ptb.object(id)`, `Move.pure(…)`), run *after* the id is added, so inputs come in the order `@mysten/sui` gives them and the bytes match its `onlyTransactionKind` build (tested). Plain `T.Argument`s still work.
+- Added `fromBytes(bytes)` (BCS `ProgrammableTransaction`, what a key server receives; `"Invalid BCS"` as the server says) and `MAX_COMMANDS = 100`.
+- `InvalidApproval.reason` is the server's text (`valid_ptb.rs`) followed by ` (command i)` for per-command rules. As on the server, an empty id is accepted (only its BCS is checked).
+- `fromTransactionKindBytes` checks the tag, decodes with no trailing bytes, and names full `TransactionData` bytes explicitly.
+- `fromRecipe` runs `Resolve.inputs` with sender `0x0` (the sender plays no part in input resolution). Approvals that need no chain reads use `fromRecipeOffline`; `Move.clock()` / `Ptb.clock` are already resolved.
 
 ### 4.7 Fetching keys
 
