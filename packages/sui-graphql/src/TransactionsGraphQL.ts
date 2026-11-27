@@ -6,6 +6,7 @@ import type * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import { RpcError } from "@unconfirmed/sui/RpcError"
+import { needsGasSelection, toProto } from "@unconfirmed/sui/grpc/transaction"
 import * as Transactions from "@unconfirmed/sui/Transactions"
 import {
   base64,
@@ -36,6 +37,49 @@ export const SimulateTransaction = GraphQL.query("SimulateTransaction", {
   })
 })
 
+/**
+ * Server-side resolution, as `@mysten/sui`'s GraphQL client does it: the
+ * unresolved transaction as a proto3-JSON `sui.rpc.v2.Transaction`, checks
+ * and gas selection on; the completed transaction comes back as BCS.
+ */
+export const ResolveTransaction = GraphQL.query("ResolveTransaction", {
+  document: "query ResolveTransaction($transaction:JSON!,$doGasSelection:Boolean){" +
+    "simulateTransaction(transaction:$transaction,checksEnabled:true,doGasSelection:$doGasSelection){" +
+    `effects{${EFFECTS_FIELDS} epoch{epochId} transaction{transactionBcs}}}}`,
+  variables: { transaction: Schema.Unknown, doGasSelection: Schema.Boolean },
+  result: Schema.Struct({
+    simulateTransaction: Schema.Struct({
+      effects: Schema.NullOr(Schema.Struct({
+        ...EffectsNode.fields,
+        epoch: Schema.NullOr(Schema.Struct({ epochId: Schema.Number })),
+        transaction: Schema.NullOr(Schema.Struct({ transactionBcs: Schema.NullOr(Bytes) }))
+      }))
+    })
+  })
+})
+
+const camel = (s: string) => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+
+/**
+ * A `sui.rpc.v2` message value (as the gRPC codec takes it) in proto3 JSON:
+ * lowerCamelCase keys, a oneof's member under its own name, 64-bit integers
+ * as strings, bytes as base64. Enums stay numbers, which proto3 JSON accepts.
+ */
+export const protoJson = (v: unknown): unknown => {
+  if (typeof v === "bigint") return v.toString()
+  if (v instanceof Uint8Array) return base64(v)
+  if (Array.isArray(v)) return v.map(protoJson)
+  if (typeof v !== "object" || v === null) return v
+  const out: Record<string, unknown> = {}
+  for (const [k, x] of Object.entries(v)) {
+    if (x === undefined) continue
+    if (typeof x === "object" && x !== null && "_tag" in x && "value" in x && Object.keys(x).length === 2) {
+      out[camel((x as { _tag: string })._tag)] = protoJson((x as { value: unknown }).value)
+    } else out[camel(k)] = protoJson(x)
+  }
+  return out
+}
+
 export const ExecuteTransaction = GraphQL.mutation("ExecuteTransaction", {
   document: "mutation ExecuteTransaction($transactionDataBcs:Base64!,$signatures:[Base64!]!){" +
     `executeTransaction(transactionDataBcs:$transactionDataBcs,signatures:$signatures){effects{${EFFECTS_FIELDS}}}}`,
@@ -49,7 +93,7 @@ export const GetTransactionEffects = GraphQL.query("GetTransactionEffects", {
   result: Schema.Struct({ transactionEffects: Schema.NullOr(EffectsNode) })
 })
 
-export const group = GraphQLGroup.make(SimulateTransaction, ExecuteTransaction, GetTransactionEffects, GetObjectChanges)
+export const group = GraphQLGroup.make(SimulateTransaction, ResolveTransaction, ExecuteTransaction, GetTransactionEffects, GetObjectChanges)
 
 const incomplete = (method: string) =>
   Effect.fail(
@@ -105,6 +149,28 @@ export const layer: Layer.Layer<Transactions.Transactions, never, GraphQLProtoco
                 })
             ),
             Effect.withSpan("Transactions.simulate")
+          ),
+      resolve: (transaction) =>
+        client
+          .ResolveTransaction({ transaction: protoJson(toProto(transaction)), doGasSelection: needsGasSelection(transaction) })
+          .pipe(
+            call,
+            Effect.flatMap(({ simulateTransaction: r }): Effect.Effect<Transactions.Resolution, RpcError> => {
+              const e = r.effects
+              if (e === null) return noEffects("ResolveTransaction")
+              const bytes = e.transaction?.transactionBcs
+              if (bytes === null || bytes === undefined) {
+                return Effect.fail(new RpcError({ method: "ResolveTransaction", code: "INTERNAL", message: "the response has no resolved transaction" }))
+              }
+              // A simulation has no digest to page by (as in `simulate`).
+              if (e.objectChanges?.pageInfo.hasNextPage) return incomplete("ResolveTransaction")
+              return Effect.succeed({
+                transaction: bytes,
+                effects: effects(e),
+                epoch: e.epoch === null ? undefined : BigInt(e.epoch.epochId)
+              })
+            }),
+            Effect.withSpan("Transactions.resolve")
           ),
       execute: (txBytes, signatures) =>
         client

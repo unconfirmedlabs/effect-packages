@@ -5,6 +5,7 @@ import { ExecutedEffectsIncomplete, TransactionNotFound, Transactions } from "..
 import { convert, EFFECTS_PATHS, effects } from "./convert.ts"
 import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
+import { needsGasSelection, RESOLVE_PATHS, toProto } from "./transaction.ts"
 
 const prefixed = (prefix: string) => EFFECTS_PATHS.map((p) => (p === "digest" ? `${prefix}digest` : `${prefix}${p}`))
 
@@ -50,6 +51,24 @@ export const layer: Layer.Layer<Transactions, never, GrpcWeb> = /* @__PURE__ */ 
               )
             ),
             Effect.withSpan("Transactions.execute")
+          ),
+      resolve: (transaction) =>
+        grpc
+          .unary(Rpc.TransactionExecutionService_SimulateTransaction, {
+            transaction: toProto(transaction),
+            read_mask: { paths: RESOLVE_PATHS },
+            checks: 0,
+            do_gas_selection: needsGasSelection(transaction)
+          })
+          .pipe(
+            Effect.flatMap((r) =>
+              convert(simulatePath, () => {
+                const bytes = r.transaction?.transaction?.bcs?.value
+                if (bytes === undefined) throw new Error("no resolved transaction (transaction.transaction.bcs)")
+                return { transaction: bytes, effects: effects(r.transaction, transactionDigest(bytes)), epoch: r.transaction?.effects?.epoch }
+              })
+            ),
+            Effect.withSpan("Transactions.resolve")
           ),
       get: (digest) =>
         grpc.unary(Rpc.LedgerService_GetTransaction, { digest, read_mask: { paths: EFFECTS_PATHS } }).pipe(

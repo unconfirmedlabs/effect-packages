@@ -8,8 +8,9 @@ import * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import type { Address } from "./Address.ts"
 import type { Owner } from "./Objects.ts"
+import type { UnresolvedObject } from "./Ptb.ts"
 import type { RpcError } from "./RpcError.ts"
-import type { ObjectDigest } from "./TransactionData.ts"
+import type { CallArg, Command, ObjectDigest, ObjectRef, TransactionExpiration } from "./TransactionData.ts"
 
 export interface GasUsed {
   readonly computationCost: bigint
@@ -74,6 +75,32 @@ export interface Simulation {
   readonly returnValues: ReadonlyArray<ReadonlyArray<Uint8Array>>
 }
 
+/**
+ * A transaction for the node to complete in one simulation
+ * (`Transactions.resolve`): object inputs by id only, gas price, budget,
+ * payment and expiration left out unless the caller fixed them.
+ */
+export interface UnresolvedTransaction {
+  readonly sender: Address
+  readonly gasOwner: Address
+  readonly inputs: ReadonlyArray<CallArg | UnresolvedObject>
+  readonly commands: ReadonlyArray<Command>
+  readonly gasPrice?: bigint
+  readonly gasBudget?: bigint
+  readonly gasPayment?: ReadonlyArray<ObjectRef>
+  readonly expiration?: TransactionExpiration
+}
+
+/** What the node answered to `Transactions.resolve`. Unverified: `Resolve.server` checks it before use. */
+export interface Resolution {
+  /** The completed transaction, as BCS `TransactionData`. */
+  readonly transaction: Uint8Array
+  /** The effects of simulating it (its digest is the completed transaction's). */
+  readonly effects: Effects
+  /** The epoch it was simulated in, when the transport reports it. */
+  readonly epoch: bigint | undefined
+}
+
 export class TransactionNotFound extends /* @__PURE__ */ Schema.TaggedError<TransactionNotFound>()("TransactionNotFound", {
   digest: Schema.String
 }) {
@@ -101,6 +128,14 @@ export class Transactions extends /* @__PURE__ */ Context.Service<Transactions, 
     signatures: ReadonlyArray<Uint8Array>
   ) => Effect.Effect<Effects, RpcError | ExecutedEffectsIncomplete>
   readonly get: (digest: string) => Effect.Effect<Effects, TransactionNotFound | RpcError>
+  /**
+   * Complete an unresolved transaction on the node in one simulation, with
+   * checks and gas selection on: object versions, shared-object mutability,
+   * gas price, budget and payment (and a `ValidDuring` expiration when it pays
+   * from an address balance). Optional: without it `Tx.resolve` resolves
+   * client-side. `Resolve.server` verifies the answer before using it.
+   */
+  readonly resolve?: (transaction: UnresolvedTransaction) => Effect.Effect<Resolution, RpcError>
 }>()("@unconfirmed/sui/Transactions") {}
 
 /** `waitFor` gave up: the transaction wasn't visible within the timeout. */

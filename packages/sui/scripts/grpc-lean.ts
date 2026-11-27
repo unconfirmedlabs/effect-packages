@@ -20,6 +20,7 @@
  * are unaffected.
  */
 import { CHECKPOINT_PATHS, EFFECTS_PATHS, EVENT_PATHS, OBJECT_MASK } from "../src/grpc/convert.ts"
+import { RESOLVE_PATHS } from "../src/grpc/transaction.ts"
 
 export interface LeanMethod {
   readonly root?: string
@@ -46,9 +47,21 @@ export const LEAN: Record<string, LeanMethod> = {
   MovePackageService_GetFunction: {},
   TransactionExecutionService_SimulateTransaction: {
     root: "",
-    mask: union(EFFECTS_PATHS.map((p) => `transaction.${p}`), ["command_outputs"]),
+    // `simulate` (BCS in, effects and outputs back) and `resolve` (a structured
+    // unresolved transaction in, the completed transaction's BCS back).
+    mask: union(EFFECTS_PATHS.map((p) => `transaction.${p}`), ["command_outputs"], RESOLVE_PATHS),
     keep: ["suggested_gas_price"],
-    request: ["transaction.bcs", "read_mask", "checks", "do_gas_selection"]
+    request: [
+      "transaction.bcs",
+      "transaction.version",
+      "transaction.kind.programmable_transaction",
+      "transaction.sender",
+      "transaction.gas_payment",
+      "transaction.expiration",
+      "read_mask",
+      "checks",
+      "do_gas_selection"
+    ]
   },
   TransactionExecutionService_ExecuteTransaction: {
     root: "transaction",

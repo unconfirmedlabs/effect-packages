@@ -220,6 +220,8 @@ yield* Tx.run(recipe, { signer, payment: Resolve.coins })   // coin selection
 
 A payment strategy is just a step (`Plan -> Effect<Plan, E, R>`), and so is a sponsor, a policy check or an intent resolver.
 
+Online, `Tx.build` / `Tx.run` resolve on the node by default, as `@mysten/sui` does: one `SimulateTransaction` with gas selection (`Resolve.server`, gRPC or GraphQL) fills object versions, gas price, budget and payment, and the answer is verified before use (commands, ids, shared mutability, gas coins owned by the gas owner, budget cap, sender and gas owner). A custom payment strategy, a sponsored transaction that uses the gas coin, or `resolve: "client"` runs the client-side steps instead.
+
 **Address balances are the default way to pay and send.**
 
 ```ts

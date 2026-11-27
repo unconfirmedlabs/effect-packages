@@ -13,6 +13,11 @@
  *   budget    Transactions | Chain dry run with a placeholder payment
  *   payment   (strategy)           `auto` (default): address balance, else coins;
  *                                  or `addressBalance`, `coins`, `fixed(refs)`
+ *
+ * Or on the node: `server` completes object inputs, gas price, budget and
+ * payment in one simulation (`Transactions.resolve`) and verifies the answer
+ * (`verifyResolution`). It runs after `balances` and replaces `inputs`
+ * through payment.
  */
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
@@ -30,7 +35,7 @@ import * as CoinReservation from "./CoinReservation.ts"
 import type { AllowanceIntent, BalanceIntent, Command, Draft, Input } from "./Ptb.ts"
 import type { RpcError } from "./RpcError.ts"
 import * as T from "./TransactionData.ts"
-import { type Status, Transactions } from "./Transactions.ts"
+import { type Effects, type Status, Transactions, type UnresolvedTransaction } from "./Transactions.ts"
 import * as TypeTag from "./TypeTag.ts"
 
 export interface Plan {
@@ -41,6 +46,8 @@ export interface Plan {
   readonly gasBudget?: bigint
   readonly gasPayment?: ReadonlyArray<T.ObjectRef>
   readonly expiration?: T.TransactionExpiration
+  /** The highest budget to accept: `Resolve.server` refuses a node's budget above it (default 50 SUI), `Tx.resolve` any. */
+  readonly maxGasBudget?: bigint
   /** Reads made up front by `Resolve.prefetch`; later steps use them instead of asking again. */
   readonly prefetched?: Prefetched
 }
@@ -83,6 +90,31 @@ export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasE
 }) {
   override get message(): string {
     return `gas estimation failed: ${this.description}${this.command === undefined ? "" : ` in command ${this.command}`}${this.abortCode === undefined ? "" : `, abort code ${this.abortCode}`}${this.location === undefined ? "" : ` at ${this.location}`}`
+  }
+}
+
+/**
+ * The node's resolution (`Resolve.server`) failed verification: it changed
+ * something it must not (sender, gas owner, commands, an input it was given),
+ * or picked something it may not (another object, a weaker shared-object
+ * mutability, gas coins the gas owner doesn't own, an unbounded validity).
+ * Nothing was signed.
+ */
+export class ResolutionRejected extends /* @__PURE__ */ Schema.TaggedError<ResolutionRejected>()("ResolutionRejected", {
+  reason: Schema.String
+}) {
+  override get message(): string {
+    return `refused the node's resolution: ${this.reason}`
+  }
+}
+
+/** The resolved budget is above the caller's `maxGasBudget`. */
+export class GasBudgetExceeded extends /* @__PURE__ */ Schema.TaggedError<GasBudgetExceeded>()("GasBudgetExceeded", {
+  budget: Schema.BigInt,
+  max: Schema.BigInt
+}) {
+  override get message(): string {
+    return `gas budget ${this.budget} is above the maximum ${this.max}`
   }
 }
 
@@ -276,6 +308,27 @@ const objectArg = (o: SuiObject, usage: Usage | undefined, forced: boolean | und
   return usage?.receiving ? { _tag: "Receiving", ...ref } : { _tag: "ImmOrOwnedObject", ...ref }
 }
 
+/**
+ * The signatures of the Move calls that take one of the `pending` inputs, by
+ * command index: one `getFunction` per target, all at once.
+ */
+const functionsFor = (draft: Draft, pending: ReadonlySet<number>): Effect.Effect<Map<number, MoveFunction>, RpcError, Packages> => {
+  const targetOf = (c: Extract<Command, { _tag: "MoveCall" }>) => `${c.package}::${c.module}::${c.function}`
+  const calls = draft.commands.flatMap((c, index) =>
+    c._tag === "MoveCall" && c.arguments.some((a) => a._tag === "Input" && pending.has(a.value)) ? [{ c, index }] : []
+  )
+  if (calls.length === 0) return Effect.succeed(new Map())
+  const targets = new Map(calls.map(({ c }) => [targetOf(c), c] as const))
+  return Effect.flatMap(Effect.service(Packages), (packages) =>
+    Effect.map(
+      Effect.forEach(targets, ([key, c]) => Effect.map(packages.getFunction(c), (f) => [key, f] as const), { concurrency: "unbounded" }),
+      (signatures) => {
+        const byTarget = new Map(signatures)
+        return new Map(calls.map(({ c, index }) => [index, byTarget.get(targetOf(c))!] as const))
+      }
+    ))
+}
+
 /** Inputs that allowance intents spend from: `Resolve.balances` reads and resolves those itself. */
 const allowanceInputs = (draft: Draft) =>
   new Set(draft.commands.flatMap((c) => (c._tag === "AllowanceIntent" && c.allowance._tag === "Input" ? [c.allowance.value] : [])))
@@ -294,19 +347,11 @@ export const inputs = (plan: Plan): Effect.Effect<Plan, ObjectNotFound | RpcErro
     )
     if (unresolved.length === 0) return plan
     const objects = yield* Objects
-    const packages = yield* Packages
-    const pending = new Set(unresolved.map(({ index }) => index))
-    const targetOf = (c: Extract<Command, { _tag: "MoveCall" }>) => `${c.package}::${c.module}::${c.function}`
-    const calls = plan.draft.commands.flatMap((c, index) =>
-      c._tag === "MoveCall" && c.arguments.some((a) => a._tag === "Input" && pending.has(a.value)) ? [{ c, index }] : []
-    )
-    const targets = new Map(calls.map(({ c }) => [targetOf(c), c] as const))
-    const [resolved, signatures] = yield* Effect.all([
+    const [resolved, functions] = yield* Effect.all([
       Effect.forEach(unresolved, ({ input }) => objects.get(input.objectId), { concurrency: "unbounded" }),
-      Effect.forEach(targets, ([key, c]) => Effect.map(packages.getFunction(c), (f) => [key, f] as const), { concurrency: "unbounded" })
+      functionsFor(plan.draft, new Set(unresolved.map(({ index }) => index)))
     ], { concurrency: "unbounded" })
-    const byTarget = new Map(signatures)
-    const use = usages(plan.draft, new Map(calls.map(({ c, index }) => [index, byTarget.get(targetOf(c))!] as const)))
+    const use = usages(plan.draft, functions)
     const next = [...plan.draft.inputs]
     for (const [i, { input, index }] of unresolved.entries()) {
       const arg = objectArg(resolved[i]!, use.get(index), input.mutable)
@@ -519,8 +564,11 @@ const coinIntents = (
       })
     }
 
-    // What the sender has, per type (all types at once).
-    const used = new Set(plan.draft.inputs.flatMap((i) => (i._tag === "Object" ? [i.value.objectId] : [])))
+    // What the sender has, per type (all types at once). Coins already taken
+    // as inputs (resolved, or left for the node) are not picked again.
+    const used = new Set(plan.draft.inputs.flatMap((i) =>
+      i._tag === "Object" ? [i.value.objectId] : i._tag === "UnresolvedObject" ? [i.objectId] : []
+    ))
     yield* Effect.forEach([...types], ([key, t]) =>
       Effect.gen(function*() {
         const balance = yield* balanceOf(plan, coinsService, plan.sender, t.coinType)
@@ -988,9 +1036,14 @@ export const unchecked: PaymentStrategy<RpcError, Chain> = (plan) =>
     ? Effect.succeed(plan)
     : Effect.map(keepExpiration(plan), (expiration) => ({ ...plan, gasPayment: [], expiration }))
 
+/** A strategy that pays with exactly `payment` (what `fixed` returns); `Tx.resolve` can hand it to the node. */
+export interface FixedPayment extends PaymentStrategy {
+  readonly payment: ReadonlyArray<T.ObjectRef>
+}
+
 /** Pay with exactly these coins. */
-export const fixed = (payment: ReadonlyArray<T.ObjectRef>): PaymentStrategy => (plan) =>
-  Effect.succeed({ ...plan, gasPayment: payment })
+export const fixed = (payment: ReadonlyArray<T.ObjectRef>): FixedPayment =>
+  Object.assign((plan: Plan) => Effect.succeed({ ...plan, gasPayment: payment }), { payment })
 
 /**
  * Pay with SUI coins owned by the gas owner (at most 256): until they cover the
@@ -1009,6 +1062,213 @@ export const coins: PaymentStrategy<RpcError | InsufficientGas | Incomplete, Coi
     if (best.total < required || (gasCoin && best.refs.length === 0)) return yield* new InsufficientGas({ owner, required, available: best.total })
     return { ...plan, gasPayment: best.refs }
   })
+
+// -----------------------------------------------------------------------------
+// server (one simulation on the node, verified)
+// -----------------------------------------------------------------------------
+
+const encodeCommands = /* @__PURE__ */ Bcs.encodeSync(Bcs.vector(T.Command))
+const encodeCallArg = /* @__PURE__ */ Bcs.encodeSync(T.CallArg)
+const encodeRefs = /* @__PURE__ */ Bcs.encodeSync(Bcs.vector(T.ObjectRef))
+const encodeExpiration = /* @__PURE__ */ Bcs.encodeSync(T.TransactionExpiration)
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
+
+const hasIntents = (draft: Draft) => draft.commands.some((c) => c._tag === "BalanceIntent" || c._tag === "AllowanceIntent")
+
+/** Is the reservation ref `ref` one for `owner`'s SUI address balance on the chain `chainId`? */
+const reservationFor = (ref: T.ObjectRef, owner: Address, chainId: string): boolean => {
+  try {
+    return CoinReservation.make({ reserved: 0n, owner, chainId, epoch: 0n }).objectId === ref.objectId
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Check the node's completed transaction against the plan it was asked to
+ * complete (`Resolve.server` runs this; exported for tests and custom flows).
+ *
+ * - sender and gas owner unchanged; commands byte-for-byte unchanged;
+ * - every input the plan had resolved unchanged; every unresolved one an
+ *   object with the id asked for: a shared object at least as mutable as the
+ *   commands need (forced mutability exactly as forced), `Receiving` exactly
+ *   where a called function takes `Receiving<T>`;
+ * - gas price, budget, payment and expiration exactly as given when given;
+ *   otherwise a positive price, a budget within `maxGasBudget` (default: the
+ *   protocol maximum, 50 SUI), payment coins the simulation shows the gas
+ *   owner owned at those versions (or reservations of the gas owner's address
+ *   balance), no input doubling as gas, and no expiration or a `ValidDuring`
+ *   of at most two epochs around the simulated one.
+ *
+ * `functions` are the signatures of the Move calls taking an unresolved
+ * object, by command index (as `Resolve.inputs` reads them).
+ */
+export const verifyResolution = (
+  plan: Plan,
+  data: T.TransactionData,
+  effects: Effects,
+  functions: ReadonlyMap<number, MoveFunction>,
+  epoch?: bigint
+): ResolutionRejected | undefined => {
+  const refuse = (reason: string) => new ResolutionRejected({ reason })
+  const gasOwner = plan.gasOwner ?? plan.sender
+  if (data.sender !== plan.sender) return refuse(`sender changed to ${data.sender}`)
+  if (data.gasData.owner !== gasOwner) return refuse(`gas owner changed to ${data.gasData.owner}`)
+  const kind = data.kind
+  const ours = plan.draft.commands as ReadonlyArray<T.Command>
+  if (!sameBytes(encodeCommands(kind.commands), encodeCommands(ours))) return refuse("the commands changed")
+  if (kind.inputs.length !== plan.draft.inputs.length) {
+    return refuse(`${kind.inputs.length} inputs for ${plan.draft.inputs.length}`)
+  }
+  const use = usages(plan.draft, functions)
+  const objectIds = new Set<string>()
+  for (const [i, asked] of plan.draft.inputs.entries()) {
+    const got = kind.inputs[i]!
+    if (got._tag === "Object") objectIds.add(got.value.objectId)
+    if (asked._tag !== "UnresolvedObject") {
+      if (!sameBytes(encodeCallArg(got), encodeCallArg(asked))) return refuse(`input ${i} changed`)
+      continue
+    }
+    if (got._tag !== "Object" || got.value.objectId !== asked.objectId) {
+      return refuse(`input ${i} is not object ${asked.objectId}`)
+    }
+    const usage = use.get(i)
+    const o = got.value
+    switch (o._tag) {
+      case "SharedObject": {
+        if (usage?.receiving) return refuse(`input ${i} must be Receiving, got a shared object`)
+        const m = o.mutability._tag
+        if (asked.mutable !== undefined) {
+          if (m !== (asked.mutable ? "Mutable" : "Immutable")) {
+            return refuse(`input ${i} was forced ${asked.mutable ? "mutable" : "immutable"}, got ${m}`)
+          }
+        } else if ((usage?.mutable ?? true) && m !== "Mutable") {
+          return refuse(`input ${i} (shared ${o.objectId}) must be Mutable for its commands, got ${m}`)
+        }
+        break
+      }
+      case "Receiving":
+        if (!usage?.receiving) return refuse(`input ${i} is Receiving, but no command receives it`)
+        break
+      case "ImmOrOwnedObject":
+        if (usage?.receiving) return refuse(`input ${i} must be Receiving, got an owned object`)
+        break
+    }
+  }
+
+  const gas = data.gasData
+  if (plan.gasPrice !== undefined ? gas.price !== plan.gasPrice : gas.price <= 0n) return refuse(`gas price ${gas.price}`)
+  const maxBudget = plan.maxGasBudget ?? MAX_BUDGET
+  if (plan.gasBudget !== undefined) {
+    if (gas.budget !== plan.gasBudget) return refuse(`gas budget changed to ${gas.budget}`)
+  } else if (gas.budget > maxBudget) {
+    return refuse(`gas budget ${gas.budget} is above ${maxBudget}`)
+  }
+
+  const e = data.expiration
+  if (plan.expiration !== undefined) {
+    if (!sameBytes(encodeExpiration(e), encodeExpiration(plan.expiration))) return refuse("the expiration changed")
+  } else if (e._tag !== "None") {
+    if (e._tag !== "ValidDuring") return refuse(`expiration ${e._tag} where none was asked for`)
+    const v = e
+    const bounded = Option.isSome(v.minEpoch) && Option.isSome(v.maxEpoch) && Option.isNone(v.minTimestamp) &&
+      Option.isNone(v.maxTimestamp) && v.maxEpoch.value >= v.minEpoch.value && v.maxEpoch.value - v.minEpoch.value <= 1n &&
+      (epoch === undefined || (v.minEpoch.value <= epoch && epoch <= v.maxEpoch.value))
+    if (!bounded) return refuse("the expiration is not a ValidDuring window of at most two epochs around the simulated one")
+  }
+
+  if (plan.gasPayment !== undefined) {
+    return sameBytes(encodeRefs(gas.payment), encodeRefs(plan.gasPayment)) ? undefined : refuse("the gas payment changed")
+  }
+  const chainId = e._tag === "ValidDuring" || e._tag === "Validity" ? e.chain : undefined
+  const seen = new Set<string>()
+  for (const ref of gas.payment) {
+    if (seen.has(ref.objectId)) return refuse(`gas object ${ref.objectId} appears twice`)
+    seen.add(ref.objectId)
+    if (objectIds.has(ref.objectId)) return refuse(`gas object ${ref.objectId} is also an input`)
+    if (CoinReservation.isReservation(ref)) {
+      if (ref.version !== 0n || chainId === undefined || !reservationFor(ref, gasOwner, chainId)) {
+        return refuse(`gas reservation ${ref.objectId} is not one of ${gasOwner}'s address balance`)
+      }
+      continue
+    }
+    const c = effects.changedObjects.find((x) => x.objectId === ref.objectId)
+    const owner = c?.inputOwner
+    if (
+      c === undefined || c.inputVersion !== ref.version || c.inputDigest !== ref.digest ||
+      owner?._tag !== "AddressOwner" || owner.address !== gasOwner
+    ) {
+      return refuse(`gas coin ${ref.objectId} is not owned by ${gasOwner} at version ${ref.version}`)
+    }
+  }
+  return undefined
+}
+
+/** The plan as a request to the node: unresolved objects by id, gas fields only where fixed. */
+const unresolvedOf = (plan: Plan): UnresolvedTransaction => ({
+  sender: plan.sender,
+  gasOwner: plan.gasOwner ?? plan.sender,
+  inputs: plan.draft.inputs as UnresolvedTransaction["inputs"],
+  commands: plan.draft.commands as ReadonlyArray<T.Command>,
+  ...(plan.gasPrice !== undefined && { gasPrice: plan.gasPrice }),
+  ...(plan.gasBudget !== undefined && { gasBudget: plan.gasBudget }),
+  ...(plan.gasPayment !== undefined && { gasPayment: plan.gasPayment }),
+  ...(plan.expiration !== undefined && { expiration: plan.expiration })
+})
+
+/**
+ * Complete the plan on the node in one simulation (`Transactions.resolve`,
+ * checks and gas selection on), as `@mysten/sui`'s gRPC and GraphQL clients
+ * do: object versions and shared-object mutability, gas price, budget and
+ * payment (from coins or the address balance, with a `ValidDuring` expiration
+ * then), keeping whatever the plan already fixed. The signatures of the Move
+ * calls taking an unresolved object are read at the same time (cached by
+ * `Packages`), and the answer is checked by `verifyResolution` before use.
+ *
+ * Run `Resolve.balances` first (coin/balance intents stay client-side), then
+ * `finish`. A simulated failure is `GasEstimationFailed`; a transport without
+ * `resolve` is `Incomplete`.
+ */
+export const server = (
+  plan: Plan
+): Effect.Effect<
+  Plan,
+  RpcError | GasEstimationFailed | Incomplete | InvalidTransaction | ResolutionRejected,
+  Transactions | Packages
+> =>
+  Effect.gen(function*() {
+    if (hasIntents(plan.draft)) return yield* new Incomplete({ missing: "coin/balance intents (run Resolve.balances)" })
+    const transactions = yield* Transactions
+    if (transactions.resolve === undefined) {
+      return yield* new Incomplete({ missing: "server-side resolution (this Transactions transport has no resolve)" })
+    }
+    const bad = checkReferences({
+      _tag: "ProgrammableTransaction",
+      inputs: plan.draft.inputs as ReadonlyArray<T.CallArg>,
+      commands: plan.draft.commands as ReadonlyArray<T.Command>
+    })
+    if (bad) return yield* bad
+    const pending = new Set(plan.draft.inputs.flatMap((input, i) => (input._tag === "UnresolvedObject" ? [i] : [])))
+    const [resolution, functions] = yield* Effect.all([
+      transactions.resolve(unresolvedOf(plan)),
+      functionsFor(plan.draft, pending)
+    ], { concurrency: "unbounded" })
+    if (resolution.effects.status._tag === "Failure") return yield* new GasEstimationFailed(failureFields(resolution.effects.status))
+    const decoded = T.decode(resolution.transaction)
+    if (decoded._tag === "Failure") return yield* new ResolutionRejected({ reason: `not TransactionData: ${decoded.failure.message}` })
+    const data = decoded.success
+    const refused = verifyResolution(plan, data, resolution.effects, functions, resolution.epoch)
+    if (refused) return yield* refused
+    return {
+      ...plan,
+      draft: { inputs: data.kind.inputs, commands: plan.draft.commands },
+      gasPrice: data.gasData.price,
+      gasBudget: data.gasData.budget,
+      gasPayment: data.gasData.payment,
+      ...(data.expiration._tag !== "None" || plan.expiration !== undefined ? { expiration: data.expiration } : {})
+    }
+  }).pipe(Effect.withSpan("Resolve.server"))
 
 // -----------------------------------------------------------------------------
 // finish
