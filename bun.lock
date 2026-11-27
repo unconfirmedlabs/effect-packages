@@ -40,7 +40,6 @@
       "name": "@unconfirmed/bcs",
       "version": "0.0.0",
       "dependencies": {
-        "@scure/base": "^2.3.0",
         "effect": "4.1.6",
       },
     },

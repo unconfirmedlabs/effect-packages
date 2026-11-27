@@ -9,7 +9,6 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@scure/base": "^2.3.0",
     "effect": "4.1.6"
   }
 }
