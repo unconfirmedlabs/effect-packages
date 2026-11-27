@@ -1,6 +1,6 @@
 # `@unconfirmed/seal` — design
 
-Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) and S3 (configuration, key servers) implemented; see "As built (S1)" in §4.1 and §4.9 and "As built (S3)" in §4.3. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
+Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. S2 (`EncryptedObject`, `Envelope`) implemented; see "As built (S2)" in §4.2. S3 (configuration, key servers) implemented; see "As built (S3)" in §4.3. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
 
 A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
 
@@ -342,6 +342,19 @@ export const open: (o: { readonly object: EncryptedObject
 ```
 
 `seal`: check `1 ≤ threshold ≤ n ≤ 255`, key and id sizes; `Shamir.split(baseKey, …)`; `Ibe.encryptShares`; `encrypted_randomness`; DEM key; `Dem.encrypt`. `open`: use every service entry whose server has a key (at least `threshold`, else `NotEnoughKeys`); decrypt those shares; `combine`; recover `r` and `verifyNonce` (a mismatch, or a non-canonical `r`, is `InvalidCiphertext`: wrong keys or a corrupt object); optionally C10; DEM key; `Dem.decrypt`. `open` assumes the keys were verified (`Keys.fetch` does); feeding it unverified keys can only produce `InvalidCiphertext` or `DecryptionFailed`, never a wrong plaintext, except in `Plain` mode.
+
+**As built (S2).** Differences from the declarations above, each the smallest call that fills a gap:
+
+- `open` decrypts the **first `threshold`** service entries whose server has a key, not every one: `threshold` shares determine the polynomial, more only cost pairings (about 7 ms each), and a wrong key among those used is caught by the nonce check either way. `@mysten/seal` decrypts every entry it has a key for; the outcome is the same.
+- `EncryptedObject.validate(decoded)` is exported: the rules of I4 on an already-decoded value. `parse` is `decode` + `validate`; `open` re-applies `validate` so that hand-built objects get the same rules. For hand-built values it also checks that ids are normalised addresses and that encrypted shares are 32 bytes (decoded ones always are).
+- `open` reports a malformed derived key, a nonce that is not a valid G2 point, and a malformed or miscounted `publicKeys` entry as `InvalidCiphertext` (typed, never a defect), in line with "unverified keys can only produce `InvalidCiphertext` or `DecryptionFailed`".
+- `legacyNonce: true` accepts `r` big-endian or little-endian, whichever is canonical and matches the nonce, and the consistency check then uses **that** `r`. (`@mysten/seal` re-reads `r` big-endian, reduced, for the consistency check, so it refuses a little-endian object when both options are on.)
+- `seal` also refuses `r` outside `(0, order)`, a coefficient count that is not `32(t − 1)` (Shamir's reason, as `InvalidEncryption`), a non-integer threshold, and object or package ids that are not normalised addresses. `Envelope.MAX_SHARES = 255`; the option and result shapes are named `SealOptions`, `Sealed`, `OpenOptions`.
+- `Envelope.randomness(t)` draws, in this order, the base key (32), the coefficients (`32(t − 1)`, possibly 0) and the 48 bytes mapped to `r`.
+- `Ciphertext`'s `Plain` is a unit variant (`{ _tag: "Plain" }`, as `Dem.Ciphertext`); `@mysten/seal` declares it as an empty struct: the same bytes (just the tag). A compile-time assertion in `EncryptedObject.ts` keeps `typeof Ciphertext.Type` identical to `Dem.Ciphertext`.
+- `serialize` of a hand-built value with an out-of-range field (a malformed address, a 33-byte share) is a defect (`Bcs.encodeSync`); every value `parse` or `seal` returns serialises.
+- `fullId` and `weights` accept any value with the fields they read (`Pick<EncryptedObject, …>`). `EncryptedObject.ts` imports no curve code; `test/encrypted-object.test.ts` bundles it with `Bun.build` and asserts the output contains neither `bls12` nor `pairing`.
+- Parity (`test/parity.envelope.test.ts`): BCS both ways on the Rust vector and generated values (all ciphertext variants, `aad` absent and present); `seal` byte for byte (object and DEM key) against `encrypt()` in 20 cases (both DEMs, thresholds 1–5, repeated servers, with and without `aad`); objects from each side open on the other, with and without the consistency check; crafted inconsistent and little-endian objects get the same verdicts. The oracle gained `withRandomValuesAsync` (`encrypt` awaits `generateKey` before drawing), `mystenEncrypt`, `mystenDecrypt` and a typed `mystenEncryptedObject`.
 
 ### 4.3 Configuration and key servers
 
