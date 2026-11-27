@@ -1,8 +1,16 @@
 {
   "name": "@unconfirmed/sui-secp256k1",
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@noble/curves": "^2.3.0", "@noble/hashes": "^2.3.0", "@unconfirmed/sui": "workspace:*", "effect": "4.1.6" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@unconfirmed/sui": "workspace:*",
+    "effect": "4.1.6"
+  }
 }

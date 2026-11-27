@@ -147,3 +147,7 @@ export const fromSecretKey = (sk: Uint8Array): Effect.Effect<Signer.Signer, Sign
 ```
 
 `packages/sui-secp256k1/src/index.ts` is a complete example (~80 lines).
+
+## License
+
+[Apache-2.0](LICENSE)
