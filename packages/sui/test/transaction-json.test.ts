@@ -491,14 +491,13 @@ const baseJson = async () => {
 }
 
 describe("refusals are typed", () => {
-  test("AllowanceBalance intents are unsupported (not dropped)", async () => {
+  test("AllowanceBalance intents decode (not dropped)", async () => {
     const tx = new Transaction()
     mystenGas(tx)
     tx.transferObjects([tx.coin({ balance: 10, allowance: "0xa110" } as never)], recipient)
     const json = await tx.toJSON({ supportedIntents: ["AllowanceBalance"] })
-    const e = await decodeError(json)
-    expect(e._tag).toBe("UnsupportedTransactionJson")
-    expect((e as TransactionJson.UnsupportedTransactionJson).construct).toBe("intent AllowanceBalance")
+    const decoded = await Effect.runPromise(TransactionJson.decode(json))
+    expect(decoded.draft.commands.some((c) => c._tag === "AllowanceIntent")).toBe(true)
   })
 
   test("an unknown intent, command kind or input kind is unsupported", async () => {
@@ -544,9 +543,9 @@ describe("refusals are typed", () => {
   })
 
   test("encoding a command this module doesn't know is unsupported", async () => {
-    const draft: Ptb.Draft = { inputs: [], commands: [{ _tag: "AllowanceIntent" } as unknown as Ptb.Command] }
+    const draft: Ptb.Draft = { inputs: [], commands: [{ _tag: "Teleport" } as unknown as Ptb.Command] }
     const e = await Effect.runPromise(Effect.flip(TransactionJson.encode({ draft })))
-    expect(e).toMatchObject({ _tag: "UnsupportedTransactionJson", construct: "command AllowanceIntent" })
+    expect(e).toMatchObject({ _tag: "UnsupportedTransactionJson", construct: "command Teleport" })
   })
 
   test("toTransactionData needs everything resolved", async () => {

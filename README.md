@@ -122,16 +122,16 @@ yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), typ
 import * as TransactionJson from "@unconfirmed/sui/TransactionJson"
 
 const { draft } = yield* Ptb.build(recipe)
-const json = yield* TransactionJson.encode({ sender, draft })   // Ptb.coin / Ptb.balance become CoinWithBalance intents
+const json = yield* TransactionJson.encode({ sender, draft })   // Ptb.coin / Ptb.balance become CoinWithBalance (or, with `allowance`, AllowanceBalance) intents
 const json2 = yield* TransactionJson.encode(data)                // resolved TransactionData (with its digest)
 // Transaction.from(json) in @mysten/sui builds the same bytes our resolver does.
 
-const tx = yield* TransactionJson.decode(await mystenTx.toJSON({ supportedIntents: ["CoinWithBalance"] }))
+const tx = yield* TransactionJson.decode(await mystenTx.toJSON({ supportedIntents: ["CoinWithBalance", "AllowanceBalance"] }))
 const data = yield* TransactionJson.resolve(tx)                  // the default pipeline, keeping the JSON's gas fields
 const offline = yield* TransactionJson.toTransactionData(tx)     // already fully resolved: no network
 ```
 
-An intent other than `CoinWithBalance`, an `UnresolvedPure` that needs a Move signature, or an unknown command or input kind is a typed `UnsupportedTransactionJson`, never dropped.
+An intent other than `CoinWithBalance` / `AllowanceBalance`, an `UnresolvedPure` that needs a Move signature, or an unknown command or input kind is a typed `UnsupportedTransactionJson`, never dropped.
 
 **Wallets.** `@unconfirmed/sui-wallet` makes wallet-standard Sui wallets signers:
 

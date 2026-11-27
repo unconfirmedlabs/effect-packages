@@ -12,6 +12,8 @@
  * Mapping:
  * - `Ptb.BalanceIntent` <-> the `CoinWithBalance` `$Intent` (`tx.coin` / `tx.balance`):
  *   `type: "gas"` is SUI that may use the gas coin.
+ * - `Ptb.AllowanceIntent` <-> the `AllowanceBalance` `$Intent` (`tx.coin({ allowance })`),
+ *   with its `allowance`, `clock` and optional `permit` inputs.
  * - `Ptb.UnresolvedObject` <-> `UnresolvedObject`. Mysten treats `mutable` as
  *   "at least mutable"; so does the decoder (`mutable: true` forces it,
  *   anything else is inferred from usage).
@@ -221,6 +223,18 @@ const CoinWithBalanceData = Schema.Struct({
 
 export const COIN_WITH_BALANCE = "CoinWithBalance"
 
+/** `AllowanceBalance` intent data. */
+const AllowanceBalanceData = Schema.Struct({
+  objectId: Schema.String,
+  funder: Schema.optionalKey(Schema.String),
+  appType: Schema.optionalKey(Schema.String),
+  type: Schema.String,
+  amount: JsonU64,
+  outputKind: Schema.Literals(["coin", "balance"])
+})
+
+export const ALLOWANCE_BALANCE = "AllowanceBalance"
+
 // -----------------------------------------------------------------------------
 // The unresolved transaction
 // -----------------------------------------------------------------------------
@@ -352,6 +366,26 @@ const commandJson = (c: Ptb.Command): Result.Result<Command, UnsupportedTransact
           data: {
             type: c.coinType === TypeTag.SUI && c.useGasCoin ? "gas" : c.coinType,
             balance: u64(c.amount),
+            outputKind: c.output
+          }
+        },
+        $kind: "$Intent"
+      })
+    case "AllowanceIntent":
+      return Result.succeed({
+        $Intent: {
+          name: ALLOWANCE_BALANCE,
+          inputs: {
+            allowance: argumentJson(c.allowance),
+            clock: argumentJson(c.clock),
+            ...(c.permit !== undefined && { permit: argumentJson(c.permit) })
+          },
+          data: {
+            objectId: c.allowanceId,
+            ...(c.funder !== undefined && { funder: c.funder }),
+            ...(c.appType !== undefined && { appType: c.appType }),
+            type: c.coinType,
+            amount: u64(c.amount),
             outputKind: c.output
           }
         },
@@ -500,6 +534,7 @@ const unknownVariant = (input: unknown): UnsupportedTransactionJson | undefined 
 
 const decodeJsonObject = Schema.decodeUnknownResult(TransactionJson)
 const decodeCoinWithBalance = Schema.decodeUnknownResult(CoinWithBalanceData)
+const decodeAllowanceBalance = Schema.decodeUnknownResult(AllowanceBalanceData)
 
 /** Validate a parsed JSON value (or a JSON string) against the v2 schema. */
 export const parse = (input: unknown): Effect.Effect<TransactionJson, InvalidTransactionJson | UnsupportedTransactionJson> =>
@@ -703,8 +738,42 @@ const toUnresolvedSync = (json: TransactionJson): Unresolved => {
       }
     }
     const intent = c.$Intent
+    if (intent.name === ALLOWANCE_BALANCE) {
+      const input = (name: string): T.Argument | undefined => {
+        const a = intent.inputs[name]
+        if (a === undefined) return undefined
+        if (Array.isArray(a)) return invalid(`AllowanceBalance input ${name} must be a single argument`)
+        return arg(a as Argument)
+      }
+      const extra = Object.keys(intent.inputs).filter((k) => k !== "allowance" && k !== "clock" && k !== "permit")
+      if (extra.length > 0) invalid(`unexpected AllowanceBalance inputs: ${extra.join(", ")}`)
+      const allowance = input("allowance") ?? invalid("an AllowanceBalance intent needs an allowance input")
+      const clock = input("clock") ?? invalid("an AllowanceBalance intent needs a clock input")
+      const permit = input("permit")
+      const d = decodeAllowanceBalance(intent.data)
+      if (Result.isFailure(d)) return invalid(`AllowanceBalance data: ${d.failure.message}`)
+      const { objectId, funder, appType, type, amount, outputKind } = d.success
+      if ((appType === undefined) !== (permit === undefined)) {
+        invalid("an AllowanceBalance intent has an app type exactly when it has a permit input")
+      }
+      return {
+        _tag: "AllowanceIntent",
+        coinType: TypeTag.format(toTypeTag(type)),
+        amount: toU64(amount),
+        output: outputKind,
+        allowanceId: toAddress(objectId),
+        ...(funder !== undefined && { funder: toAddress(funder) }),
+        ...(appType !== undefined && { appType: TypeTag.format(toTypeTag(appType)) }),
+        allowance,
+        clock,
+        ...(permit !== undefined && { permit })
+      }
+    }
     if (intent.name !== COIN_WITH_BALANCE) {
-      return unsupported(`intent ${intent.name}`, "only CoinWithBalance (tx.coin / tx.balance) intents are supported")
+      return unsupported(
+        `intent ${intent.name}`,
+        "only CoinWithBalance (tx.coin / tx.balance) and AllowanceBalance intents are supported"
+      )
     }
     if (Object.keys(intent.inputs).length > 0) invalid("a CoinWithBalance intent takes no inputs")
     const d = decodeCoinWithBalance(intent.data)

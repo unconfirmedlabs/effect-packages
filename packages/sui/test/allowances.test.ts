@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Stream from "effect/Stream"
-import { Address, Coins, Objects, Packages, Ptb, Resolve, TransactionData as T, TypeTag } from "../src/index.ts"
+import { Address, Coins, Objects, Packages, Ptb, Resolve, TransactionData as T, TransactionJson, TypeTag } from "../src/index.ts"
 import { toB64 } from "./support.ts"
 // Not exported publicly by @mysten/sui; loaded from its shipped build (untyped).
 const coreResolverModule = "../../../node_modules/@mysten/sui/dist/client/core-resolver.mjs"
@@ -421,5 +421,100 @@ describe("typed refusals before signing", () => {
       ) as Effect.Effect<Resolve.Plan>
     )
     expect(plan.draft.commands.every((c) => c._tag === "MoveCall")).toBe(true)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Transaction JSON: the AllowanceBalance $Intent both ways
+// -----------------------------------------------------------------------------
+
+/** Mysten's unresolved JSON for a recipe, gas fixed like `theirs`. */
+const mystenJson = (build: (tx: Transaction) => void) => {
+  const tx = new Transaction()
+  tx.setSender(sender)
+  tx.setGasPrice(1000)
+  tx.setGasBudget(10_000_000)
+  tx.setGasPayment([{ ...gasRef, version: "9" }])
+  tx.setExpiration({ None: true })
+  build(tx)
+  return tx.toJSON({ supportedIntents: ["AllowanceBalance", "CoinWithBalance"] })
+}
+
+/** Decode Mysten JSON and finish it with our resolver. */
+const fromMystenJson = (w: World, json: string) =>
+  Effect.runPromise(
+    Effect.gen(function*() {
+      const tx = yield* TransactionJson.decode(json)
+      const plan = yield* TransactionJson.toPlan(tx).pipe(Effect.flatMap(Resolve.inputs), Effect.flatMap(Resolve.balances))
+      return T.encode(yield* Resolve.finish(plan))
+    }).pipe(Effect.provide(world(w))) as Effect.Effect<Uint8Array>
+  )
+
+/** Encode our Draft as JSON and let Mysten finish it. */
+const toMystenJson = (w: World, recipe: Effect.Effect<unknown, unknown, Ptb.PtbBuilder>) =>
+  Effect.runPromise(
+    Effect.flatMap(Ptb.build(recipe), ({ draft }) =>
+      TransactionJson.encode({
+        sender,
+        draft,
+        gasPrice: 1000n,
+        gasBudget: 10_000_000n,
+        gasPayment: [gasRef],
+        expiration: { _tag: "None" }
+      })) as Effect.Effect<string>
+  ).then((json) => Transaction.from(json).build({ client: mystenClient(w) as never }))
+
+describe("AllowanceBalance intents in transaction JSON", () => {
+  const cases: Array<[string, World, Effect.Effect<unknown, unknown, Ptb.PtbBuilder>, (tx: Transaction) => void]> = [
+    [
+      "a SUI coin by allowance id",
+      { allowances: [{ id: ALW }], balances: funded },
+      Effect.gen(function*() {
+        const c = yield* Ptb.coin({ amount: 500n, allowance: ALW })
+        yield* Ptb.transferObjects([c], yield* Ptb.address(recipient))
+      }),
+      (tx) => tx.transferObjects([tx.coin({ balance: 500, allowance: ALW })], tx.pure.address(recipient))
+    ],
+    [
+      "a token balance with the funder given",
+      { allowances: [{ id: ALW, coinType: TOKEN }], balances: funded },
+      Effect.gen(function*() {
+        const b = yield* Ptb.balance({ amount: 70n, type: TOKEN, allowance: { objectId: ALW, funder } })
+        yield* Ptb.sendBalance(b, yield* Ptb.address(recipient), TOKEN)
+      }),
+      (tx) => {
+        const b = tx.balance({ balance: 70, type: TOKEN, allowance: { objectId: ALW, funder } })
+        tx.moveCall({ target: "0x2::balance::send_funds", typeArguments: [TOKEN], arguments: [b, tx.pure.address(recipient)] })
+      }
+    ],
+    [
+      "app-bound with a SpendPermit",
+      { allowances: [{ id: ALW, app: APP.slice(2) }], balances: funded },
+      Effect.gen(function*() {
+        const permit = yield* Ptb.moveCall({ target: `${APP_PKG}::app::spend_permit` })
+        const c = yield* Ptb.coin({ amount: 9n, allowance: { objectId: ALW, app: { type: APP, permit } } })
+        yield* Ptb.transferObjects([c], yield* Ptb.address(recipient))
+      }),
+      (tx) => {
+        const permit = tx.moveCall({ target: `${APP_PKG}::app::spend_permit` })
+        tx.transferObjects([tx.coin({ balance: 9, allowance: { objectId: ALW, app: { type: APP, permit } } })], tx.pure.address(recipient))
+      }
+    ]
+  ]
+
+  for (const [name, w, recipe, build] of cases) {
+    test(`${name}: Mysten JSON -> our resolve matches Mysten's build`, async () =>
+      expect(toB64(await fromMystenJson(w, await mystenJson(build)))).toBe(toB64(await theirs(w, build))))
+
+    test(`${name}: our JSON -> Mysten's build matches our resolve`, async () =>
+      expect(toB64(await toMystenJson(w, recipe))).toBe(toB64(await ours(w, recipe))))
+  }
+
+  test("an app type without a permit input is invalid", async () => {
+    const json = JSON.parse(await mystenJson(cases[2]![3]))
+    const intent = json.commands.find((c: any) => c.$Intent)
+    delete intent.$Intent.inputs.permit
+    const e = await Effect.runPromise(Effect.flip(TransactionJson.decode(json)))
+    expect(e._tag).toBe("InvalidTransactionJson")
   })
 })
