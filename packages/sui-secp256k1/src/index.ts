@@ -69,7 +69,8 @@ export const fromSecretKey = (secretKey: Uint8Array): Effect.Effect<Signer.Signe
   })
 }
 
-/** A fresh random key. */
-export const generate: Effect.Effect<Signer.Signer> = Effect.suspend(() =>
-  Effect.orDie(fromSecretKey(secp256k1.utils.randomSecretKey()))
-)
+/** A fresh random 32-byte secret key, to keep or export (`PrivateKey.encode({ flag: FLAG, secretKey })`). */
+export const generateSecretKey: Effect.Effect<Uint8Array> = Effect.sync(() => secp256k1.utils.randomSecretKey())
+
+/** A signer over a fresh random key. Use `generateSecretKey` to keep the key. */
+export const generate: Effect.Effect<Signer.Signer> = Effect.flatMap(generateSecretKey, (sk) => Effect.orDie(fromSecretKey(sk)))

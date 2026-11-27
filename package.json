@@ -29,6 +29,8 @@
     "@unconfirmed/sui-zklogin": "workspace:*",
     "@unconfirmed/sui-enoki": "workspace:*",
     "@unconfirmed/sui-graphql": "workspace:*",
+    "@unconfirmed/sui-mldsa65": "workspace:*",
+    "@unconfirmed/sui-mnemonic": "workspace:*",
     "@mysten/enoki": "2.0.1"
   }
 }

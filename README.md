@@ -7,18 +7,20 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | Package | What | Extra deps |
 |---|---|---|
 | `@unconfirmed/bcs` | BCS declared as Effect Schemas | `@scure/base` |
-| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `Signer`, the signature-scheme registry, Ed25519. Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
+| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `Signer`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
 | `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence, journal (memory / KeyValueStore), sender lock | — |
 | `@unconfirmed/sui-secp256k1` | Secp256k1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
+| `@unconfirmed/sui-mldsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
 | `@unconfirmed/sui-multisig` | Multisig scheme, `signer`, `combine` | — |
 | `@unconfirmed/sui-passkey` | Passkey (WebAuthn) scheme (also as a multisig member), signer over a pluggable authenticator (browser `navigator.credentials`, or in-memory for tests and servers), public-key recovery for returning users | `@noble/curves` |
+| `@unconfirmed/sui-mnemonic` | BIP39 mnemonics; Ed25519 / ML-DSA-65 (SLIP-0010) and Secp256k1 / r1 (BIP32) derivation on Sui's paths | `@scure/bip39`, `@scure/bip32` |
 | `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite` |
 | `@unconfirmed/sui-enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
 
-Next: mnemonics/keystore, Move codegen, ML-DSA-65, then `quorum`, Seal and Walrus.
+Next: Move codegen, then `quorum`, Seal and Walrus.
 
 ### Passkeys
 
@@ -104,6 +106,47 @@ yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), typ
 - `Resolve.unchecked` (empty payment, no balance check) is for simulation and for bytes whose payer is funded later.
 
 **5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
+
+## Keys
+
+**Import and export** use the `suiprivkey1…` strings the Sui CLI and wallets exchange. The core can't build a signer for a scheme it doesn't ship, so decoding gives bytes and the scheme package makes the signer:
+
+```ts
+import * as PrivateKey from "@unconfirmed/sui/PrivateKey"
+
+const { flag, scheme, secretKey } = yield* PrivateKey.decode(s)           // InvalidKey on a bad string
+const signer = yield* Secp256k1.fromSecretKey(secretKey)
+const ed = yield* Ed25519.fromSecretKey((yield* PrivateKey.decode(s, Ed25519.FLAG)).secretKey)  // insist on a scheme
+
+// `generate` gives a Signer only; to keep the key, generate the secret:
+const sk = yield* Ed25519.generateSecretKey                               // also Secp256k1/r1, MlDsa65
+const exported = yield* PrivateKey.encode({ flag: Ed25519.FLAG, secretKey: sk })
+
+// The CLI's ~/.sui/sui_config/sui.keystore (JSON array of base64 flag || secret)
+const keys = yield* PrivateKey.decodeKeystore(json)                       // and encodeKeystore(keys)
+```
+
+**Mnemonics** live in `@unconfirmed/sui-mnemonic`, so the BIP39 wordlist never reaches the core. Derivation gives secret keys (the package doesn't depend on the scheme packages), plus an Ed25519 `Signer` shortcut:
+
+```ts
+import * as Mnemonic from "@unconfirmed/sui-mnemonic"
+
+const m = yield* Mnemonic.generate()                                        // 12 words; 24 with generate(24)
+const signer = yield* Mnemonic.ed25519Signer(m)                             // m/44'/784'/0'/0'/0'
+const k1 = yield* Secp256k1.fromSecretKey(yield* Mnemonic.secp256k1SecretKey(m, { account: 1 }))  // m/54'/784'/1'/0/0
+const seed = yield* Mnemonic.toSeed(m)                                      // derive many keys without re-running PBKDF2
+const pq = yield* MlDsa65.fromSecretKey(yield* Mnemonic.mldsa65SecretKey(seed, "m/94'/784'/0'/0'/3'"))
+```
+
+Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`.
+
+**ML-DSA-65** (`@unconfirmed/sui-mldsa65`, flag `0x07`) is FIPS 204 post-quantum signing: 1952-byte public keys, 3309-byte signatures, over the same `blake2b256(intentMessage)` the other schemes sign. Install it like any scheme, and it works as a multisig member. Devnet executes both kinds of transaction (`packages/sui-mldsa65/test/live.devnet.test.ts`).
+
+```ts
+SignatureSchemes.layer(Ed25519.scheme, MlDsa65.scheme, MultiSig.scheme)
+const signer = yield* MlDsa65.fromSecretKey(seed32)                         // or MlDsa65.generate
+const pk = yield* MultiSig.publicKey({ members: [{ publicKey: ed.publicKey, weight: 1 }, { publicKey: signer.publicKey, weight: 1 }], threshold: 1 })
+```
 
 ## Importing
 
