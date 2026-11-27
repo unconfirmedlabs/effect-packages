@@ -3,7 +3,7 @@
  *
  * Pure core (no services): Bls, Shamir, Kdf, Ibe, ElGamal, Dem, EncryptedObject, Envelope, Entropy, Errors.
  * Chain: Config, KeyServer. Sessions: SessionKey, Approval.
- * Key server HTTP: KeyServerApi (declarations).
+ * Key server HTTP: KeyServerApi.
  */
 export * as Approval from "./Approval.ts"
 export * as Bls from "./Bls.ts"
