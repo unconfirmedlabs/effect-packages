@@ -16,8 +16,9 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-multisig` | Multisig scheme, `signer`, `combine` | — |
 | `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite` |
 | `@unconfirmed/sui-enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
+| `@unconfirmed/sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/bcs` and `@unconfirmed/sui` (runtime: `@unconfirmed/sui/Move`) | — (dev-time) |
 
-Next: passkey, mnemonics/keystore, Move codegen, ML-DSA-65, then `quorum`, Seal and Walrus.
+Next: passkey, mnemonics/keystore, ML-DSA-65, then `quorum`, Seal and Walrus.
 
 ## How it composes
 
@@ -89,6 +90,49 @@ yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), typ
 
 **5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
 
+## Move codegen
+
+`sui-codegen.config.ts`:
+
+```ts
+import { defineConfig } from "@unconfirmed/sui-codegen/Config"
+
+export default defineConfig({
+  output: "./src/generated",
+  packages: [
+    { path: "./move/counter" },                                    // local: runs `sui move summary`
+    { id: "0x…", network: "testnet", name: "deepbook" },           // on-chain, over gRPC GetPackage
+    { path: "./move/counter", package: "sui", modules: ["coin"] }  // framework modules, same summaries
+  ]
+})
+```
+
+```sh
+bun packages/sui-codegen/src/bin.ts generate     # or Generate.run(config) from code
+```
+
+This writes `src/generated/<package>/<module>.ts` (schemas, type strings and call builders), `<package>/$package.ts`, and `deps/<address>/<module>.ts` (dependency types, pruned to what layouts reach). A generated call is an ordinary recipe step:
+
+```ts
+import * as counter from "./generated/counter/counter.ts"
+
+const recipe = Effect.gen(function*() {
+  const [c] = yield* counter.create()                                  // results: a tuple, one per Move return
+  yield* counter.increment({ arguments: { counter: c, by: 5n } })      // or positional: [c, 5n]
+  const [a, b] = yield* pool.swap({ arguments: [poolId, coin], typeArguments: [SUI, USDC] })  // arity-checked
+  yield* Ptb.transferObjects([c, a, b], yield* Ptb.address(me))
+})
+yield* Tx.run(recipe, { signer }).pipe(Effect.provide(Layer.succeed(counter.Package, testnetId)))  // R needs no Package by default
+const value = yield* counter.Counter.get(id)   // Objects.getAs with the generated schema
+counter.Counter.type()                         // "0x<defining id>::counter::Counter"
+```
+
+- **Package ids.** Each package has one `Package` (`Context.Reference<string>`) defaulting to the id it was generated from, so calls need nothing in `R`; point them elsewhere with `Layer.succeed` / `Effect.provideService`. Type strings use each type's defining (type-origin) id, which survives upgrades.
+- **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, ...).
+- **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
+- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2.6 KB min / 0.8 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8).
+- Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
+
 ## Importing
 
 Following [Effect's guidance](https://effect.website/docs/v4/getting-started/importing-effect), every package imports Effect and each other as namespaces from subpaths:
@@ -131,7 +175,7 @@ bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multi
 bun run codegen       # protoc -> descriptor chunks + types from packages/sui/proto/src (sui-apis)
 ```
 
-`@mysten/sui` is a dev dependency, used only as the reference implementation in parity tests.
+`@mysten/sui` and `@mysten/codegen` are dev dependencies, used only as reference implementations in parity tests. After changing the codegen fixture, `bun packages/sui-codegen/scripts/fixtures.ts` regenerates its summaries and the golden output.
 
 ## Writing a scheme extension
 
