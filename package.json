@@ -22,6 +22,7 @@
     "@types/bun": "^1.4.0",
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/quorum": "workspace:*",
+    "@unconfirmed/seal": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "@unconfirmed/sui-codegen": "workspace:*",
     "@unconfirmed/sui-enoki": "workspace:*",

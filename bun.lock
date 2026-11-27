@@ -14,6 +14,7 @@
         "@types/bun": "^1.4.0",
         "@unconfirmed/bcs": "workspace:*",
         "@unconfirmed/quorum": "workspace:*",
+        "@unconfirmed/seal": "workspace:*",
         "@unconfirmed/sui": "workspace:*",
         "@unconfirmed/sui-codegen": "workspace:*",
         "@unconfirmed/sui-enoki": "workspace:*",
@@ -46,6 +47,19 @@
       "name": "@unconfirmed/quorum",
       "version": "0.0.0",
       "dependencies": {
+        "effect": "4.1.6",
+      },
+    },
+    "packages/seal": {
+      "name": "@unconfirmed/seal",
+      "version": "0.0.0",
+      "dependencies": {
+        "@noble/curves": "^2.3.0",
+        "@noble/hashes": "^2.3.0",
+        "@scure/base": "^2.3.0",
+        "@unconfirmed/bcs": "workspace:*",
+        "@unconfirmed/quorum": "workspace:*",
+        "@unconfirmed/sui": "workspace:*",
         "effect": "4.1.6",
       },
     },
@@ -357,6 +371,8 @@
     "@unconfirmed/bcs": ["@unconfirmed/bcs@workspace:packages/bcs"],
 
     "@unconfirmed/quorum": ["@unconfirmed/quorum@workspace:packages/quorum"],
+
+    "@unconfirmed/seal": ["@unconfirmed/seal@workspace:packages/seal"],
 
     "@unconfirmed/sui": ["@unconfirmed/sui@workspace:packages/sui"],
 
