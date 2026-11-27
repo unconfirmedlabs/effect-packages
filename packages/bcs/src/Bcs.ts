@@ -14,7 +14,6 @@
  *   flattened (`{ _tag: "MoveCall", package, module, ... }`); any other payload
  *   lives under `value`; a unit variant is just `{ _tag }`.
  */
-import { base58 } from "@scure/base"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
@@ -22,7 +21,6 @@ import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
-import * as Bytes from "./Bytes.ts"
 
 // -----------------------------------------------------------------------------
 // Layout
@@ -171,11 +169,8 @@ export const Address = /* @__PURE__ */ withLayout(
 export type Address = typeof Address.Type
 
 const isDigest = (s: string) => {
-  try {
-    return base58.decode(s).length === 32 || "expected a 32-byte base58 digest"
-  } catch {
-    return "invalid base58"
-  }
+  const b = fromBase58(s)
+  return b === undefined ? "invalid base58" : b.length === 32 || "expected a 32-byte base58 digest"
 }
 
 /** A 32-byte digest shown as base58 (object/transaction digests, chain ids). */
@@ -218,12 +213,15 @@ export const lazy = <S extends Schema.Top>(f: () => S) =>
 const lazyLayout = (f: () => Layout): Layout => {
   // A layout proxy that defers to the real layout on first access.
   let cached: Layout | undefined
-  return new Proxy({} as Layout, {
+  const proxy = new Proxy({} as Layout, {
     get: (_, key) => {
       cached ??= f()
       return (cached as any)[key]
     }
   })
+  // The codec compiler skips the proxy and works on the real layout.
+  lazies.set(proxy, () => cached ??= f())
+  return proxy
 }
 
 type EnumVariants = Record<string, Schema.Top | null>
@@ -288,56 +286,45 @@ export const transform = <S extends Schema.Top, T>(
 // -----------------------------------------------------------------------------
 
 class Writer {
-  buf = new Uint8Array(256)
-  view = new DataView(this.buf.buffer)
+  buf: Uint8Array
+  view: DataView
   pos = 0
+  constructor(size: number) {
+    this.buf = new Uint8Array(size)
+    this.view = new DataView(this.buf.buffer)
+  }
   ensure(n: number) {
-    if (this.pos + n <= this.buf.length) return
+    if (this.pos + n > this.buf.length) this.grow(n)
+  }
+  grow(n: number) {
     let size = this.buf.length * 2
     while (size < this.pos + n) size *= 2
     const next = new Uint8Array(size)
-    next.set(this.buf)
+    next.set(this.buf.subarray(0, this.pos))
     this.buf = next
     this.view = new DataView(next.buffer)
   }
-  u8(v: number) {
-    this.ensure(1)
-    this.buf[this.pos++] = v
+  /** The low `bytes` bytes of `v`, little-endian. */
+  uint(v: number, bytes: number) {
+    this.ensure(bytes)
+    for (let i = 0; i < bytes; i++) this.buf[this.pos++] = v >>> (8 * i)
   }
+  /** `v` is a validated u32. */
   uleb(v: number) {
-    do {
-      let b = v & 0x7f
-      v = Math.floor(v / 128)
-      if (v > 0) b |= 0x80
-      this.u8(b)
-    } while (v > 0)
+    this.ensure(5)
+    const buf = this.buf
+    let p = this.pos
+    while (v >= 0x80) {
+      buf[p++] = (v & 0x7f) | 0x80
+      v >>>= 7
+    }
+    buf[p++] = v
+    this.pos = p
   }
   raw(b: Uint8Array) {
     this.ensure(b.length)
     this.buf.set(b, this.pos)
     this.pos += b.length
-  }
-  uint(v: number, bytes: 1 | 2 | 4) {
-    this.ensure(bytes)
-    if (bytes === 1) this.view.setUint8(this.pos, v)
-    else if (bytes === 2) this.view.setUint16(this.pos, v, true)
-    else this.view.setUint32(this.pos, v, true)
-    this.pos += bytes
-  }
-  ubig(v: bigint, bytes: 8 | 16 | 32) {
-    this.ensure(bytes)
-    if (bytes === 8) {
-      this.view.setBigUint64(this.pos, v, true)
-      this.pos += 8
-      return
-    }
-    for (let i = 0; i < bytes; i++) {
-      this.buf[this.pos++] = Number(v & 0xffn)
-      v >>= 8n
-    }
-  }
-  result() {
-    return this.buf.slice(0, this.pos)
   }
 }
 
@@ -345,62 +332,47 @@ class Reader {
   pos = 0
   /** Set when the bytes parse but some value fails its schema's own check (a digest that isn't 32 bytes). */
   suspect = false
-  readonly view: DataView
-  constructor(readonly buf: Uint8Array) {
-    this.view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  private dv: DataView | undefined = undefined
+  constructor(readonly buf: Uint8Array) {}
+  get view() {
+    return this.dv ??= new DataView(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength)
   }
-  need(n: number) {
-    if (this.pos + n > this.buf.length) throw new BcsDecodeError({ message: "unexpected end of input", offset: this.pos })
+}
+
+const fail = (message: string, offset: number): never => {
+  throw new BcsDecodeError({ message, offset })
+}
+
+/** Claim the next `n` bytes; returns where they start. */
+const take = (r: Reader, n: number): number => {
+  const p = r.pos
+  if (p + n > r.buf.length) fail("unexpected end of input", p)
+  r.pos = p + n
+  return p
+}
+
+const readUleb = (r: Reader): number => {
+  const buf = r.buf
+  const p = r.pos
+  if (p < r.buf.length && buf[p]! < 0x80) {
+    r.pos = p + 1
+    return buf[p]!
   }
-  u8() {
-    this.need(1)
-    return this.buf[this.pos++]!
-  }
-  uleb() {
-    let result = 0
-    let shift = 0
-    for (;;) {
-      const b = this.u8()
-      result += (b & 0x7f) * 2 ** shift
-      if ((b & 0x80) === 0) {
-        // Canonical only, as Rust bcs: no trailing zero groups (`0x80 0x00` is not 0).
-        if (b === 0 && shift > 0) throw new BcsDecodeError({ message: "non-canonical uleb128", offset: this.pos })
-        break
-      }
-      shift += 7
-      if (shift > 28) throw new BcsDecodeError({ message: "uleb128 overflow", offset: this.pos })
+  let result = 0
+  let shift = 0
+  for (;;) {
+    const b = buf[take(r, 1)]!
+    result += (b & 0x7f) * 2 ** shift
+    if ((b & 0x80) === 0) {
+      // Canonical only, as Rust bcs: no trailing zero groups (`0x80 0x00` is not 0).
+      if (b === 0 && shift > 0) fail("non-canonical uleb128", r.pos)
+      break
     }
-    if (result > 0xffffffff) throw new BcsDecodeError({ message: "uleb128 overflow", offset: this.pos })
-    return result
+    shift += 7
+    if (shift > 28) fail("uleb128 overflow", r.pos)
   }
-  raw(n: number) {
-    this.need(n)
-    const out = this.buf.slice(this.pos, this.pos + n)
-    this.pos += n
-    return out
-  }
-  uint(bytes: 1 | 2 | 4) {
-    this.need(bytes)
-    const v = bytes === 1
-      ? this.view.getUint8(this.pos)
-      : bytes === 2
-      ? this.view.getUint16(this.pos, true)
-      : this.view.getUint32(this.pos, true)
-    this.pos += bytes
-    return v
-  }
-  ubig(bytes: 8 | 16 | 32) {
-    this.need(bytes)
-    if (bytes === 8) {
-      const v = this.view.getBigUint64(this.pos, true)
-      this.pos += 8
-      return v
-    }
-    let v = 0n
-    for (let i = bytes - 1; i >= 0; i--) v = (v << 8n) | BigInt(this.buf[this.pos + i]!)
-    this.pos += bytes
-    return v
-  }
+  if (result > 0xffffffff) fail("uleb128 overflow", r.pos)
+  return result
 }
 
 /**
@@ -411,51 +383,119 @@ class Reader {
  */
 export const MAX_ZERO_SIZE_ITEMS = 1 << 16
 
-const sizes = /* @__PURE__ */ new WeakMap<Layout, number>()
-/** The fewest bytes a value of this layout can take (a lower bound; recursion counts as 0). */
-const minSize = (l: Layout): number => {
-  const known = sizes.get(l)
-  if (known !== undefined) return known
-  sizes.set(l, 0)
-  const n = ((): number => {
-    switch (l._tag) {
-      case "uint":
-      case "ubig":
-        return l.bytes
-      case "bytes":
-        return l.length
-      case "address":
-        return 32
-      case "fixedArray":
-        return l.length * minSize(l.item())
-      case "tuple":
-        return l.items.reduce((sum, i) => sum + minSize(i()), 0)
-      case "struct":
-        return l.fields.reduce((sum, [, f]) => sum + minSize(f()), 0)
-      default:
-        // bool, uleb128, length-prefixed values, option and enum tags: at least one byte.
-        return 1
-    }
-  })()
-  sizes.set(l, n)
-  return n
-}
-
 /** Refuse a vector length the remaining input cannot hold, before allocating anything. */
 const checkLength = (r: Reader, n: number, min: number) => {
   if (min > 0 ? n * min > r.buf.length - r.pos : n > MAX_ZERO_SIZE_ITEMS) {
-    throw new BcsDecodeError({
-      message: min > 0
+    fail(
+      min > 0
         ? `vector length ${n} exceeds the remaining input (${r.buf.length - r.pos} bytes)`
         : `vector of ${n} zero-size elements exceeds ${MAX_ZERO_SIZE_ITEMS}`,
-      offset: r.pos
-    })
+      r.pos
+    )
   }
 }
 
 const utf8e = /* @__PURE__ */ new TextEncoder()
 // ignoreBOM: keep a leading U+FEFF as data, so decoding never changes the string's bytes.
 const utf8d = /* @__PURE__ */ new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+
+// --- hex / base58 ------------------------------------------------------------
+
+/** `0x` + 64 hex digits, filled per address and decoded in one call (a flat string, not 33 concatenations). */
+const ADDRESS_CHARS = /* @__PURE__ */ new Uint8Array(66).fill(48, 0, 1).fill(120, 1, 2)
+// Every byte written is ASCII, which this decodes as itself.
+const latin1 = /* @__PURE__ */ new TextDecoder("latin1")
+/** The char code of lowercase hex digit `d`. */
+const hexDigit = (d: number) => d + (d < 10 ? 48 : 87)
+const NIBBLE = /* @__PURE__ */ (() => {
+  const t = new Int8Array(256).fill(-1)
+  for (let d = 0; d < 16; d++) t[hexDigit(d)] = d
+  return t
+})()
+/** Value of a lowercase hex digit's char code, or -1. */
+const nibble = (c: number) => (c < 256 ? NIBBLE[c]! : -1)
+
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+const B58_DIGIT = /* @__PURE__ */ (() => {
+  const t = new Int8Array(128).fill(-1)
+  for (let i = 0; i < 58; i++) t[B58.charCodeAt(i)] = i
+  return t
+})()
+const LIMB = 16777216 // 2^24: limb arithmetic stays exact in a double
+const B58_4 = 11316496 // 58^4
+
+/** Bitcoin-alphabet base58 of `buf[start, start + n)`, as `@scure/base` writes it. 24-bit limbs, 4 digits per pass. */
+const toBase58 = (buf: Uint8Array, start: number, n: number): string => {
+  const end = start + n
+  let zeros = 0
+  while (start + zeros < end && buf[start + zeros] === 0) zeros++
+  const limbs: Array<number> = []
+  for (let k = 0, i = end - 1; i >= start + zeros; i--, k++) {
+    if (k % 3 === 0) limbs.push(buf[i]!)
+    else limbs[limbs.length - 1]! += buf[i]! * (k % 3 === 1 ? 256 : 65536)
+  }
+  let len = limbs.length
+  while (len > 0 && limbs[len - 1] === 0) len--
+  const digits: Array<number> = []
+  while (len > 0) {
+    let rem = 0
+    for (let i = len - 1; i >= 0; i--) {
+      const cur = rem * LIMB + limbs[i]!
+      const q = Math.floor(cur / B58_4)
+      limbs[i] = q
+      rem = cur - q * B58_4
+    }
+    while (len > 0 && limbs[len - 1] === 0) len--
+    for (let k = 0; k < 4; k++) {
+      const q = Math.floor(rem / 58)
+      digits.push(rem - q * 58)
+      rem = q
+    }
+  }
+  while (digits.length > 0 && digits[digits.length - 1] === 0) digits.pop()
+  let s = "1".repeat(zeros)
+  for (let i = digits.length - 1; i >= 0; i--) s += B58[digits[i]!]
+  return s
+}
+
+/** Bytes of a base58 string, or `undefined` if it has a character outside the alphabet. */
+const fromBase58 = (s: string): Uint8Array | undefined => {
+  let zeros = 0
+  while (zeros < s.length && s.charCodeAt(zeros) === 49) zeros++
+  const limbs: Array<number> = []
+  for (let i = zeros; i < s.length;) {
+    let add = 0
+    let mult = 1
+    for (let k = 0; k < 4 && i < s.length; k++, i++) {
+      const c = s.charCodeAt(i)
+      const d = c < 128 ? B58_DIGIT[c]! : -1
+      if (d < 0) return undefined
+      add = add * 58 + d
+      mult *= 58
+    }
+    let carry = add
+    for (let j = 0; j < limbs.length; j++) {
+      const cur = limbs[j]! * mult + carry
+      carry = Math.floor(cur / LIMB)
+      limbs[j] = cur - carry * LIMB
+    }
+    while (carry > 0) {
+      const q = Math.floor(carry / LIMB)
+      limbs.push(carry - q * LIMB)
+      carry = q
+    }
+  }
+  const byteAt = (k: number) => (limbs[(k / 3) | 0]! >>> (8 * (k % 3))) & 0xff
+  let nb = limbs.length * 3
+  while (nb > 0 && byteAt(nb - 1) === 0) nb--
+  const out = new Uint8Array(zeros + nb)
+  for (let k = 0; k < nb; k++) out[out.length - 1 - k] = byteAt(k)
+  return out
+}
+
+// -----------------------------------------------------------------------------
+// Compiled codecs
+// -----------------------------------------------------------------------------
 
 /** A value the writer can't take for this layout: `encode` then defers to the schema. */
 class Invalid {}
@@ -466,147 +506,360 @@ const isRecord = (v: unknown): v is Record<string, any> => typeof v === "object"
 const isUint = (v: unknown, max: number) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= max
 
 /**
- * Write `v` as `l`, checking it as the layout's own schema would (ranges,
- * lengths, address form, digest length, well-formed strings, tags); anything
- * else throws `Invalid`.
+ * A layout compiled once into a reader and a writer (closures built on first
+ * use of `encode`/`decode`, never per call). The writer checks `v` as the
+ * layout's own schema would (ranges, lengths, address form, digest length,
+ * well-formed strings, tags) and throws `Invalid` on anything else.
  */
-const write = (w: Writer, l: Layout, v: any): void => {
+interface Codec {
+  read: (r: Reader) => any
+  write: (w: Writer, v: any) => void
+  /** The fewest bytes a value can take (a lower bound; an unfinished recursive layout counts as 0). */
+  min: number
+  /** Structs only: read the fields into `o` (a flattened enum variant then needs no copy). */
+  readInto: ((r: Reader, o: Record<string, unknown>) => any) | undefined
+}
+
+const codecs = /* @__PURE__ */ new WeakMap<Layout, Codec>()
+/** `Bcs.lazy` layouts (proxies), and how to reach the layout each stands for. */
+const lazies = /* @__PURE__ */ new WeakMap<Layout, () => Layout>()
+
+const compile = (layout: Layout): Codec => {
+  let l = layout
+  for (let f = lazies.get(l); f; f = lazies.get(l)) l = f()
+  let c = codecs.get(l)
+  if (c) return c
+  // Registered before its parts, so a recursive layout finds itself.
+  c = { read: undefined!, write: undefined!, min: 0, readInto: undefined }
+  codecs.set(l, c)
+  try {
+    build(c, l)
+  } catch (e) {
+    // A part has no layout. Parts already built may hold `c`: make it fail the same way everywhere.
+    c.read = c.write = () => {
+      throw e
+    }
+  }
+  return c
+}
+
+const readU32 = (buf: Uint8Array, p: number) =>
+  (buf[p]! | (buf[p + 1]! << 8) | (buf[p + 2]! << 16) | (buf[p + 3]! << 24)) >>> 0
+const M64 = 0xffffffffffffffffn
+
+/** The reader of `u8`, by identity: `vector(u8)` takes a fast path. */
+const readByte = (r: Reader) => r.buf[take(r, 1)]!
+
+// vector<u8>: one bounds check and a plain loop, no per-element calls.
+const readBytes = (r: Reader): Array<number> => {
+  const n = readUleb(r)
+  checkLength(r, n, 1)
+  const p = take(r, n)
+  const buf = r.buf
+  // Safe to size up front: the length is bounded by the input now.
+  const out: Array<number> = new Array(n)
+  for (let i = 0; i < n; i++) out[i] = buf[p + i]!
+  return out
+}
+const writeBytes = (w: Writer, v: any) => {
+  invalid(Array.isArray(v))
+  const n = v.length
+  w.uleb(n)
+  w.ensure(n)
+  const buf = w.buf
+  const p = w.pos
+  for (let i = 0; i < n; i++) {
+    const x = v[i]
+    invalid(isUint(x, 255))
+    buf[p + i] = x
+  }
+  w.pos = p + n
+}
+
+const build = (c: Codec, l: Layout): void => {
   switch (l._tag) {
     case "bool":
-      invalid(typeof v === "boolean")
-      return w.u8(v ? 1 : 0)
-    case "uint":
-      invalid(isUint(v, 2 ** (l.bytes * 8) - 1))
-      return w.uint(v, l.bytes)
-    case "ubig":
-      invalid(typeof v === "bigint" && v >= 0n && v < 1n << BigInt(l.bytes * 8))
-      return w.ubig(v, l.bytes)
+      c.min = 1
+      c.read = (r) => {
+        const p = take(r, 1)
+        const b = r.buf[p]!
+        if (b > 1) fail(`invalid bool ${b}`, p)
+        return b === 1
+      }
+      c.write = (w, v) => {
+        invalid(typeof v === "boolean")
+        w.uint(v ? 1 : 0, 1)
+      }
+      return
+    case "uint": {
+      const bytes = l.bytes
+      const max = 2 ** (bytes * 8) - 1
+      c.min = bytes
+      c.read = bytes === 1 ? readByte : (r) => {
+        const p = take(r, bytes)
+        return bytes === 2 ? r.buf[p]! | (r.buf[p + 1]! << 8) : readU32(r.buf, p)
+      }
+      c.write = (w, v) => {
+        invalid(isUint(v, max))
+        w.uint(v, bytes)
+      }
+      return
+    }
+    case "ubig": {
+      const bytes = l.bytes
+      const max = (1n << BigInt(bytes * 8)) - 1n
+      c.min = bytes
+      c.read = bytes === 8
+        ? (r) => {
+          const p = take(r, 8)
+          // Under 2^32 (counts, small balances): one `BigInt` of a number, no DataView.
+          return readU32(r.buf, p + 4) === 0 ? BigInt(readU32(r.buf, p)) : r.view.getBigUint64(p, true)
+        }
+        : (r) => {
+          const p = take(r, bytes)
+          const view = r.view
+          let v = view.getBigUint64(p + bytes - 8, true)
+          for (let i = bytes - 16; i >= 0; i -= 8) v = (v << 64n) | view.getBigUint64(p + i, true)
+          return v
+        }
+      c.write = (w, v) => {
+        invalid(typeof v === "bigint" && v >= 0n && v <= max)
+        if (v <= 0xffffffffn) {
+          // A small value: no bigint work beyond one conversion.
+          w.uint(Number(v), 4)
+          w.uint(0, bytes - 4)
+          return
+        }
+        w.ensure(bytes)
+        for (let i = 0; i < bytes; i += 8) {
+          w.view.setBigUint64(w.pos + i, v & M64, true)
+          v >>= 64n
+        }
+        w.pos += bytes
+      }
+      return
+    }
     case "uleb128":
-      invalid(isUint(v, 0xffffffff))
-      return w.uleb(v)
-    case "string": {
-      invalid(typeof v === "string" && !LONE_SURROGATE.test(v))
-      const b = utf8e.encode(v)
-      w.uleb(b.length)
-      return w.raw(b)
+      c.min = 1
+      c.read = readUleb
+      c.write = (w, v) => {
+        invalid(isUint(v, 0xffffffff))
+        w.uleb(v)
+      }
+      return
+    case "string":
+      c.min = 1
+      c.read = (r) => {
+        const n = readUleb(r)
+        const p = take(r, n)
+        return utf8d.decode(r.buf.subarray(p, p + n))
+      }
+      c.write = (w, v) => {
+        invalid(typeof v === "string")
+        invalid(!LONE_SURROGATE.test(v))
+        const b = utf8e.encode(v)
+        w.uleb(b.length)
+        w.raw(b)
+      }
+      return
+    case "bytes": {
+      const length = l.length
+      c.min = length
+      c.read = (r) => {
+        const p = take(r, length)
+        return r.buf.slice(p, p + length)
+      }
+      c.write = (w, v) => {
+        invalid(v instanceof Uint8Array && v.length === length)
+        w.raw(v)
+      }
+      return
     }
-    case "bytes":
-      invalid(v instanceof Uint8Array && v.length === l.length)
-      return w.raw(v)
     case "byteVector":
-      invalid(v instanceof Uint8Array)
-      w.uleb(v.length)
-      return w.raw(v)
+      c.min = 1
+      c.read = (r) => {
+        const n = readUleb(r)
+        const p = take(r, n)
+        return r.buf.slice(p, p + n)
+      }
+      c.write = (w, v) => {
+        invalid(v instanceof Uint8Array)
+        w.uleb(v.length)
+        w.raw(v)
+      }
+      return
     case "address":
-      invalid(typeof v === "string" && ADDRESS.test(v))
-      return w.raw(Bytes.fromHex(v.slice(2)))
-    case "base58": {
-      invalid(typeof v === "string")
-      const b = base58.decode(v)
-      invalid(b.length === 32)
-      w.uleb(b.length)
-      return w.raw(b)
-    }
+      c.min = 32
+      c.read = (r) => {
+        const p = take(r, 32)
+        const buf = r.buf
+        const out = ADDRESS_CHARS
+        for (let i = 0; i < 32; i++) {
+          const b = buf[p + i]!
+          out[2 + 2 * i] = hexDigit(b >> 4)
+          out[3 + 2 * i] = hexDigit(b & 15)
+        }
+        return latin1.decode(out)
+      }
+      c.write = (w, v) => {
+        // As `/^0x[0-9a-f]{64}$/`, checked while converting.
+        invalid(typeof v === "string" && v.length === 66 && v.charCodeAt(0) === 48 && v.charCodeAt(1) === 120)
+        w.ensure(32)
+        const buf = w.buf
+        const p = w.pos - 1
+        let bad = 0
+        for (let i = 2; i < 66; i += 2) {
+          const hi = nibble(v.charCodeAt(i))
+          const lo = nibble(v.charCodeAt(i + 1))
+          bad |= hi | lo
+          buf[p + (i >> 1)] = (hi << 4) | lo
+        }
+        // A non-hex digit is -1, which sets the sign bit.
+        invalid(bad >= 0)
+        w.pos = p + 33
+      }
+      return
+    case "base58":
+      c.min = 1
+      c.read = (r) => {
+        const n = readUleb(r)
+        const p = take(r, n)
+        // Not a digest: the schema pass reports it.
+        if (n !== 32) r.suspect = true
+        return toBase58(r.buf, p, n)
+      }
+      c.write = (w, v) => {
+        invalid(typeof v === "string")
+        const b = fromBase58(v)
+        invalid(b !== undefined && b.length === 32)
+        w.uleb(32)
+        w.raw(b!)
+      }
+      return
     case "vector": {
-      invalid(Array.isArray(v))
-      w.uleb(v.length)
-      const item = l.item()
-      for (const x of v) write(w, item, x)
+      const item = compile(l.item())
+      c.min = 1
+      if (item.read === readByte) {
+        c.read = readBytes
+        c.write = writeBytes
+        return
+      }
+      c.read = (r) => {
+        const n = readUleb(r)
+        checkLength(r, n, item.min)
+        const out: Array<unknown> = new Array(n)
+        for (let i = 0; i < n; i++) out[i] = item.read(r)
+        return out
+      }
+      c.write = (w, v) => {
+        invalid(Array.isArray(v))
+        const n = v.length
+        w.uleb(n)
+        for (let i = 0; i < n; i++) item.write(w, v[i])
+      }
       return
     }
-    case "fixedArray": {
-      invalid(Array.isArray(v) && v.length === l.length)
-      const item = l.item()
-      for (const x of v) write(w, item, x)
+    case "option": {
+      c.min = 1
+      const item = compile(l.item())
+      c.read = (r) => {
+        const p = take(r, 1)
+        const tag = r.buf[p]
+        if (tag === 0) return Option.none()
+        if (tag !== 1) fail(`invalid option tag ${tag}`, p)
+        return Option.some(item.read(r))
+      }
+      c.write = (w, v) => {
+        invalid(Option.isOption(v))
+        w.uint(Option.isSome(v) ? 1 : 0, 1)
+        if (Option.isSome(v)) item.write(w, v.value)
+      }
       return
     }
-    case "option":
-      invalid(Option.isOption(v))
-      if (Option.isNone(v)) return w.u8(0)
-      w.u8(1)
-      return write(w, l.item(), v.value)
     case "tuple":
-      invalid(Array.isArray(v) && v.length === l.items.length)
-      return l.items.forEach((item, i) => write(w, item(), v[i]))
-    case "struct":
-      invalid(isRecord(v))
-      for (const [k, f] of l.fields) write(w, f(), v[k])
+    case "fixedArray": {
+      const items = l._tag === "tuple" ? l.items.map((i) => compile(i())) : Array(l.length).fill(compile(l.item()))
+      const n = items.length
+      c.min = items.reduce((sum, i) => sum + i.min, 0)
+      c.read = (r) => {
+        const out: Array<unknown> = []
+        for (let i = 0; i < n; i++) out.push(items[i]!.read(r))
+        return out
+      }
+      c.write = (w, v) => {
+        invalid(Array.isArray(v) && v.length === n)
+        for (let i = 0; i < n; i++) items[i]!.write(w, v[i])
+      }
       return
+    }
+    case "struct": {
+      const keys = l.fields.map(([k]) => k)
+      const fields = l.fields.map(([, f]) => compile(f()))
+      const n = keys.length
+      c.min = fields.reduce((sum, f) => sum + f.min, 0)
+      const readInto = (r: Reader, o: Record<string, unknown>) => {
+        for (let i = 0; i < n; i++) o[keys[i]!] = fields[i]!.read(r)
+        return o
+      }
+      c.readInto = readInto
+      c.read = (r) => readInto(r, {})
+      c.write = (w, v) => {
+        invalid(isRecord(v))
+        for (let i = 0; i < n; i++) fields[i]!.write(w, v[keys[i]!])
+      }
+      return
+    }
     case "enum": {
-      invalid(isRecord(v))
-      const idx = l.variants.findIndex((x) => x.name === v._tag)
-      invalid(idx >= 0)
-      const variant = l.variants[idx]!
-      w.uleb(idx)
-      if (variant.payload === "flat") return write(w, variant.layout!(), v)
-      if (variant.payload === "value") return write(w, variant.layout!(), v.value)
+      c.min = 1
+      const index = new Map<unknown, number>()
+      const readers: Array<(r: Reader) => unknown> = []
+      const writers: Array<(w: Writer, v: any) => void> = []
+      l.variants.forEach(({ layout, name, payload }, i) => {
+        index.set(name, i)
+        if (payload === "unit") {
+          readers.push(() => ({ _tag: name }))
+          writers.push(() => {})
+          return
+        }
+        const p = compile(layout!())
+        if (payload === "flat") {
+          // A flat payload is a struct, which has `readInto`.
+          readers.push((r) => p.readInto!(r, { _tag: name }))
+          writers.push((w, v) => p.write(w, v))
+        } else {
+          readers.push((r) => ({ _tag: name, value: p.read(r) }))
+          writers.push((w, v) => p.write(w, v.value))
+        }
+      })
+      c.read = (r) => {
+        const idx = readUleb(r)
+        const read = readers[idx]
+        return read === undefined ? fail(`unknown enum variant ${idx}`, r.pos) : read(r)
+      }
+      c.write = (w, v) => {
+        invalid(isRecord(v))
+        const idx = index.get(v._tag)
+        invalid(idx !== undefined)
+        w.uleb(idx!)
+        writers[idx!]!(w, v)
+      }
       return
     }
   }
 }
 
-const read = (r: Reader, l: Layout): any => {
-  switch (l._tag) {
-    case "bool": {
-      const b = r.u8()
-      if (b > 1) throw new BcsDecodeError({ message: `invalid bool ${b}`, offset: r.pos - 1 })
-      return b === 1
-    }
-    case "uint":
-      return r.uint(l.bytes)
-    case "ubig":
-      return r.ubig(l.bytes)
-    case "uleb128":
-      return r.uleb()
-    case "string":
-      return utf8d.decode(r.raw(r.uleb()))
-    case "bytes":
-      return r.raw(l.length)
-    case "byteVector":
-      return r.raw(r.uleb())
-    case "address":
-      return "0x" + Bytes.toHex(r.raw(32))
-    case "base58": {
-      const b = r.raw(r.uleb())
-      // Not a digest: the schema pass reports it.
-      if (b.length !== 32) r.suspect = true
-      return base58.encode(b)
-    }
-    case "vector": {
-      const n = r.uleb()
-      const item = l.item()
-      checkLength(r, n, minSize(item))
-      const out: Array<unknown> = []
-      for (let i = 0; i < n; i++) out.push(read(r, item))
-      return out
-    }
-    case "fixedArray": {
-      const item = l.item()
-      const out: Array<unknown> = []
-      for (let i = 0; i < l.length; i++) out.push(read(r, item))
-      return out
-    }
-    case "option": {
-      const tag = r.u8()
-      if (tag === 0) return Option.none()
-      if (tag === 1) return Option.some(read(r, l.item()))
-      throw new BcsDecodeError({ message: `invalid option tag ${tag}`, offset: r.pos - 1 })
-    }
-    case "tuple":
-      return l.items.map((item) => read(r, item()))
-    case "struct": {
-      const out: Record<string, unknown> = {}
-      for (const [k, f] of l.fields) out[k] = read(r, f())
-      return out
-    }
-    case "enum": {
-      const idx = r.uleb()
-      const variant = l.variants[idx]
-      if (!variant) throw new BcsDecodeError({ message: `unknown enum variant ${idx}`, offset: r.pos })
-      if (variant.payload === "flat") return { _tag: variant.name, ...read(r, variant.layout!()) }
-      if (variant.payload === "value") return { _tag: variant.name, value: read(r, variant.layout!()) }
-      return { _tag: variant.name }
-    }
+let spare: Writer | undefined
+/** Write `v` with `c` into a reused buffer; returns a copy of the bytes. */
+const writeAll = (c: Codec, v: unknown): Uint8Array => {
+  const w = spare ?? new Writer(1024)
+  spare = undefined
+  w.pos = 0
+  try {
+    c.write(w, v)
+    return w.buf.slice(0, w.pos)
+  } finally {
+    // Don't hold on to a buffer a one-off large value grew.
+    if (w.buf.length <= 65536) spare = w
   }
 }
 
@@ -633,22 +886,20 @@ export const encode = <T, E>(schema: Schema.Codec<T, E>) => {
   const layout = layoutOf(schema)
   const encodeSchema = Schema.encodeResult(schema as any)
   let fast: boolean | undefined
+  let codec: Codec | undefined
   return (value: T): Result.Result<Uint8Array, Schema.SchemaError> => {
     if (fast ??= trusted(schema)) {
       try {
-        const w = new Writer()
-        write(w, layout, value)
-        return Result.succeed(w.result())
+        return Result.succeed(writeAll(codec ??= compile(layout), value))
       } catch {
         // refused (or too deep): the schema pass decides
       }
     }
     try {
-      return Result.map(encodeSchema(value) as Result.Result<E, Schema.SchemaError>, (e) => {
-        const w = new Writer()
-        write(w, layout, e)
-        return w.result()
-      })
+      return Result.map(
+        encodeSchema(value) as Result.Result<E, Schema.SchemaError>,
+        (e) => writeAll(codec ??= compile(layout), e)
+      )
     } catch (e) {
       return Result.fail(
         new Schema.SchemaError(new SchemaIssue.InvalidValue({ message: `cannot encode: ${e instanceof Error ? e.message : String(e)}` }))
@@ -671,11 +922,12 @@ export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
   const layout = layoutOf(schema)
   const decodeSchema = Schema.decodeUnknownResult(schema as any)
   let fast: boolean | undefined
+  let codec: Codec | undefined
   return (bytes: Uint8Array): Result.Result<T, BcsDecodeError | Schema.SchemaError> => {
     let raw: unknown
     const r = new Reader(bytes)
     try {
-      raw = read(r, layout)
+      raw = (codec ??= compile(layout)).read(r)
       if (r.pos !== bytes.length) {
         return Result.fail(new BcsDecodeError({ message: `${bytes.length - r.pos} trailing bytes`, offset: r.pos }))
       }
