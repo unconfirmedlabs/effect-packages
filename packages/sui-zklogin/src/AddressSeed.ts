@@ -1,0 +1,91 @@
+/**
+ * The address seed: `poseidon(hash(claimName), hash(claimValue), hash(aud), poseidon(salt))`.
+ * It is what the proof commits to and, with the issuer, what the address is
+ * derived from.
+ */
+import * as Effect from "effect/Effect"
+import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"
+import * as Poseidon from "./Poseidon.ts"
+
+export const MAX_KEY_CLAIM_NAME_LENGTH = 32
+export const MAX_KEY_CLAIM_VALUE_LENGTH = 115
+export const MAX_AUD_VALUE_LENGTH = 145
+const PACK_WIDTH = 248
+
+/** Split into chunks of `size`; when uneven, the *first* chunk is the short one. */
+const chunkFromEnd = <T>(array: ReadonlyArray<T>, size: number): Array<Array<T>> => {
+  const out: Array<Array<T>> = []
+  for (let end = array.length; end > 0; end -= size) out.unshift(array.slice(Math.max(0, end - size), end))
+  return out
+}
+
+const bytesBEToBigInt = (bytes: ReadonlyArray<number>): bigint =>
+  bytes.length === 0 ? 0n : BigInt("0x" + bytes.map((b) => b.toString(16).padStart(2, "0")).join(""))
+
+/** @internal */
+export const hashASCIIStrToFieldUnsafe = (str: string, maxSize: number): bigint => {
+  if (str.length > maxSize) throw new Error(`String ${str} is longer than ${maxSize} chars`)
+  const padded = str.padEnd(maxSize, String.fromCharCode(0)).split("").map((c) => c.charCodeAt(0))
+  return Poseidon.hashUnsafe(chunkFromEnd(padded, PACK_WIDTH / 8).map(bytesBEToBigInt))
+}
+
+/** Hash an ASCII string (zero-padded to `maxSize`) to a field element. */
+export const hashASCIIStrToField = (str: string, maxSize: number): Effect.Effect<bigint, InvalidZkLoginInput> =>
+  Effect.try({
+    try: () => hashASCIIStrToFieldUnsafe(str, maxSize),
+    catch: (e) => new InvalidZkLoginInput({ reason: reasonOf(e) })
+  })
+
+/**
+ * The circuit hashes raw JWT bytes, so a claim whose decoded form reveals a
+ * JSON escape (`"`, `\`, a control character) would derive a different address.
+ */
+const assertNoJsonEscape = (value: string, label: string) => {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i)
+    if (c < 0x20 || c === 0x22 || c === 0x5c) {
+      throw new Error(
+        `zkLogin ${label} contains a JSON-escaped character (code ${c}); the circuit hashes raw JWT bytes, ` +
+          `so claim values with escapes are not supported`
+      )
+    }
+  }
+}
+
+export interface AddressSeedOptions {
+  readonly maxNameLength?: number
+  readonly maxValueLength?: number
+  readonly maxAudLength?: number
+}
+
+/** @internal */
+export const genAddressSeedUnsafe = (
+  salt: string | bigint,
+  name: string,
+  value: string,
+  aud: string,
+  options?: AddressSeedOptions
+): bigint => {
+  assertNoJsonEscape(name, "key claim name")
+  assertNoJsonEscape(value, "key claim value")
+  assertNoJsonEscape(aud, "aud")
+  return Poseidon.hashUnsafe([
+    hashASCIIStrToFieldUnsafe(name, options?.maxNameLength ?? MAX_KEY_CLAIM_NAME_LENGTH),
+    hashASCIIStrToFieldUnsafe(value, options?.maxValueLength ?? MAX_KEY_CLAIM_VALUE_LENGTH),
+    hashASCIIStrToFieldUnsafe(aud, options?.maxAudLength ?? MAX_AUD_VALUE_LENGTH),
+    Poseidon.hashUnsafe([BigInt(salt)])
+  ])
+}
+
+/** `genAddressSeed(salt, "sub", sub, aud)`. */
+export const genAddressSeed = (
+  salt: string | bigint,
+  name: string,
+  value: string,
+  aud: string,
+  options?: AddressSeedOptions
+): Effect.Effect<bigint, InvalidZkLoginInput> =>
+  Effect.try({
+    try: () => genAddressSeedUnsafe(salt, name, value, aud, options),
+    catch: (e) => new InvalidZkLoginInput({ reason: reasonOf(e) })
+  })

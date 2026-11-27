@@ -1,0 +1,32 @@
+{
+  "name": "@unconfirmed/effect-sdks",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test packages/",
+    "test:live": "SUI_LIVE=1 bun test packages/",
+    "codegen": "bun run --filter @unconfirmed/sui codegen"
+  },
+  "devDependencies": {
+    "@mysten/sui": "3.0.1",
+    "@types/bun": "^1.4.0",
+    "@unconfirmed/bcs": "workspace:*",
+    "@unconfirmed/sui": "workspace:*",
+    "@unconfirmed/sui-multisig": "workspace:*",
+    "@unconfirmed/sui-secp256k1": "workspace:*",
+    "@unconfirmed/sui-secp256r1": "workspace:*",
+    "effect": "4.1.6",
+    "esbuild": "0.28.2",
+    "rolldown": "1.3.4",
+    "typescript": "5.9.3",
+    "@unconfirmed/sui-lifecycle": "workspace:*",
+    "@unconfirmed/sui-zklogin": "workspace:*",
+    "@unconfirmed/sui-enoki": "workspace:*",
+    "@unconfirmed/sui-graphql": "workspace:*",
+    "@mysten/enoki": "2.0.1"
+  }
+}

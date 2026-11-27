@@ -1,0 +1,509 @@
+/**
+ * Failure handling against scripted core services (see world.ts).
+ */
+import { describe, expect, test } from "bun:test"
+import { Cause, DateTime, Deferred, Effect, Fiber, Layer, Option, Schedule } from "effect"
+import { TestClock } from "effect/testing"
+import { RpcError } from "@unconfirmed/sui/RpcError"
+import * as Evidence from "../src/Evidence.ts"
+import * as Journal from "../src/Journal.ts"
+import { JournalEntry } from "../src/JournalEntry.ts"
+import * as Lifecycle from "../src/Lifecycle.ts"
+import * as Outcome from "../src/Outcome.ts"
+import type { SignedTransaction } from "../src/SignedTransaction.ts"
+import * as SubmitConfig from "../src/SubmitConfig.ts"
+import { COIN, consumer, land, layer, makeWorld, OBJ, ownedObject, signedTx, type World } from "./world.ts"
+
+const fast = SubmitConfig.layer({
+  resubmit: Schedule.spaced(0),
+  lookupTimeout: 0,
+  reconcileRecheck: 0,
+  awaitVisibility: false
+})
+
+/** A node whose history reaches genesis, so a miss is evidence. */
+const fullHistory = Evidence.layer({
+  lowestAvailableCheckpoint: Effect.succeedSome(0n),
+  epochFirstCheckpoint: () => Effect.succeedNone
+})
+
+const runIn = <A, E>(world: World, effect: Effect.Effect<A, E, Lifecycle.Services>, extra: Layer.Layer<never> = Layer.empty) =>
+  Effect.runPromise(
+    effect.pipe(Effect.provide(Layer.mergeAll(layer(world), Journal.layerMemory, fast, extra)))
+  )
+
+const journalTag = (digest: string) =>
+  Effect.flatMap(Effect.service(Journal.Journal), (j) => j.get(digest)).pipe(
+    Effect.map(Option.match({ onNone: () => "none", onSome: (e) => e._tag }))
+  )
+
+const put = (make: (now: DateTime.Utc) => JournalEntry) =>
+  Effect.flatMap(Effect.service(Journal.Journal), (j) => Effect.flatMap(DateTime.now, (now) => j.put(make(now))))
+
+const unknownEntry = (signed: SignedTransaction) =>
+  put((at) => JournalEntry.cases.Unknown.make({ digest: signed.digest, signed, lastError: "x", attempts: 1, at }))
+
+describe("outcome", () => {
+  test("tags outside the taxonomy are unknown unless the caller says they were pre-submit", () => {
+    expect(Outcome.outcome(new Cause.TimeoutError())).toBe("unknown")
+    const rpc = new RpcError({ method: "X", code: "UNAVAILABLE", message: "" })
+    expect(Outcome.outcome(rpc)).toBe("unknown")
+    expect(Outcome.outcome(rpc, { phase: "beforeSubmit" })).toBe("not_applied")
+    expect(Outcome.outcome(new Outcome.SubmissionUnknown({ digest: "D", reason: "" }), { phase: "beforeSubmit" })).toBe(
+      "unknown"
+    )
+    expect(Outcome.outcome(new Outcome.JournalError({ message: "" }))).toBe("not_applied")
+    expect(Outcome.outcome(new Outcome.DigestMismatch({ digest: "a", computed: "b" }))).toBe("unknown")
+  })
+})
+
+describe("submit", () => {
+  test("transport error before execution: re-sends the same bytes, then Executed", async () => {
+    const world = makeWorld({ script: ["failBefore", "failBefore", "land"] })
+    const { signed, effects, tag } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const effects = yield* Lifecycle.submit(signed)
+        return { signed, effects, tag: yield* journalTag(signed.digest) }
+      })
+    )
+    expect(effects.status._tag).toBe("Success")
+    expect(world.sent).toEqual([signed.digest, signed.digest, signed.digest])
+    expect(tag).toBe("Executed")
+  })
+
+  test("transport error after execution landed: every re-send carries the identical bytes", async () => {
+    const world = makeWorld({ script: ["failAfter", "land"] })
+    const { signed, effects } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        return { signed, effects: yield* Lifecycle.submit(signed) }
+      })
+    )
+    expect(effects.digest).toBe(signed.digest)
+    expect(world.sent).toEqual([signed.digest, signed.digest])
+    expect([...world.landed.keys()]).toEqual([signed.digest])
+  })
+
+  test("transport error after execution, retries exhausted: reconcile finds it", async () => {
+    const world = makeWorld({ script: ["failAfter"] })
+    const effects = await runIn(
+      world,
+      Effect.flatMap(signedTx(), Lifecycle.submit).pipe(SubmitConfig.with({ resubmitAttempts: 1 }))
+    )
+    expect(effects.status._tag).toBe("Success")
+    expect(world.executeCalls).toBe(1)
+  })
+
+  test("NOT_FOUND then found: reconcile keeps asking until lookupTimeout (TestClock)", async () => {
+    const world = makeWorld({ script: ["failAfter"], hideFor: 3 })
+    const effects = await runIn(
+      world,
+      Effect.gen(function*() {
+        const fiber = yield* Effect.forkChild(
+          Effect.flatMap(signedTx(), Lifecycle.submit).pipe(
+            SubmitConfig.with({ resubmitAttempts: 1, lookupTimeout: "5 seconds", lookupInterval: "500 millis" })
+          )
+        )
+        yield* TestClock.adjust("2 seconds")
+        return yield* Fiber.join(fiber)
+      }),
+      TestClock.layer()
+    )
+    expect(effects.status._tag).toBe("Success")
+    expect(world.getCalls).toBe(4)
+  })
+
+  test("the resubmit schedule is driven by the clock (TestClock)", async () => {
+    const world = makeWorld({ script: ["failBefore", "failBefore", "land"] })
+    const effects = await runIn(
+      world,
+      Effect.gen(function*() {
+        const fiber = yield* Effect.forkChild(
+          Effect.flatMap(signedTx(), Lifecycle.submit).pipe(SubmitConfig.with({ resubmit: Schedule.spaced("10 seconds") }))
+        )
+        yield* TestClock.adjust("10 seconds")
+        const midway = world.executeCalls
+        yield* TestClock.adjust("10 seconds")
+        return { midway, effects: yield* Fiber.join(fiber) }
+      }),
+      TestClock.layer()
+    )
+    expect(effects.midway).toBe(2)
+    expect(world.executeCalls).toBe(3)
+  })
+
+  test("executeTimeout: an execute with no answer is re-sent after the timeout (TestClock)", async () => {
+    const world = makeWorld({ script: ["hang", "land"] })
+    const effects = await runIn(
+      world,
+      Effect.gen(function*() {
+        const fiber = yield* Effect.forkChild(
+          Effect.flatMap(signedTx(), Lifecycle.submit).pipe(SubmitConfig.with({ executeTimeout: "3 seconds" }))
+        )
+        yield* TestClock.adjust("2 seconds")
+        const before = world.executeCalls
+        yield* TestClock.adjust("2 seconds")
+        return { before, effects: yield* Fiber.join(fiber) }
+      }),
+      TestClock.layer()
+    )
+    expect(effects.before).toBe(1)
+    expect(effects.effects.status._tag).toBe("Success")
+    expect(world.executeCalls).toBe(2)
+  })
+
+  test("Move abort is ExecutionFailed (applied) and journalled Failed", async () => {
+    const world = makeWorld({ script: ["abort"] })
+    const { error, tag } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const error = yield* Effect.flip(Lifecycle.submit(signed))
+        return { error, tag: yield* journalTag(signed.digest) }
+      })
+    )
+    expect(error._tag).toBe("ExecutionFailed")
+    expect(Outcome.outcome(error)).toBe("applied")
+    expect(error._tag === "ExecutionFailed" && error.abortCode).toBe(7n)
+    expect(tag).toBe("Failed")
+  })
+
+  test("INVALID_ARGUMENT on the first send is NotApplied refused", async () => {
+    const world = makeWorld({ script: ["refuse"] })
+    const { error, tag } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const error = yield* Effect.flip(Lifecycle.submit(signed))
+        return { error, tag: yield* journalTag(signed.digest) }
+      })
+    )
+    expect(error._tag === "NotApplied" && error.evidence).toBe("refused")
+    expect(Outcome.outcome(error)).toBe("not_applied")
+    expect(world.getCalls).toBe(0)
+    expect(tag).toBe("NotApplied")
+  })
+
+  test("submit of bytes the journal already holds is a re-send: INVALID_ARGUMENT reconciles, not refused", async () => {
+    const world = makeWorld({ script: ["refuse"] })
+    const { error, tag } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        yield* unknownEntry(signed)
+        const error = yield* Effect.flip(Lifecycle.submit(signed))
+        return { error, tag: yield* journalTag(signed.digest) }
+      })
+    )
+    expect(error._tag).toBe("SubmissionUnknown")
+    expect(tag).toBe("Unknown")
+  })
+
+  test("resubmit: INVALID_ARGUMENT on a re-send reconciles, and finds what the earlier send landed", async () => {
+    const world = makeWorld({ script: ["refuse"] })
+    const effects = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        land(world, signed.digest)
+        return yield* Lifecycle.resubmit(signed)
+      })
+    )
+    expect(effects.status._tag).toBe("Success")
+  })
+
+  test("a lock conflict reported as INVALID_ARGUMENT reaches the conflict path, not refused", async () => {
+    const world = makeWorld({ script: ["lockConflictInvalid"] })
+    world.objects.set(OBJ, ownedObject(OBJ, 9n, "OtherDigest"))
+    world.objects.set(COIN, ownedObject(COIN, 3n))
+    consumer(world, "OtherDigest", OBJ, 5n)
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx(), Lifecycle.submit)))
+    expect(error._tag === "NotApplied" && error.evidence).toBe("inputConsumed")
+  })
+
+  test("lock conflict: the winner becomes readable during the rechecks -> NotApplied inputConsumed", async () => {
+    const world = makeWorld({ script: ["lockConflict"] })
+    world.objects.set(OBJ, ownedObject(OBJ, 9n, "OtherDigest"))
+    world.objects.set(COIN, ownedObject(COIN, 3n))
+    let asked = 0
+    world.onGet = (digest) =>
+      Effect.sync(() => {
+        if (digest === "OtherDigest" && ++asked === 3) consumer(world, "OtherDigest", OBJ, 5n)
+      })
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx(), Lifecycle.submit)))
+    expect(error._tag === "NotApplied" && error.evidence).toBe("inputConsumed")
+    expect(asked).toBe(3)
+  })
+
+  test("unreachable, window open: SubmissionUnknown carries the bytes; resubmit lands them", async () => {
+    const world = makeWorld({ script: ["failBefore", "failBefore", "failBefore", "failBefore", "failBefore"] })
+    world.objects.set(OBJ, ownedObject(OBJ, 5n))
+    world.objects.set(COIN, ownedObject(COIN, 3n))
+    const { error, tag, again, after } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const error = yield* Effect.flip(Lifecycle.submit(signed))
+        const tag = yield* journalTag(signed.digest)
+        if (error._tag !== "SubmissionUnknown") throw new Error(error._tag)
+        const again = yield* Lifecycle.resubmit(error)
+        return { error, tag, again, after: yield* journalTag(signed.digest) }
+      })
+    )
+    expect(Outcome.outcome(error)).toBe("unknown")
+    expect(error._tag === "SubmissionUnknown" && error.signed?.bytes.length).toBeGreaterThan(0)
+    expect(world.executeCalls).toBe(6)
+    expect(tag).toBe("Unknown")
+    expect(again.status._tag).toBe("Success")
+    expect(after).toBe("Executed")
+  })
+
+  test("resubmit refuses on a journal NotApplied, without sending", async () => {
+    const world = makeWorld()
+    const error = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        yield* put((at) => JournalEntry.cases.NotApplied.make({ digest: signed.digest, evidence: "inputConsumed", at }))
+        return yield* Effect.flip(Lifecycle.resubmit(signed))
+      })
+    )
+    expect(error._tag === "NotApplied" && error.evidence).toBe("inputConsumed")
+    expect(world.executeCalls).toBe(0)
+  })
+
+  test("an interrupt between the answer and its journal write still journals the answer", async () => {
+    const world = makeWorld()
+    const tag = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const inner = Journal.makeMemory()
+        const writing = yield* Deferred.make<void>()
+        const slow: Journal.JournalService = {
+          ...inner,
+          put: (e) =>
+            e._tag === "Executed"
+              ? Deferred.succeed(writing, undefined).pipe(Effect.andThen(Effect.sleep(20)), Effect.andThen(inner.put(e)))
+              : inner.put(e)
+        }
+        const fiber = yield* Effect.forkChild(Lifecycle.submit(signed).pipe(Effect.provideService(Journal.Journal, slow)))
+        yield* Deferred.await(writing)
+        yield* Fiber.interrupt(fiber)
+        return yield* Effect.map(inner.get(signed.digest), Option.map((e) => e._tag))
+      })
+    )
+    expect(tag).toEqual(Option.some("Executed"))
+  })
+
+  test("a SignedTransaction whose digest is not its bytes' fails DigestMismatch before anything is sent", async () => {
+    const world = makeWorld()
+    const errors = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const other = yield* signedTx({ nonce: 2 })
+        const forged = { ...signed, digest: other.digest }
+        return [
+          yield* Effect.flip(Lifecycle.submit(forged)),
+          yield* Effect.flip(Lifecycle.resubmit(forged)),
+          yield* Effect.flip(Lifecycle.reconcile(forged))
+        ]
+      })
+    )
+    expect(errors.map((e) => e._tag)).toEqual(["DigestMismatch", "DigestMismatch", "DigestMismatch"])
+    expect(world.executeCalls).toBe(0)
+    expect(world.getCalls).toBe(0)
+  })
+
+  test("resubmit: a journal failure after bytes may be out is SubmissionUnknown, never JournalError", async () => {
+    const world = makeWorld()
+    const error = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const inner = Journal.makeMemory()
+        yield* inner.put(JournalEntry.cases.Unknown.make({ digest: signed.digest, signed, lastError: "x", attempts: 1, at: yield* DateTime.now }))
+        const broken: Journal.JournalService = {
+          ...inner,
+          put: () => Effect.fail(new Outcome.JournalError({ message: "disk full" }))
+        }
+        return yield* Effect.flip(Lifecycle.resubmit(signed).pipe(Effect.provideService(Journal.Journal, broken)))
+      })
+    )
+    expect(error._tag).toBe("SubmissionUnknown")
+    expect(Outcome.outcome(error)).toBe("unknown")
+    expect(world.executeCalls).toBe(0)
+  })
+
+  test("a settled entry written meanwhile (another process) is never downgraded to Unknown", async () => {
+    const world = makeWorld({ script: ["failBefore"] })
+    const tag = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ pinned: false })
+        const journal = yield* Journal.Journal
+        world.onGet = () => Effect.ignore(journal.put(JournalEntry.cases.Executed.make({ digest: signed.digest, at: DateTime.nowUnsafe() })))
+        const error = yield* Effect.flip(Lifecycle.submit(signed).pipe(SubmitConfig.with({ resubmitAttempts: 1 })))
+        expect(error._tag).toBe("SubmissionUnknown")
+        return yield* journalTag(signed.digest)
+      })
+    )
+    expect(tag).toBe("Executed")
+  })
+
+  test("submit over a settled entry never writes Signed and never re-sends", async () => {
+    const world = makeWorld()
+    const tag = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        land(world, signed.digest)
+        yield* put((at) => JournalEntry.cases.Executed.make({ digest: signed.digest, at }))
+        const effects = yield* Lifecycle.submit(signed)
+        expect(effects.digest).toBe(signed.digest)
+        return yield* journalTag(signed.digest)
+      })
+    )
+    expect(tag).toBe("Executed")
+    expect(world.executeCalls).toBe(0)
+  })
+
+  test("resubmit with a journal Executed/Failed on a lagging node never concludes NotApplied", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const [executed, failed] = await runIn(
+      world,
+      Effect.gen(function*() {
+        const a = yield* signedTx({ epoch: 10n, pinned: false })
+        const b = yield* signedTx({ epoch: 10n, pinned: false, nonce: 2 })
+        yield* put((at) => JournalEntry.cases.Executed.make({ digest: a.digest, at }))
+        yield* put((at) => JournalEntry.cases.Failed.make({ digest: b.digest, description: "MoveAbort", at }))
+        return [yield* Effect.flip(Lifecycle.resubmit(a)), yield* Effect.flip(Lifecycle.resubmit(b))]
+      }),
+      fullHistory
+    )
+    expect(executed._tag).toBe("SubmissionUnknown")
+    expect(executed._tag === "SubmissionUnknown" && executed.reason).toContain("journal records this transaction as executed")
+    expect(failed._tag).toBe("ExecutionFailed")
+    expect(world.executeCalls).toBe(0)
+  })
+})
+
+describe("reconcile", () => {
+  test("expired: window closed, missed twice around a recheck, full history -> NotApplied expired", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const { error, tag } = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ epoch: 10n })
+        yield* put((at) => JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at }))
+        const error = yield* Effect.flip(Lifecycle.reconcile(signed))
+        return { error, tag: yield* journalTag(signed.digest) }
+      }),
+      fullHistory
+    )
+    expect(error._tag === "NotApplied" && error.evidence).toBe("expired")
+    expect(world.getCalls).toBe(3)
+    expect(tag).toBe("NotApplied")
+  })
+
+  test("expired needs fresh history from Evidence: Chain.info reporting 0 is not enough", async () => {
+    const world = makeWorld({ epoch: 20n, lowestAvailableCheckpoint: 0n })
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)))
+    expect(error._tag).toBe("SubmissionUnknown")
+    expect(error._tag === "SubmissionUnknown" && error.reason).toContain("does not report how much history")
+  })
+
+  test("the node's history is read after the misses it vouches for", async () => {
+    const world = makeWorld({ epoch: 20n })
+    let getsBefore = -1
+    const evidence = Evidence.layer({
+      lowestAvailableCheckpoint: Effect.sync(() => {
+        getsBefore = world.getCalls
+        return Option.some(0n)
+      }),
+      epochFirstCheckpoint: () => Effect.succeedNone
+    })
+    await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), evidence)
+    expect(getsBefore).toBe(3)
+  })
+
+  test("expired on a pruning node that cannot say where the window starts: SubmissionUnknown", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const pruning = Evidence.layer({
+      lowestAvailableCheckpoint: Effect.succeedSome(5000n),
+      epochFirstCheckpoint: () => Effect.succeedNone
+    })
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), pruning)
+    expect(error._tag).toBe("SubmissionUnknown")
+  })
+
+  test("expiryEvidence: never keeps it unknown", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const error = await runIn(
+      world,
+      Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)).pipe(
+        SubmitConfig.with({ expiryEvidence: "never" })
+      ),
+      fullHistory
+    )
+    expect(error._tag).toBe("SubmissionUnknown")
+  })
+
+  test("positive evidence vetoes expiry: a pinned object names this digest", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const error = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ epoch: 10n })
+        world.objects.set(OBJ, ownedObject(OBJ, 9n, signed.digest))
+        return yield* Effect.flip(Lifecycle.reconcile(signed))
+      }),
+      fullHistory
+    )
+    expect(error._tag).toBe("SubmissionUnknown")
+    expect(error._tag === "SubmissionUnknown" && error.reason).toContain("so it applied")
+  })
+
+  test("a moved input whose consumer took a later version proves nothing", async () => {
+    const world = makeWorld()
+    world.objects.set(OBJ, ownedObject(OBJ, 9n, "OtherDigest"))
+    consumer(world, "OtherDigest", OBJ, 7n)
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx(), Lifecycle.reconcile)))
+    expect(error._tag).toBe("SubmissionUnknown")
+  })
+
+  test("a consumed Receiving input proves nothing", async () => {
+    const world = makeWorld()
+    world.objects.set(OBJ, ownedObject(OBJ, 9n, "OtherDigest"))
+    world.objects.set(COIN, ownedObject(COIN, 3n))
+    consumer(world, "OtherDigest", OBJ, 5n)
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ receiving: true }), Lifecycle.reconcile)))
+    expect(error._tag).toBe("SubmissionUnknown")
+  })
+
+  test("bytes for another chain are never judged by this one", async () => {
+    const world = makeWorld({ epoch: 20n, chainId: "11111111111111111111111111111111" })
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n }), Lifecycle.reconcile)), fullHistory)
+    expect(error._tag === "SubmissionUnknown" && error.reason).toContain("built for chain")
+  })
+
+  test("found: Executed; a bare unknown digest is SubmissionUnknown without bytes", async () => {
+    const world = makeWorld()
+    const result = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        land(world, signed.digest)
+        const found = yield* Lifecycle.reconcile(signed)
+        const missing = yield* Effect.flip(Lifecycle.reconcile("UnknownDigest"))
+        return { found, missing }
+      })
+    )
+    expect(result.found.status._tag).toBe("Success")
+    expect(result.missing._tag === "SubmissionUnknown" && result.missing.signed).toBeUndefined()
+  })
+})

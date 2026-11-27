@@ -1,0 +1,17 @@
+{
+  "name": "@unconfirmed/sui-multisig",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@unconfirmed/bcs": "workspace:*",
+    "@unconfirmed/sui": "workspace:*",
+    "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@unconfirmed/sui-secp256k1": "workspace:*"
+  }
+}

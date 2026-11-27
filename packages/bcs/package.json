@@ -1,0 +1,14 @@
+{
+  "name": "@unconfirmed/bcs",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@scure/base": "^2.3.0",
+    "effect": "4.1.6"
+  }
+}

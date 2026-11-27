@@ -1,0 +1,177 @@
+/**
+ * Offline: dynamic field ids (parity with @mysten/sui), event filters and
+ * decoding, `Transactions.waitFor`, `CheckpointData.follow`.
+ */
+import { bcs as mysten } from "@mysten/sui/bcs"
+import { deriveDynamicFieldID } from "@mysten/sui/utils"
+import { Bcs } from "@unconfirmed/bcs"
+import { describe, expect, test } from "bun:test"
+import { Effect, Result, Schedule, Stream } from "effect"
+import { Address, CheckpointData, DynamicFields, Events, Transactions, TypeTag } from "../src/index.ts"
+
+const A = Address.normalize
+
+describe("DynamicFields.deriveId", () => {
+  const parent = A("0x5a1e")
+  const cases: ReadonlyArray<readonly [string, Uint8Array]> = [
+    ["u64", mysten.u64().serialize(42n).toBytes()],
+    ["u8", new Uint8Array([7])],
+    ["bool", new Uint8Array([1])],
+    ["address", mysten.Address.serialize(A("0xabc")).toBytes()],
+    ["vector<u8>", mysten.vector(mysten.u8()).serialize([1, 2, 3]).toBytes()],
+    ["0x1::string::String", mysten.string().serialize("hello").toBytes()],
+    ["0x2::dynamic_object_field::Wrapper<0x1::string::String>", mysten.string().serialize("key").toBytes()],
+    ["0x2::coin::Coin<0x2::sui::SUI>", new Uint8Array(40).fill(3)],
+    ["vector<0x2::kiosk::Item>", new Uint8Array([0])],
+    ["0xdee9::custodian::Account<0x2::sui::SUI, 0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN>", new Uint8Array(32).fill(9)]
+  ]
+  for (const [type, key] of cases) {
+    test(type, () => {
+      expect(DynamicFields.deriveId(parent, type, key)).toBe(deriveDynamicFieldID(parent, type, key) as Address.Address)
+    })
+  }
+
+  test("objectFieldNameType wraps the name type", () => {
+    const key = mysten.u64().serialize(1n).toBytes()
+    expect(DynamicFields.deriveId(parent, DynamicFields.objectFieldNameType("u64"), key)).toBe(
+      deriveDynamicFieldID(parent, "0x2::dynamic_object_field::Wrapper<u64>", key) as Address.Address
+    )
+  })
+
+  test("name encodes with a schema; decodeValue decodes", async () => {
+    const n = Result.getOrThrow(DynamicFields.name("0x1::string::String", Bcs.string, "hi"))
+    expect([...n.bcs]).toEqual([...mysten.string().serialize("hi").toBytes()])
+    const v = await Effect.runPromise(
+      DynamicFields.decodeValue(Bcs.u64)({ fieldId: A("0x1"), valueType: "u64", value: mysten.u64().serialize(9n).toBytes() })
+    )
+    expect(v).toBe(9n)
+  })
+
+  test("a malformed name type is InvalidDynamicFieldName, not a defect", async () => {
+    const fake = DynamicFields.DynamicFields.of({
+      get: () => Effect.die("unreachable"),
+      getObject: () => Effect.die("unreachable"),
+      list: () => Stream.empty
+    })
+    const e = await Effect.runPromise(
+      DynamicFields.getWith(A("0x1"), "u64", Bcs.u8, 1000 as any).pipe(
+        Effect.flip,
+        Effect.provideService(DynamicFields.DynamicFields, fake)
+      )
+    )
+    expect(e._tag).toBe("InvalidDynamicFieldName")
+  })
+})
+
+describe("Events", () => {
+  test("filters lower to DNF", () => {
+    const s = Events.sender(A("0x1"))
+    const t = Events.eventType("0x2::coin::CoinCreated")
+    const m = Events.emitModule("0x2::coin")
+    const dnf = Events.toDnf(Events.all(Events.any(s, t), Events.not(m)))
+    expect(dnf.map((term) => term.map((l) => `${l.negated ? "!" : ""}${l.predicate._tag}`))).toEqual([
+      ["Sender", "!EmitModule"],
+      ["EventType", "!EmitModule"]
+    ])
+  })
+
+  test("type filters are padded (nodes reject 0x2)", () => {
+    const p = (l: Events.Literal) => (l.predicate as { type?: string; module?: string })
+    expect(p(Events.eventType("0x2::coin::CoinCreated<0x2::sui::SUI>")).type).toBe(
+      `${A("0x2")}::coin::CoinCreated<${A("0x2")}::sui::SUI>`
+    )
+    expect(p(Events.eventType("0x2::kiosk")).type).toBe(`${A("0x2")}::kiosk`)
+    expect(p(Events.emitModule("0x2")).module).toBe(A("0x2"))
+    expect(p(Events.eventType("not a type")).type).toBe("not a type")
+  })
+
+  test("TypeTag.matchesPath at each level", () => {
+    const { matchesPath } = TypeTag
+    const coin = "0x2::coin::Coin<0x2::sui::SUI>"
+    expect([matchesPath("0x2", coin), matchesPath("0x2::coin", coin), matchesPath("0x2::coin::Coin", coin), matchesPath(coin, coin)]).toEqual([true, true, true, true])
+    expect([matchesPath("0x3", coin), matchesPath("0x2::co", coin), matchesPath("0x2::coin::Co", coin), matchesPath("0x2::coin::Coin<u8>", coin)]).toEqual([false, false, false, false])
+    expect([matchesPath("u64", "u64"), matchesPath("u64", "u8"), matchesPath("0x2::kiosk::Item", "0x2::kiosk::Listing")]).toEqual([true, false, false])
+  })
+
+  test("decode with a BCS schema; bad bytes are EventDecodeError", async () => {
+    const Ev = Bcs.struct({ id: Bcs.Address, value: Bcs.u64 })
+    const contents = mysten.struct("E", { id: mysten.Address, value: mysten.u64() }).serialize({ id: A("0x7"), value: 5n }).toBytes()
+    const base: Events.Event = {
+      type: "0x2::x::E",
+      sender: A("0x1"),
+      packageId: A("0x2"),
+      module: "x",
+      contents,
+      transactionDigest: "d",
+      checkpoint: 1n,
+      transactionIndex: 0n,
+      eventIndex: 0
+    }
+    expect(await Effect.runPromise(Events.decode(Ev)(base))).toEqual({ id: A("0x7"), value: 5n })
+    const e = await Effect.runPromise(Events.decode(Ev)({ ...base, contents: contents.subarray(1) }).pipe(Effect.flip))
+    expect(e._tag).toBe("EventDecodeError")
+  })
+})
+
+describe("Transactions.waitFor", () => {
+  const effects = { digest: "D", status: { _tag: "Success" as const }, gasUsed: { computationCost: 0n, storageCost: 0n, storageRebate: 0n, nonRefundableStorageFee: 0n }, changedObjects: [] }
+  const txs = (get: Transactions.Transactions["Service"]["get"]) =>
+    Transactions.Transactions.of({ simulate: () => Effect.die("no"), execute: () => Effect.die("no"), get })
+
+  test("retries TransactionNotFound until visible", async () => {
+    let calls = 0
+    const svc = txs((digest) =>
+      Effect.suspend(() => ++calls < 3 ? Effect.fail(new Transactions.TransactionNotFound({ digest })) : Effect.succeed(effects))
+    )
+    const r = await Effect.runPromise(
+      Transactions.waitFor("D", { schedule: Schedule.spaced("10 millis"), timeout: "5 seconds" }).pipe(Effect.provideService(Transactions.Transactions, svc))
+    )
+    expect(r.digest).toBe("D")
+    expect(calls).toBe(3)
+  })
+
+  test("times out with a typed error", async () => {
+    const svc = txs((digest) => Effect.fail(new Transactions.TransactionNotFound({ digest })))
+    const e = await Effect.runPromise(
+      Transactions.waitFor("D", { timeout: "300 millis" }).pipe(Effect.flip, Effect.provideService(Transactions.Transactions, svc))
+    )
+    expect(e._tag).toBe("TransactionWaitTimeout")
+  })
+
+  test("does not retry transport failures", async () => {
+    let calls = 0
+    const { RpcError } = await import("../src/RpcError.ts")
+    const svc = txs(() => Effect.suspend(() => (calls++, Effect.fail(new RpcError({ method: "m", code: "UNAVAILABLE", message: "down" })))))
+    const e = await Effect.runPromise(Transactions.waitFor("D").pipe(Effect.flip, Effect.provideService(Transactions.Transactions, svc)))
+    expect(e._tag).toBe("RpcError")
+    expect(calls).toBe(1)
+  })
+})
+
+describe("CheckpointData.follow", () => {
+  const cp = (n: number): CheckpointData.Checkpoint => ({ sequenceNumber: BigInt(n), digest: `c${n}`, epoch: 0n, timestampMs: 0n, transactions: [] })
+  const range = (a: number, b: number) => Array.from({ length: b - a }, (_, i) => cp(a + i))
+
+  test("history, then live; fills the gap and drops overlap", async () => {
+    let tip = 13 // the list index trails: first gap fill only reaches 13
+    const listCalls: Array<string> = []
+    const svc = CheckpointData.CheckpointData.of({
+      get: () => Effect.die("no"),
+      list: (o) =>
+        Stream.suspend(() => {
+          const start = Number(o?.start ?? 0n)
+          const end = Math.min(o?.end === undefined ? tip : Number(o.end), tip)
+          listCalls.push(`${start}-${end}`)
+          tip += 2
+          return Stream.fromIterable(range(start, end))
+        }),
+      // The subscription starts at 16 with an overlap re-delivery of 16.
+      subscribe: Stream.fromIterable([cp(16), cp(16), cp(17), cp(18)])
+    })
+    const got = await Effect.runPromise(
+      CheckpointData.follow(10n).pipe(Stream.take(9), Stream.runCollect, Effect.provideService(CheckpointData.CheckpointData, svc))
+    )
+    expect(got.map((c) => Number(c.sequenceNumber))).toEqual(range(10, 19).map((c) => Number(c.sequenceNumber)))
+    expect(listCalls[0]).toBe("10-13")
+  })
+})

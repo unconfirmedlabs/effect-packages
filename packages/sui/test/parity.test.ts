@@ -1,0 +1,143 @@
+/**
+ * Byte-for-byte parity with @mysten/sui (a devDependency used only as the reference).
+ */
+import { bcs as mysten } from "@mysten/sui/bcs"
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
+import { Inputs, Transaction, TransactionDataBuilder } from "@mysten/sui/transactions"
+import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
+import { base58 } from "@scure/base"
+import { Bcs } from "@unconfirmed/bcs"
+import { describe, expect, test } from "bun:test"
+import { Effect, Option, Result } from "effect"
+import { Address, Ed25519, Hash, Ptb, Signer, TransactionData as T, TypeTag } from "../src/index.ts"
+import { toB64, toMysten } from "./support.ts"
+
+const A = Address.normalize
+const D = (seed: number) => base58.encode(new Uint8Array(32).fill(seed)) as T.ObjectDigest
+const sender = A("0x1234")
+const gasRef = { objectId: A("0xfeed"), version: 9n, digest: D(7) }
+
+const sample: T.TransactionData = {
+  _tag: "V1",
+  kind: {
+    _tag: "ProgrammableTransaction",
+    inputs: [
+      { _tag: "Pure", bytes: new Uint8Array([1, 2, 3]) },
+      { _tag: "Object", value: { _tag: "ImmOrOwnedObject", objectId: A("0xabc"), version: 7n, digest: D(9) } },
+      { _tag: "Object", value: { _tag: "SharedObject", objectId: A("0x6"), initialSharedVersion: 1n, mutability: { _tag: "Immutable" } } },
+      { _tag: "Object", value: { _tag: "Receiving", objectId: A("0xdef"), version: 2n, digest: D(3) } }
+    ],
+    commands: [
+      { _tag: "SplitCoins", coin: { _tag: "GasCoin" }, amounts: [{ _tag: "Input", value: 0 }] },
+      {
+        _tag: "MoveCall",
+        package: A("0x2"),
+        module: "coin",
+        function: "value",
+        typeArguments: [TypeTag.parse("0x2::sui::SUI")],
+        arguments: [{ _tag: "NestedResult", value: [0, 0] }, { _tag: "Input", value: 2 }]
+      },
+      { _tag: "MakeMoveVec", type: Option.some(TypeTag.parse("vector<0x2::coin::Coin<0x2::sui::SUI>>")), elements: [] },
+      { _tag: "TransferObjects", objects: [{ _tag: "Result", value: 0 }], address: { _tag: "Input", value: 1 } }
+    ]
+  },
+  sender,
+  gasData: { payment: [gasRef], owner: sender, price: 1000n, budget: 5_000_000n },
+  expiration: {
+    _tag: "ValidDuring",
+    minEpoch: Option.some(10n),
+    maxEpoch: Option.some(11n),
+    minTimestamp: Option.none(),
+    maxTimestamp: Option.none(),
+    chain: D(1),
+    nonce: 42
+  }
+}
+
+describe("TransactionData", () => {
+  const theirs = () => mysten.TransactionData.serialize(toMysten(Bcs.layoutOf(T.TransactionData), sample)).toBytes()
+
+  test("encodes like @mysten/sui", () => expect(toB64(T.encode(sample))).toBe(toB64(theirs())))
+  test("decodes @mysten/sui bytes and re-encodes identically", () => {
+    const back = Result.getOrThrow(T.decode(theirs()))
+    expect(toB64(T.encode(back))).toBe(toB64(theirs()))
+  })
+  test("digest matches", () => {
+    expect(Hash.transactionDigest(T.encode(sample))).toBe(TransactionDataBuilder.getDigestFromBytes(theirs()))
+  })
+  test("type tags round-trip", () => {
+    const s = "vector<0x2::coin::Coin<0x2::sui::SUI>>"
+    expect(TypeTag.format(TypeTag.parse(s))).toBe(TypeTag.normalizeString(s))
+    expect(Bcs.encodeSync(TypeTag.TypeTag)(TypeTag.parse(s))).toEqual(mysten.TypeTag.serialize(s).toBytes())
+  })
+})
+
+describe("Ptb", () => {
+  const coinRef = { objectId: A("0xbeef"), version: 3n, digest: D(4) }
+  const payTwo = (to: Address.Address, a: bigint, b: bigint) =>
+    Effect.gen(function*() {
+      const coins = yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(a), yield* Ptb.u64(b)])
+      yield* Ptb.transferObjects(coins, yield* Ptb.address(to))
+    })
+
+  test("builds the same bytes as Transaction.build", async () => {
+    const { draft } = await Effect.runPromise(
+      Ptb.build(Effect.gen(function*() {
+        const coin = yield* Ptb.objectArg({ _tag: "ImmOrOwnedObject", ...coinRef })
+        yield* Ptb.mergeCoins(Ptb.gas, [coin])
+        yield* payTwo(A("0xcafe"), 100n, 200n)
+        yield* Ptb.moveCall({ target: "0x2::coin::value", typeArguments: ["0x2::sui::SUI"], arguments: [Ptb.gas] })
+      }))
+    )
+    const ours = T.encode({
+      _tag: "V1",
+      kind: { _tag: "ProgrammableTransaction", ...Ptb.toProgrammable(draft)! },
+      sender,
+      gasData: { payment: [gasRef], owner: sender, price: 1000n, budget: 10_000_000n },
+      expiration: { _tag: "None" }
+    })
+
+    const tx = new Transaction()
+    tx.setSender(sender)
+    tx.setGasPrice(1000)
+    tx.setGasBudget(10_000_000)
+    tx.setGasPayment([{ ...gasRef, version: "9" }])
+    tx.setExpiration({ None: true })
+    tx.mergeCoins(tx.gas, [tx.object(Inputs.ObjectRef({ ...coinRef, version: "3" }))])
+    const coins = tx.splitCoins(tx.gas, [tx.pure.u64(100), tx.pure.u64(200)])
+    tx.transferObjects([coins[0]!, coins[1]!], tx.pure.address(A("0xcafe")))
+    tx.moveCall({ target: "0x2::coin::value", typeArguments: ["0x2::sui::SUI"], arguments: [tx.gas] })
+    expect(toB64(ours)).toBe(toB64(await tx.build()))
+  })
+
+  test("a bad pure value is a typed failure", async () => {
+    const exit = await Effect.runPromiseExit(Ptb.build(Ptb.u8(300)))
+    expect(JSON.stringify(exit)).toContain("InvalidPureValue")
+  })
+})
+
+describe("Ed25519", () => {
+  const seed = new Uint8Array(32).map((_, i) => i + 1)
+  const kp = Ed25519Keypair.fromSecretKey(seed)
+
+  test("address and transaction signature match", async () => {
+    const signer = await Effect.runPromise(Ed25519.fromSecretKey(seed))
+    expect(signer.address).toBe(kp.toSuiAddress() as Address.Address)
+    const bytes = T.encode(sample)
+    const ours = await Effect.runPromise(Signer.signTransaction(signer, bytes))
+    expect(toB64(ours.signature)).toBe((await kp.signTransaction(bytes)).signature)
+  })
+
+  test("personal message signatures verify with @mysten/sui", async () => {
+    const signer = await Effect.runPromise(Ed25519.fromSecretKey(seed))
+    const msg = new TextEncoder().encode("hello")
+    const ours = await Effect.runPromise(Signer.signPersonalMessage(signer, msg))
+    const pk = await verifyPersonalMessageSignature(msg, toB64(ours.signature), { offline: true })
+    expect(pk.toSuiAddress()).toBe(signer.address)
+  })
+
+  test("wrong key length is a typed failure", async () => {
+    const exit = await Effect.runPromiseExit(Ed25519.fromSecretKey(new Uint8Array(5)))
+    expect(JSON.stringify(exit)).toContain("InvalidKey")
+  })
+})

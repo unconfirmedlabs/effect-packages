@@ -1,0 +1,21 @@
+{
+  "name": "@effect-sdks/sui-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test test/",
+    "proto": "protoc -I proto-src --include_imports -o proto/sui-rpc.binpb $(cd proto-src && find sui -name '*.proto') && bun scripts-embed.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@scure/base": "^2.3.0",
+    "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@mysten/sui": "3.0.1",
+    "@types/bun": "^1.4.0",
+    "typescript": "5.9.3"
+  }
+}
