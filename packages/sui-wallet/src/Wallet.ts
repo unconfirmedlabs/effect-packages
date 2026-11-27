@@ -17,13 +17,19 @@
  *
  * Failures are typed: a missing feature is `UnsupportedFeature`, a user
  * rejection is `SigningError` with reason `"rejected"`, a connect refusal is
- * `ConnectionError` with reason `"rejected"`.
+ * `ConnectionError` with reason `"rejected"`. A failed
+ * `signAndExecuteTransaction` the wallet may have submitted is
+ * `ExecutionUnconfirmed`, never a signing failure.
+ *
+ * Only accounts on a `sui:` chain are used (multi-chain wallets also report
+ * EVM or Solana accounts).
  */
 import { base64 } from "@scure/base"
 import { getWallets } from "@wallet-standard/app"
 import type { IdentifierString, Wallet as StandardWallet, WalletAccount } from "@wallet-standard/base"
 import * as Effect from "effect/Effect"
 import * as Queue from "effect/Queue"
+import * as Result from "effect/Result"
 import type * as Scope from "effect/Scope"
 import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
@@ -69,10 +75,12 @@ export class ConnectionError extends Schema.TaggedError<ConnectionError>()("Conn
 }) {}
 
 /**
- * The wallet ran `sui:signAndExecuteTransaction` but what it returned can't be
- * trusted (missing or undecodable fields, or a digest that isn't the returned
- * bytes'). The transaction may have executed: check `digest` (if any) on chain
- * before retrying.
+ * `sui:signAndExecuteTransaction` failed or answered something that can't be
+ * trusted, after the wallet may have submitted: its promise rejected with
+ * anything but a coded user refusal (a timeout waiting for effects, an RPC
+ * error), or it returned missing or undecodable fields, or a digest that isn't
+ * the returned bytes'. The transaction may have executed: check `digest` (when
+ * the wallet reported one) on chain before retrying.
  */
 export class ExecutionUnconfirmed extends Schema.TaggedError<ExecutionUnconfirmed>()("ExecutionUnconfirmed", {
   wallet: Schema.String,
@@ -86,26 +94,65 @@ export class ExecutionUnconfirmed extends Schema.TaggedError<ExecutionUnconfirme
 
 /** `WalletStandardError` `WALLET_STANDARD_ERROR__USER__REQUEST_REJECTED`. */
 const USER_REJECTED = 4001000
+/** EIP-1193 `userRejectedRequest`, which some wallets reuse. */
+const EIP1193_REJECTED = 4001
 /**
- * A user's refusal in words: "User rejected the request", "Rejected by user",
- * "Request cancelled". Anchored to the user or the start of the message, so
- * validator and RPC failures ("rejected as invalid by validators",
- * "cancelled due to congestion", "403 Access denied") don't match.
+ * A user's refusal in words, with the user as the one refusing: "User
+ * rejected the request", "The user denied the signature", "Rejected by (the)
+ * user", "User closed the modal". Validator and RPC failures that merely
+ * contain a refusal word ("Transaction rejected by validators", "Request
+ * denied: rate limit exceeded", "The user's gas coin was rejected") don't match.
  */
 const USER_WORDING =
-  /\buser\b.*\b(reject|denied|declin|cancel)|\b(rejected|denied|declined|cancell?ed) by (the )?user\b|^\s*(the )?(request |transaction |signature )?(rejected|denied|declined|cancell?ed)\b/i
-const REJECTION_NAME = /user.?reject|rejected|cancell?ed/i
+  /\buser (has )?(rejected|denied|declined|cancell?ed|closed|refused)\b|\b(rejected|denied|declined|cancell?ed|refused) by (the )?user\b/i
+/** An error class named for the user's refusal (`UserRejectedRequestError`), not any "...RejectedError". */
+const REJECTION_NAME = /user.?(reject|denied|declin|cancel|refus)/i
 
-/** Did the user refuse? Wallet-standard code 4001000 or EIP-1193's 4001 first; then a refusal's name or wording. */
+/** A coded refusal: wallet-standard 4001000 or EIP-1193 4001. */
+const isCodedRejection = (e: unknown): boolean => {
+  if (typeof e !== "object" || e === null) return false
+  const x = e as { readonly code?: unknown; readonly context?: { readonly __code?: unknown } }
+  return x.context?.__code === USER_REJECTED || x.code === EIP1193_REJECTED || x.code === USER_REJECTED
+}
+
+/** A string property of an error-like value, read without throwing (getters, proxies). */
+const field = (e: unknown, key: "name" | "message"): string | undefined => {
+  try {
+    const v = (e as Record<string, unknown>)[key]
+    return typeof v === "string" ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Did the user refuse? A coded refusal (wallet-standard 4001000, EIP-1193
+ * 4001) first; then a refusal's name or wording with the user as its agent.
+ */
 export const isRejection = (e: unknown): boolean => {
   if (typeof e === "string") return USER_WORDING.test(e)
   if (typeof e !== "object" || e === null) return false
-  const x = e as { readonly code?: unknown; readonly context?: { readonly __code?: unknown }; readonly name?: unknown; readonly message?: unknown }
-  if (x.context?.__code === USER_REJECTED || x.code === 4001 || x.code === USER_REJECTED) return true
-  return REJECTION_NAME.test(String(x.name ?? "")) || USER_WORDING.test(String(x.message ?? ""))
+  if (isCodedRejection(e)) return true
+  return REJECTION_NAME.test(field(e, "name") ?? "") || USER_WORDING.test(field(e, "message") ?? "")
 }
 
-const describe = (e: unknown) => (e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e) ?? String(e))
+/** A failure as text. Total: a circular or `bigint`-holding value, or a cross-realm error, still describes. */
+const describe = (e: unknown): string => {
+  if (typeof e === "string") return e
+  const message = typeof e === "object" && e !== null ? field(e, "message") : undefined
+  if (message !== undefined) return message
+  try {
+    const json = JSON.stringify(e)
+    if (json !== undefined && json !== "{}") return json
+  } catch {
+    // circular, or a bigint inside: fall through
+  }
+  try {
+    return String(e)
+  } catch {
+    return "unknown error"
+  }
+}
 
 const signingError = (wallet: Wallet, operation: string) => (e: unknown) =>
   new Signer.SigningError({
@@ -175,16 +222,36 @@ export interface Account {
   readonly account: WalletAccount
 }
 
+const decodeAddress = Schema.decodeUnknownResult(Address.Strict)
+
+/**
+ * A Sui account: it lists a `sui:` chain (or lists none, and then the wallet's
+ * chains apply) and has a full 32-byte address. A multi-chain wallet's EVM or
+ * Solana account is skipped, rather than padded into a "valid" Sui address.
+ */
 const toAccount = (a: WalletAccount): Account | undefined => {
   try {
-    return { address: Address.normalize(a.address), publicKey: new Uint8Array(a.publicKey), chains: a.chains, label: a.label, account: a }
+    const chains = Array.isArray(a.chains) ? a.chains : []
+    if (chains.length > 0 && !chains.some((c) => typeof c === "string" && c.startsWith("sui:"))) return undefined
+    const address = decodeAddress(a.address)
+    if (Result.isFailure(address)) return undefined
+    return { address: address.success, publicKey: new Uint8Array(a.publicKey), chains, label: a.label, account: a }
   } catch {
     return undefined
   }
 }
 
-/** The accounts the wallet has authorized (those with a valid Sui address). */
-export const accounts = (wallet: Wallet): ReadonlyArray<Account> => wallet.accounts.flatMap((a) => toAccount(a) ?? [])
+const toAccounts = (list: unknown): ReadonlyArray<Account> =>
+  Array.isArray(list) ? list.flatMap((a: WalletAccount) => toAccount(a) ?? []) : []
+
+/** The Sui accounts the wallet has authorized (on a `sui:` chain, with a valid Sui address). */
+export const accounts = (wallet: Wallet): ReadonlyArray<Account> => {
+  try {
+    return toAccounts(wallet.accounts)
+  } catch {
+    return []
+  }
+}
 
 /** `standard:connect`: ask for access; answer the authorized accounts. `silent` connects only if already authorized. */
 export const connect = (
@@ -197,7 +264,13 @@ export const connect = (
     try: () => feature.connect(options?.silent !== undefined ? { silent: options.silent } : undefined),
     catch: (e) =>
       new ConnectionError({ wallet: wallet.name, reason: isRejection(e) ? "rejected" : "failed", message: describe(e) })
-  }).pipe(Effect.map((r) => r.accounts.flatMap((a) => toAccount(a) ?? [])))
+  }).pipe(
+    Effect.flatMap((r) =>
+      typeof r === "object" && r !== null && Array.isArray(r.accounts)
+        ? Effect.succeed(toAccounts(r.accounts))
+        : Effect.fail(new ConnectionError({ wallet: wallet.name, reason: "failed", message: `${wallet.name} answered connect without accounts` }))
+    )
+  )
 }
 
 /** `standard:disconnect`, when the wallet has it (a no-op otherwise). */
@@ -235,11 +308,14 @@ export const accountChanges = (wallet: Wallet): Stream.Stream<ReadonlyArray<Acco
 
 export interface Target {
   readonly chain: Features.SuiChain
-  /** Which authorized account (default: the first). */
+  /** Which authorized account (default: the first on `chain`). */
   readonly account?: Address.Address | string
 }
 
-const pick = (wallet: Wallet, address: string | undefined): Effect.Effect<Account, AccountNotFound> =>
+/** The chains an account acts on: its own, or the wallet's when it lists none. */
+const chainsOf = (wallet: Wallet, a: Account) => (a.chains.length > 0 ? a.chains : wallet.chains)
+
+const pick = (wallet: Wallet, address: string | undefined, chain?: Features.SuiChain): Effect.Effect<Account, AccountNotFound> =>
   Effect.suspend(() => {
     let wanted: Address.Address | undefined
     if (address !== undefined) {
@@ -250,15 +326,16 @@ const pick = (wallet: Wallet, address: string | undefined): Effect.Effect<Accoun
       }
     }
     const all = accounts(wallet)
-    const a = wanted === undefined ? all[0] : all.find((x) => x.address === wanted)
+    const a = wanted !== undefined
+      ? all.find((x) => x.address === wanted)
+      : (chain !== undefined && all.find((x) => chainsOf(wallet, x).includes(chain))) || all[0]
     return a ? Effect.succeed(a) : Effect.fail(new AccountNotFound({ wallet: wallet.name, ...(wanted && { address: wanted }) }))
   })
 
 /** Pick an authorized account that can act on `chain`. */
 export const account = (wallet: Wallet, target: Target): Effect.Effect<Account, AccountNotFound | UnsupportedChain> =>
-  Effect.flatMap(pick(wallet, target.account), (a) => {
-    const chains = a.chains.length > 0 ? a.chains : wallet.chains
-    return chains.includes(target.chain)
+  Effect.flatMap(pick(wallet, target.account, target.chain), (a) => {
+    return chainsOf(wallet, a).includes(target.chain)
       ? Effect.succeed(a)
       : Effect.fail(new UnsupportedChain({ wallet: wallet.name, chain: target.chain }))
   })
@@ -337,7 +414,15 @@ export const signAndExecuteTransaction = (
     const out = yield* Effect.tryPromise({
       try: (signal) =>
         feature.signAndExecuteTransaction({ transaction: transactionInput(json), account: a.account, chain: target.chain, signal }),
-      catch: signingError(wallet, Features.SuiSignAndExecuteTransaction)
+      // Only a coded refusal proves nothing was submitted. Anything else (a timeout waiting for
+      // effects, an RPC error, a refusal in words only) may come after the wallet submitted.
+      catch: (e): Signer.SigningError | ExecutionUnconfirmed =>
+        isCodedRejection(e)
+          ? signingError(wallet, Features.SuiSignAndExecuteTransaction)(e)
+          : new ExecutionUnconfirmed({
+            wallet: wallet.name,
+            message: `${wallet.name} ${Features.SuiSignAndExecuteTransaction} failed, possibly after submitting: ${describe(e)}`
+          })
     })
     // From here the wallet has submitted: a bad answer is not a signing failure.
     const reported = typeof out?.digest === "string" ? out.digest : undefined

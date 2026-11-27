@@ -21,7 +21,8 @@ const PK = 33
 const check = (publicKey: Uint8Array, signature: Uint8Array, intentMessage: Uint8Array) => {
   let ok = false
   try {
-    ok = p256.verify(signature, Hash.blake2b256(intentMessage), publicKey)
+    // Explicit, not noble's defaults: Sui refuses high-S signatures, and the curve hashes with SHA-256.
+    ok = p256.verify(signature, Hash.blake2b256(intentMessage), publicKey, { lowS: true, prehash: true })
   } catch {
     ok = false
   }
@@ -50,8 +51,9 @@ export const fromSecretKey = (secretKey: Uint8Array): Effect.Effect<Signer.Signe
   let pk: Uint8Array
   try {
     pk = p256.getPublicKey(secretKey, true)
-  } catch (e) {
-    return Effect.fail(new Signer.InvalidKey({ scheme: NAME, reason: String(e) }))
+  } catch {
+    // A fixed reason: the curve library's message is not ours to vouch for (it must never carry key bytes).
+    return Effect.fail(new Signer.InvalidKey({ scheme: NAME, reason: "invalid secret key (expected 32 bytes, a non-zero scalar below the curve order)" }))
   }
   const sk = secretKey.slice()
   return Effect.succeed({
@@ -59,7 +61,7 @@ export const fromSecretKey = (secretKey: Uint8Array): Effect.Effect<Signer.Signe
     publicKey: { flag: FLAG, bytes: pk },
     sign: (intentMessage) =>
       Effect.sync(() => {
-        const sig = p256.sign(Hash.blake2b256(intentMessage), sk, { lowS: true })
+        const sig = p256.sign(Hash.blake2b256(intentMessage), sk, { lowS: true, prehash: true })
         const out = new Uint8Array(1 + SIG + PK)
         out[0] = FLAG
         out.set(sig, 1)

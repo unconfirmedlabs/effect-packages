@@ -10,7 +10,8 @@ import * as Nonce from "@unconfirmed/sui-zklogin/Nonce"
 import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
-import { claims, inputs } from "../../sui-zklogin/test/fixtures.ts"
+import { Schema } from "effect"
+import { claims, inputs, makeJwt } from "../../sui-zklogin/test/fixtures.ts"
 import * as EnokiHttp from "../src/EnokiHttp.ts"
 import * as Sponsor from "../src/Sponsor.ts"
 import * as ZkLoginFlow from "../src/ZkLoginFlow.ts"
@@ -113,8 +114,9 @@ describe("Sponsor", () => {
       return yield* Effect.flip(Sponsor.run(recipe, { signer, jwt: "a.b.c" }))
     }).pipe(Effect.provide(Layer.merge(enoki(http), noChain))))
     expect(e._tag).toBe("EnokiError")
-    expect(http.requests[0]!.headers["zklogin-jwt"]).toBe("a.b.c")
-    expect(Object.keys(JSON.parse(http.requests[0]!.body!))).toEqual(["transactionBlockKindBytes"])
+    const sponsorReq = http.requests.find((r) => new URL(r.url).pathname === "/v1/transaction-blocks/sponsor")!
+    expect(sponsorReq.headers["zklogin-jwt"]).toBe("a.b.c")
+    expect(Object.keys(JSON.parse(sponsorReq.body!))).toEqual(["transactionBlockKindBytes"])
   })
 
   test("bytes that change the kind or sender are refused before signing", async () => {
@@ -128,7 +130,8 @@ describe("Sponsor", () => {
         return yield* Effect.flip(Sponsor.run(recipe, { signer }))
       }).pipe(Effect.provide(Layer.merge(enoki(http), noChain))))
       expect(e._tag).toBe("UnexpectedSponsoredTransaction")
-      expect(http.requests.length).toBe(1) // never executed
+      // never executed (the other request is getApp, for the default network's sponsor)
+      expect(http.requests.filter((r) => new URL(r.url).pathname.startsWith("/v1/transaction-blocks/")).length).toBe(1)
     }
   })
 
@@ -173,6 +176,93 @@ describe("Sponsor", () => {
     expect(executed).toBe(false)
   })
 
+  test("a failed execute keeps the signed bytes, signature and digest; re-executing posts the same signature", async () => {
+    let failExecute = true
+    const base = fakeEnoki()
+    const http = scripted((req) => {
+      const path = new URL(req.url).pathname
+      if (path.startsWith("/v1/transaction-blocks/sponsor/") && failExecute) return { status: 504, body: "gateway timeout" }
+      return base.route(req)
+    })
+    const { e, signer } = await Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.fromSecretKey(seed(3))
+      return { e: yield* Effect.flip(Sponsor.run(recipe, { signer, network: "testnet" })), signer }
+    }).pipe(Effect.provide(Layer.merge(enoki(http), noChain))))
+    expect(e._tag).toBe("ExecutionUnconfirmed")
+    const unconfirmed = e as Sponsor.ExecutionUnconfirmed
+    expect(unconfirmed.digest).toBe(Hash.transactionDigest(unconfirmed.bytes))
+    expect(unconfirmed.cause).toMatchObject({ _tag: "EnokiError", status: 504 })
+    expect(unconfirmed.retryable).toBe(true)
+    const v = await Effect.runPromise(
+      Verify.transaction(unconfirmed.bytes, unconfirmed.signature, { address: signer.address }).pipe(
+        Effect.provide(SignatureScheme.SignatureSchemes.layer(Ed25519.scheme))
+      )
+    )
+    expect(v.address).toBe(signer.address)
+
+    // Retry the execute step alone: the same digest and signature, no new sponsorship.
+    failExecute = false
+    const sponsorCalls = () => http.requests.filter((r) => new URL(r.url).pathname === "/v1/transaction-blocks/sponsor").length
+    const before = sponsorCalls()
+    const done = await Effect.runPromise(
+      Sponsor.execute({ digest: unconfirmed.digest, bytes: unconfirmed.bytes, signature: unconfirmed.signature }).pipe(
+        Effect.provide(enoki(http))
+      )
+    )
+    expect(done.digest).toBe(unconfirmed.digest)
+    expect(sponsorCalls()).toBe(before)
+    const posts = http.requests.filter((r) => new URL(r.url).pathname === `/v1/transaction-blocks/sponsor/${unconfirmed.digest}`)
+    expect(posts.map((r) => JSON.parse(r.body!).signature)).toEqual([b64(unconfirmed.signature), b64(unconfirmed.signature)])
+  })
+
+  test("sponsor is a step of its own: it answers checked bytes and executes nothing", async () => {
+    const http = fakeEnoki()
+    const sponsored = await Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.fromSecretKey(seed(3))
+      const { draft } = yield* Ptb.build(recipe)
+      const kind = yield* Sponsor.transactionKind(draft)
+      return yield* Sponsor.sponsor(kind, { sender: signer.address, network: "testnet" })
+    }).pipe(Effect.provide(enoki(http))))
+    expect(sponsored.digest).toBe(Hash.transactionDigest(sponsored.bytes))
+    expect(http.requests.some((r) => /\/sponsor\/[^/]+$/.test(new URL(r.url).pathname))).toBe(false)
+  })
+
+  test("getApp is asked once per layer, not per transaction, and asked again after a stale-sponsor error", async () => {
+    let stale = false
+    const base = fakeEnoki()
+    const http = scripted((req) => {
+      if (stale && new URL(req.url).pathname === "/v1/transaction-blocks/sponsor") {
+        return { status: 400, body: { errors: [{ code: "invalid_gas_owner", message: "sponsor changed" }] } }
+      }
+      return base.route(req)
+    })
+    const apps = () => http.requests.filter((r) => r.url.endsWith("/v1/app")).length
+    await Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.fromSecretKey(seed(3))
+      for (let i = 0; i < 3; i++) yield* Sponsor.run(recipe, { signer, network: "testnet" })
+      expect(apps()).toBe(1)
+      stale = true
+      const e = yield* Effect.flip(Sponsor.run(recipe, { signer, network: "testnet" }))
+      expect(e).toMatchObject({ _tag: "EnokiError", code: "invalid_gas_owner" })
+      stale = false
+      yield* Sponsor.run(recipe, { signer, network: "testnet" })
+      expect(apps()).toBe(2)
+    }).pipe(Effect.provide(Layer.merge(enoki(http), noChain))))
+  })
+
+  test("an omitted network pins Enoki's default (mainnet) sponsor", async () => {
+    const MAINNET_SPONSOR = Address.normalize("0x3a1")
+    const base = fakeEnoki()
+    const http = scripted((req) =>
+      req.url.endsWith("/v1/app")
+        ? { body: { data: { allowedOrigins: [], authenticationProviders: [], domains: [], sponsorAddresses: { mainnet: MAINNET_SPONSOR } } } }
+        : base.route(req)
+    )
+    const { e, executed } = await refused(http)
+    expect((e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain(`not the sponsor ${MAINNET_SPONSOR}`)
+    expect(executed).toBe(false)
+  })
+
   test("budget and price caps", async () => {
     const budget = await refused(fakeEnoki(), { maxBudget: 1_000_000n })
     expect((budget.e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("budget")
@@ -211,7 +301,7 @@ describe("ZkLoginFlow", () => {
       const { session, done, ephemeral } = await Effect.runPromise(Effect.gen(function*() {
         const ephemeral = yield* Ed25519.fromSecretKey(seed(4))
         const session = yield* ZkLoginFlow.start({ ephemeral, network: "testnet" })
-        const done = yield* ZkLoginFlow.complete(session, "header.payload.sig")
+        const done = yield* ZkLoginFlow.complete(session, makeJwt({ ...claims, nonce: session.nonce }))
         return { session, done, ephemeral }
       }).pipe(Effect.provide(enoki(http))))
       expect(session).toMatchObject({ randomness: "77", maxEpoch: 12, network: "testnet" })
@@ -222,7 +312,7 @@ describe("ZkLoginFlow", () => {
       const nonceReq = http.requests.find((r) => r.url.endsWith("/zklogin/nonce"))!
       expect(JSON.parse(nonceReq.body!)).toEqual({ network: "testnet", ephemeralPublicKey: b64(Uint8Array.from([0, ...ephemeral.publicKey.bytes])) })
       const zkpReq = http.requests.find((r) => r.url.endsWith("/zklogin/zkp"))!
-      expect(zkpReq.headers["zklogin-jwt"]).toBe("header.payload.sig")
+      expect(zkpReq.headers["zklogin-jwt"]).toBe(makeJwt({ ...claims, nonce: session.nonce }))
       expect(JSON.parse(zkpReq.body!)).toMatchObject({ maxEpoch: 12, randomness: "77", network: "testnet" })
     })
   }
@@ -243,9 +333,42 @@ describe("ZkLoginFlow", () => {
     const e = await Effect.runPromise(Effect.gen(function*() {
       const ephemeral = yield* Ed25519.fromSecretKey(seed(4))
       const session = yield* ZkLoginFlow.start({ ephemeral })
-      return yield* Effect.flip(ZkLoginFlow.complete(session, "h.p.s"))
+      return yield* Effect.flip(ZkLoginFlow.complete(session, makeJwt({ ...claims, nonce: session.nonce })))
     }).pipe(Effect.provide(enoki(http))))
     expect(e._tag).toBe("InvalidKey")
+  })
+
+  test("a JWT for another login is refused locally, before any Enoki call", async () => {
+    const http = flow(Address.normalize("0x1"))
+    const { mismatch, missing, malformed, calls } = await Effect.runPromise(Effect.gen(function*() {
+      const ephemeral = yield* Ed25519.fromSecretKey(seed(4))
+      const session = yield* ZkLoginFlow.start({ ephemeral })
+      const calls = http.requests.length
+      return {
+        mismatch: yield* Effect.flip(ZkLoginFlow.complete(session, makeJwt({ ...claims, nonce: "someone-elses-nonce" }))),
+        missing: yield* Effect.flip(ZkLoginFlow.complete(session, makeJwt({ ...claims, nonce: undefined }))),
+        malformed: yield* Effect.flip(ZkLoginFlow.complete(session, "h.p.s")),
+        calls: http.requests.length - calls
+      }
+    }).pipe(Effect.provide(enoki(http))))
+    expect(mismatch).toMatchObject({ _tag: "JwtNonceMismatch", received: "someone-elses-nonce" })
+    expect(missing).toMatchObject({ _tag: "JwtNonceMismatch" })
+    expect(malformed._tag).toBe("InvalidJwt")
+    expect(calls).toBe(0)
+  })
+
+  test("session data round-trips through JSON; complete takes it back with the ephemeral signer", async () => {
+    const identifierAddress = PublicIdentifier.toAddress(identifier)
+    const http = flow(identifierAddress)
+    const done = await Effect.runPromise(Effect.gen(function*() {
+      const ephemeral = yield* Ed25519.fromSecretKey(seed(4))
+      const { ephemeral: _, ...data } = yield* ZkLoginFlow.start({ ephemeral, network: "testnet" })
+      const saved = JSON.stringify(yield* Schema.encodeEffect(ZkLoginFlow.SessionData)(data))
+      // ... the OAuth redirect ...
+      const restored = yield* Schema.decodeUnknownEffect(ZkLoginFlow.SessionData)(JSON.parse(saved))
+      return yield* ZkLoginFlow.complete({ ...restored, ephemeral }, makeJwt({ ...claims, nonce: restored.nonce }))
+    }).pipe(Effect.provide(enoki(http))))
+    expect(done.address).toBe(identifierAddress)
   })
 
   test("authorizationUrl matches EnokiFlow's", () => {

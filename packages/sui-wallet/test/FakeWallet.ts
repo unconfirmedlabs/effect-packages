@@ -36,6 +36,12 @@ export interface FakeWalletOptions {
   readonly client?: unknown
   /** Refuse the next requests as a user would (wallet-standard code 4001000). */
   readonly reject?: { connect?: boolean; sign?: boolean }
+  /** Fail every signing request by throwing this value instead. */
+  readonly failWith?: () => unknown
+  /** Other accounts the wallet authorizes, listed before its Sui account (a multi-chain wallet). */
+  readonly otherAccounts?: ReadonlyArray<WalletAccount>
+  /** Sign a different message than the one asked for. */
+  readonly alterMessage?: (message: Uint8Array) => Uint8Array
   /** Change the transaction before signing, as a wallet re-resolving gas might. */
   readonly mutate?: (tx: Transaction) => void
   /** How `sui:signAndExecuteTransaction` submits (default: `client.core.executeTransaction`, else nothing). */
@@ -70,6 +76,7 @@ export const fakeWallet = (options: FakeWalletOptions): FakeWallet => {
   const emit = () => listeners.forEach((l) => l({ accounts }))
 
   const check = (input: Features.SuiSignTransactionInput) => {
+    if (options.failWith) throw options.failWith()
     if (options.reject?.sign) throw rejection()
     if (input.account.address !== account.address) throw new Error(`unknown account ${input.account.address}`)
     if (!chains.includes(input.chain as never)) throw new Error(`unsupported chain ${input.chain}`)
@@ -92,7 +99,7 @@ export const fakeWallet = (options: FakeWalletOptions): FakeWallet => {
       version: "1.0.0",
       connect: async () => {
         if (options.reject?.connect) throw rejection()
-        accounts = [account]
+        accounts = [...(options.otherAccounts ?? []), account]
         emit()
         return { accounts }
       }
@@ -135,9 +142,10 @@ export const fakeWallet = (options: FakeWalletOptions): FakeWallet => {
     "sui:signPersonalMessage": {
       version: "1.1.0",
       signPersonalMessage: async (input: Features.SuiSignPersonalMessageInput) => {
+        if (options.failWith) throw options.failWith()
         if (options.reject?.sign) throw rejection()
         if (input.account.address !== account.address) throw new Error(`unknown account ${input.account.address}`)
-        return options.keypair.signPersonalMessage(input.message)
+        return options.keypair.signPersonalMessage(options.alterMessage ? options.alterMessage(input.message) : input.message)
       }
     }
   }

@@ -8,10 +8,12 @@
  *
  * Cancelling the prompt (or letting it time out) is `SigningError` reason
  * `"rejected"`; no WebAuthn in this environment is `"unavailable"`.
- * Interrupting the effect aborts the prompt.
+ * Interrupting the effect aborts the prompt. Requests through one provider
+ * are asked one at a time, as WebAuthn allows a single pending prompt.
  */
 import * as Signer from "@unconfirmed/sui/Signer"
 import * as Effect from "effect/Effect"
+import * as Semaphore from "effect/Semaphore"
 import type * as Passkey from "./Passkey.ts"
 
 type DeepPartial<T> = T extends object ? { [P in keyof T]?: DeepPartial<T[P]> } : T
@@ -63,61 +65,67 @@ const ask = <A>(
     )
   })
 
-export const browserProvider = (name: string, options: BrowserProviderOptions = {}): Passkey.Provider => ({
-  create: () =>
-    ask(
-      (container, signal) =>
-        container.create({
-          signal,
-          publicKey: {
-            timeout: options.timeout ?? 60_000,
-            ...options,
-            rp: { name, ...options.rp },
-            user: {
-              name,
-              displayName: name,
-              ...options.user,
-              id: crypto.getRandomValues(new Uint8Array(10))
-            },
-            challenge: CREATE_CHALLENGE,
-            pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-            authenticatorSelection: {
-              authenticatorAttachment: "cross-platform",
-              residentKey: "required",
-              requireResidentKey: true,
-              userVerification: "required",
-              ...options.authenticatorSelection
-            }
-          } as PublicKeyCredentialCreationOptions
-        }),
-      (credential) => {
-        const response = credential.response as AuthenticatorAttestationResponse
-        const spki = typeof response.getPublicKey === "function" ? response.getPublicKey() : null
-        return spki ? { id: bytes(credential.rawId), publicKey: bytes(spki) } : undefined
-      }
-    ),
-  get: (challenge, credentialId) =>
-    ask(
-      (container, signal) =>
-        container.get({
-          signal,
-          publicKey: {
-            challenge: buffer(challenge),
-            // Mysten leaves rpId to the browser's default; pass it when the passkey was created for an explicit rp id.
-            ...(options.rp?.id !== undefined && { rpId: options.rp.id }),
-            userVerification: options.authenticatorSelection?.userVerification || "required",
-            timeout: options.timeout ?? 60_000,
-            ...(credentialId && { allowCredentials: [{ type: "public-key", id: buffer(credentialId) }] })
-          }
-        }),
-      (credential) => {
-        const response = credential.response as AuthenticatorAssertionResponse
-        return {
-          credentialId: bytes(credential.rawId),
-          authenticatorData: bytes(response.authenticatorData),
-          clientDataJSON: bytes(response.clientDataJSON),
-          signature: bytes(response.signature)
+export const browserProvider = (name: string, options: BrowserProviderOptions = {}): Passkey.Provider => {
+  // WebAuthn allows one pending request: a second prompt while one is open fails with NotAllowedError, which
+  // reads as the user cancelling. Requests through this provider (e.g. two passkey members of a multisig, which
+  // `MultiSig.signer` and `Tx.sign` ask concurrently) wait their turn instead.
+  const serial = Semaphore.withPermit(Semaphore.makeUnsafe(1))
+  return {
+    create: () =>
+      serial(ask(
+        (container, signal) =>
+          container.create({
+            signal,
+            publicKey: {
+              timeout: options.timeout ?? 60_000,
+              ...options,
+              rp: { name, ...options.rp },
+              user: {
+                name,
+                displayName: name,
+                ...options.user,
+                id: crypto.getRandomValues(new Uint8Array(10))
+              },
+              challenge: CREATE_CHALLENGE,
+              pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+              authenticatorSelection: {
+                authenticatorAttachment: "cross-platform",
+                residentKey: "required",
+                requireResidentKey: true,
+                userVerification: "required",
+                ...options.authenticatorSelection
+              }
+            } as PublicKeyCredentialCreationOptions
+          }),
+        (credential) => {
+          const response = credential.response as AuthenticatorAttestationResponse
+          const spki = typeof response.getPublicKey === "function" ? response.getPublicKey() : null
+          return spki ? { id: bytes(credential.rawId), publicKey: bytes(spki) } : undefined
         }
-      }
-    )
-})
+      )),
+    get: (challenge, credentialId) =>
+      serial(ask(
+        (container, signal) =>
+          container.get({
+            signal,
+            publicKey: {
+              challenge: buffer(challenge),
+              // Mysten leaves rpId to the browser's default; pass it when the passkey was created for an explicit rp id.
+              ...(options.rp?.id !== undefined && { rpId: options.rp.id }),
+              userVerification: options.authenticatorSelection?.userVerification || "required",
+              timeout: options.timeout ?? 60_000,
+              ...(credentialId && { allowCredentials: [{ type: "public-key", id: buffer(credentialId) }] })
+            }
+          }),
+        (credential) => {
+          const response = credential.response as AuthenticatorAssertionResponse
+          return {
+            credentialId: bytes(credential.rawId),
+            authenticatorData: bytes(response.authenticatorData),
+            clientDataJSON: bytes(response.clientDataJSON),
+            signature: bytes(response.signature)
+          }
+        }
+      ))
+  }
+}

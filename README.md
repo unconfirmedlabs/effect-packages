@@ -180,9 +180,13 @@ A test provides only those services. A transport can implement a subset, and the
 
 ```ts
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
-SuiGrpc.layer({ baseUrl })                                  // everything
+SuiGrpc.layerCore({ baseUrl })                              // Chain, Objects, Coins, Packages, Transactions: all Tx.run needs
+DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl })))  // core + one more (layerCore also provides GrpcWeb)
 ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))  // just Objects
+SuiGrpc.layer({ baseUrl })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
 ```
+
+Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 27 KB of checkpoint, event and dynamic-field code that a transaction never calls.
 
 **2. Signature schemes are plugins.** The core dispatches on the flag byte but knows only the schemes you install:
 
@@ -271,13 +275,13 @@ const accounts = yield* Wallet.connect(wallet)                   // ConnectionEr
 const signer = yield* Wallet.signer(wallet, { chain: "sui:testnet" })
 yield* Tx.run(recipe, { signer })                                // we resolve, the wallet signs, we execute its bytes
 yield* signer.signAndExecuteTransaction({ draft })               // or: the wallet resolves and submits
-                                                                // (a bad answer after submitting is ExecutionUnconfirmed, with the digest: check before retrying)
+                                                                // (a failure after the wallet may have submitted is ExecutionUnconfirmed: check before retrying)
 yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
 ```
 
-A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`.
+A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`. For `signAndExecuteTransaction`, only a coded refusal (wallet-standard `4001000`, EIP-1193 `4001`) is a rejection: any other failure (a timeout waiting for effects, an RPC error) or a bad answer is `ExecutionUnconfirmed`, with the digest when the wallet reported one. Only accounts on a `sui:` chain are used, so a multi-chain wallet's EVM account is never picked.
 
-**5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
+**5. The transport ships only the RPCs you call, and only the fields it reads.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. The capability services use pruned handles (`generated/lean.ts`, generated from `packages/sui/scripts/grpc-lean.ts`) whose descriptors carry just the fields in their read masks; the rest of a response is skipped as unknown fields. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover, with full descriptors.
 
 ## Keys
 
@@ -377,16 +381,17 @@ The barrels (`import { Address } from "@unconfirmed/sui"`) exist for convenience
 
 ## What ships (`bun scripts/bundle-report.ts`)
 
-KB minified / minified+gzip, browser target, the app using namespace imports. Add `--named` to compare barrel imports, or `--detail` for a per-package breakdown.
+KB minified / minified+gzip, browser target, the app using namespace imports, comments stripped under every bundler (Rolldown otherwise keeps each `@__PURE__` annotation). Add `--named` to compare barrel imports, or `--detail` for a per-package breakdown.
 
 | Program | Bun | esbuild | Rolldown | `@mysten/*` (Rolldown) |
 |---|---|---|---|---|
-| Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 127 / 41 | — |
-| `Quorum.run`, three members (no Schema) | 60 / 20 | 59 / 21 | 59 / 20 | — |
-| Verify, Ed25519 only | 146 / 52 | 144 / 52 | 149 / 50 | 131 / 44 (ships every scheme) |
-| Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 177 / 64 | 179 / 61 | — |
-| Read one object | 206 / 67 | 205 / 68 | 210 / 66 | 294 / 77 (ships all 30 RPCs) |
-| Build + resolve + sign + execute | 389 / 112 | 384 / 112 | 392 / 109 | 383 / 106 |
+| Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 122 / 40 | — |
+| `Quorum.run`, three members (no Schema) | 60 / 20 | 59 / 21 | 56 / 19 | — |
+| Verify, Ed25519 only | 146 / 52 | 144 / 51 | 144 / 50 | 129 / 44 (ships every scheme) |
+| Verify, Ed25519 + k1 + r1 + multisig | 178 / 63 | 176 / 63 | 173 / 60 | — |
+| Read one object | 199 / 66 | 197 / 67 | 195 / 64 | 289 / 76 (ships all 30 RPCs) |
+| Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 311 / 101 | 306 / 101 | 302 / 97 | 373 / 105 |
+| The same with `SuiGrpc.layer` (all nine services) | 338 / 106 | 333 / 106 | 329 / 101 | — |
 | Walrus: read via the aggregator | 144 / 49 | 144 / 49 | 145 / 47 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
 | Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |
@@ -395,7 +400,11 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
 | Seal: parse an encrypted object | 91 / 31 | 90 / 31 | 97 / 31 | — |
 | Seal: encrypt with pinned keys (`Envelope.seal`) | 177 / 63 | 175 / 63 | 183 / 62 | — |
 | Seal: encrypt + decrypt (the layer, gRPC, `FetchHttpClient`) | 487 / 150 | 481 / 150 | 490 / 145 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
+| zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 98 / 41 | — |
+| zkLogin: `ZkLoginAddress.fromJwt` | 155 / 74 | 154 / 74 | 160 / 76 | — |
+| zkLogin: `ZkLogin.signer` | 138 / 49 | 136 / 49 | 143 / 49 | — |
 
+- **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
 - **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program is 20 KB larger than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (9 KB gzip, Rolldown).
 - **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.

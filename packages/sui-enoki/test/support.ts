@@ -38,7 +38,7 @@ export const scripted = (route: (req: Recorded) => Reply | "network-error") => {
       )
     })
   )
-  return { layer, requests }
+  return { layer, requests, route }
 }
 
 /** Run `f` with `fetch` replaced; answer `reply` and capture the request `@mysten/enoki` made. */

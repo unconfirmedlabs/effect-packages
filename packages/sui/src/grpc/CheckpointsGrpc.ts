@@ -3,7 +3,7 @@ import * as Layer from "effect/Layer"
 import * as Stream from "effect/Stream"
 import { Checkpoints } from "../Checkpoints.ts"
 import type * as P from "./generated/proto.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 import { CHECKPOINT_LIMIT, checkpointBounds, pinned, resumable } from "./scan.ts"
 

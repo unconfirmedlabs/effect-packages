@@ -3,7 +3,7 @@ import * as Layer from "effect/Layer"
 import { Chain, type ChainInfo } from "../Chain.ts"
 import { RpcError } from "../RpcError.ts"
 import type { ObjectDigest } from "../TransactionData.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { successFor } from "./cache.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 

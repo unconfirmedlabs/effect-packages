@@ -8,25 +8,47 @@
  *   const { signer } = yield* ZkLoginFlow.complete(session, jwt)
  *   yield* Tx.run(recipe, { signer })   // or Sponsor.run(recipe, { signer, jwt })
  *
- * Persisting `session` (and the ephemeral key) across the redirect is the app's job.
+ * Across the redirect, persist the session's data (`SessionData`, a Schema:
+ * encode it to JSON) and the ephemeral key, then pass both back:
+ * `complete({ ...yield* Schema.decodeUnknownEffect(SessionData)(saved), ephemeral }, jwt)`.
  */
 import * as Address from "@unconfirmed/sui/Address"
 import * as Signer from "@unconfirmed/sui/Signer"
+import type { InvalidJwt } from "@unconfirmed/sui-zklogin/Errors"
+import * as Jwt from "@unconfirmed/sui-zklogin/Jwt"
 import * as Nonce from "@unconfirmed/sui-zklogin/Nonce"
 import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
 import * as ZkLogin from "@unconfirmed/sui-zklogin/ZkLogin"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import { EnokiClient, type EnokiError, type EnokiNetwork, type ZkLoginZkp } from "./EnokiClient.ts"
+import { EnokiClient, type EnokiError, EnokiNetwork, type ZkLoginZkp } from "./EnokiClient.ts"
 
-export interface Session {
-  readonly ephemeral: Signer.Signer
-  readonly network?: EnokiNetwork
-  readonly nonce: string
-  readonly randomness: string
-  readonly maxEpoch: number
+/** What to persist across the OAuth redirect (with the ephemeral key, which is the app's to store). */
+export const SessionData = Schema.Struct({
+  network: Schema.optionalKey(EnokiNetwork),
+  nonce: Schema.String,
+  randomness: Schema.String,
+  maxEpoch: Schema.Number,
   /** Milliseconds since the epoch after which the proof stops working. */
-  readonly estimatedExpiration: number
+  estimatedExpiration: Schema.Number
+})
+export type SessionData = typeof SessionData.Type
+
+/** A login in progress: its data and the ephemeral signer the nonce commits to. */
+export interface Session extends SessionData {
+  readonly ephemeral: Signer.Signer
+}
+
+/** The JWT's `nonce` claim is not this session's nonce (a stale token, or one from another login). */
+export class JwtNonceMismatch extends Schema.TaggedError<JwtNonceMismatch>()("JwtNonceMismatch", {
+  expected: Schema.String,
+  received: Schema.optionalKey(Schema.String)
+}) {
+  override get message() {
+    return this.received === undefined
+      ? `the JWT has no nonce claim (expected ${this.expected})`
+      : `the JWT's nonce ${this.received} is not this session's nonce ${this.expected}`
+  }
 }
 
 /** Enoki's nonce does not commit to our ephemeral key, `maxEpoch` and randomness. */
@@ -75,15 +97,20 @@ export interface Completed {
 }
 
 /**
- * With the JWT from the OAuth redirect: look up the user's address and salt,
- * get the ZK proof, and build the zkLogin `Signer`. Legacy accounts are
- * detected by matching the proof against the address Enoki reports.
+ * With the JWT from the OAuth redirect: check that it carries this session's
+ * nonce (locally, before spending a prover call), look up the user's address
+ * and salt, get the ZK proof, and build the zkLogin `Signer`. Legacy accounts
+ * are detected by matching the proof against the address Enoki reports.
  */
 export const complete = (
   session: Session,
   jwt: string
-): Effect.Effect<Completed, EnokiError | Signer.InvalidKey, EnokiClient> =>
+): Effect.Effect<Completed, EnokiError | Signer.InvalidKey | InvalidJwt | JwtNonceMismatch, EnokiClient> =>
   Effect.gen(function*() {
+    const claims = yield* Jwt.decode(jwt)
+    if (claims.nonce !== session.nonce) {
+      return yield* new JwtNonceMismatch({ expected: session.nonce, ...(claims.nonce !== undefined && { received: claims.nonce }) })
+    }
     const enoki = yield* EnokiClient
     const [account, proof] = yield* Effect.all([
       enoki.getZkLogin({ jwt }),

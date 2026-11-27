@@ -3,7 +3,7 @@ import * as Layer from "effect/Layer"
 import { RpcError } from "../RpcError.ts"
 import { TransactionNotFound, Transactions } from "../Transactions.ts"
 import { convert, EFFECTS_PATHS, effects } from "./convert.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
 const prefixed = (prefix: string) => EFFECTS_PATHS.map((p) => (p === "digest" ? `${prefix}digest` : `${prefix}${p}`))

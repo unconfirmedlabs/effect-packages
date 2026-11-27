@@ -6,9 +6,14 @@
 import { base64urlnopad } from "@scure/base"
 import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
 import * as Effect from "effect/Effect"
+import { poseidon4 } from "poseidon-lite/poseidon4"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"
-import * as Poseidon from "./Poseidon.ts"
+import * as Parse from "./internal/parse.ts"
+import * as Core from "./internal/poseidon.ts"
 import { toPaddedBigEndianBytes } from "./PublicIdentifier.ts"
+
+/** The nonce hashes four elements: only that arity ships (see `internal/poseidon.ts`). */
+const poseidon = Core.make({ 4: poseidon4 })
 
 export const NONCE_LENGTH = 27
 
@@ -32,7 +37,7 @@ export const generate = (
       suiBytes[0] = ephemeralPublicKey.flag
       suiBytes.set(ephemeralPublicKey.bytes, 1)
       const pk = toBigIntBE(suiBytes)
-      const hash = Poseidon.hashUnsafe([pk / 2n ** 128n, pk % 2n ** 128n, BigInt(maxEpoch), BigInt(randomness)])
+      const hash = poseidon([pk / 2n ** 128n, pk % 2n ** 128n, Parse.epoch(maxEpoch), BigInt(randomness)])
       const nonce = base64urlnopad.encode(toPaddedBigEndianBytes(hash, 20))
       if (nonce.length !== NONCE_LENGTH) throw new Error(`nonce ${nonce} has length ${nonce.length}, expected ${NONCE_LENGTH}`)
       return nonce
