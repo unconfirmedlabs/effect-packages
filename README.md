@@ -95,12 +95,20 @@ const coin = yield* Ptb.coin({ amount: 1_000n, type, useGasCoin: false })   // C
 const bal = yield* Ptb.balance({ amount: 500n, type })                       // Balance<T>
 yield* Ptb.sendBalance(bal, yield* Ptb.address(to), type)                    // into `to`'s address balance
 
+// Under an allowance: spent from the funder's address balance, never the sender's
+const paid = yield* Ptb.coin({ amount: 1_000n, allowance: allowanceId })      // Coin<SUI>
+const app = yield* Ptb.balance({                                             // app-bound: A's SpendPermit<A>
+  amount: 50n, type,
+  allowance: { objectId: appAllowanceId, app: { type: `${pkg}::app::APP`, permit: yield* Ptb.moveCall({ target: `${pkg}::app::permit` }) } }
+})
+
 // Or by hand: withdrawals and deposits
-const w = yield* Ptb.withdrawal({ amount, type, from: "sender" })           // or "sponsor" / an allowance
+const w = yield* Ptb.withdrawal({ amount, type, from: "sender" })           // or "sponsor" / { allowance, funder }
 yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), type)
 ```
 
 - `Resolve.balances` resolves intents the way `@mysten/sui`'s `tx.coin` / `tx.balance` do, with byte-identical output.
+- Allowance intents (`0x2::allowance`) become a `SenderAllowance` withdrawal plus `allowance::balance_spend` (or `app_balance_spend`), as in `@mysten/sui`. The resolver reads the allowance first and refuses with a typed error what the chain would abort: the wrong type, funder, app or permit, a sender that isn't the spender, a spend outside the start/expiration window, a spend over the lifetime cap or rate limit, or a funder whose address balance is short. Proven on devnet.
 - The transaction's own withdrawals are counted against the address balance before choosing how to pay gas.
 - Coin reservation refs match `@mysten/sui`'s encoding and are proven on devnet.
 - `Resolve.unchecked` (empty payment, no balance check) is for simulation and for bytes whose payer is funded later.

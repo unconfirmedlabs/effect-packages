@@ -57,7 +57,35 @@ export interface BalanceIntent {
   readonly useGasCoin: boolean
 }
 
-export type Command = T.Command | BalanceIntent
+/**
+ * "A `Coin<T>` (or `Balance<T>`) worth `amount`, spent from a funder's address
+ * balance under a shared `0x2::allowance::Allowance<Balance<T>>`", left for
+ * `Resolve.balances` to check against the allowance and replace with a
+ * `SenderAllowance` withdrawal and `allowance::balance_spend` (or
+ * `app_balance_spend` with a `SpendPermit<A>`). Never falls back to the
+ * sender's own funds. Matches `@mysten/sui`'s `AllowanceBalance` intent.
+ */
+export interface AllowanceIntent {
+  readonly _tag: "AllowanceIntent"
+  /** Normalized coin type `T` (not `Balance<T>`). */
+  readonly coinType: string
+  readonly amount: bigint
+  readonly output: "coin" | "balance"
+  /** The allowance's object id. */
+  readonly allowanceId: Address.Address
+  /** The funder, if the caller knows it; checked against the allowance. */
+  readonly funder?: Address.Address
+  /** Normalized app type `A` for an app-bound allowance. */
+  readonly appType?: string
+  /** The allowance object input (resolved by `Resolve.balances`, shared and mutable). */
+  readonly allowance: T.Argument
+  /** The `0x6` clock input. */
+  readonly clock: T.Argument
+  /** The `SpendPermit<A>` (app-bound allowances only). */
+  readonly permit?: T.Argument
+}
+
+export type Command = T.Command | BalanceIntent | AllowanceIntent
 
 /** What a build produces: commands plus inputs and intents that may still need resolving. */
 export interface Draft {
@@ -226,25 +254,107 @@ export const sendFunds = (coin: T.Argument, recipient: T.Argument, type: string 
 export const sendBalance = (balance: T.Argument, recipient: T.Argument, type: string = TypeTag.SUI) =>
   moveCall({ target: "0x2::balance::send_funds", typeArguments: [type], arguments: [balance, recipient] })
 
-const intent = (output: BalanceIntent["output"]) =>
-(options: { readonly amount: bigint; readonly type?: string; readonly useGasCoin?: boolean }) =>
-  Effect.flatMap(checkAmount(options.amount), () =>
-    addCommand({
-      _tag: "BalanceIntent",
+/** A shared-object input by id, deduplicated like `object`; a repeat use can only widen it to mutable. */
+const sharedObject = (objectId: string, initialSharedVersion: bigint, mutable: boolean) =>
+  Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
+    const id = Address.normalize(objectId)
+    const existing = d.objectIndex.get(id)
+    if (existing !== undefined) {
+      const input = d.inputs[existing]!
+      if (mutable && input._tag === "Object" && input.value._tag === "SharedObject") {
+        d.inputs[existing] = { _tag: "Object", value: { ...input.value, mutability: { _tag: "Mutable" } } }
+      }
+      return { _tag: "Input", value: existing }
+    }
+    d.inputs.push({
+      _tag: "Object",
+      value: { _tag: "SharedObject", objectId: id, initialSharedVersion, mutability: { _tag: mutable ? "Mutable" : "Immutable" } }
+    })
+    d.objectIndex.set(id, d.inputs.length - 1)
+    return { _tag: "Input", value: d.inputs.length - 1 }
+  })
+
+/** The `0x6` clock, shared and immutable. */
+export const clock = sharedObject(Address.CLOCK, 1n, false)
+
+/**
+ * An allowance to spend under: its id, or the id with the funder (checked
+ * against the allowance) and, for an app-bound allowance, the app type `A` and
+ * a `SpendPermit<A>` the app's own Move code produced in this transaction.
+ */
+export type AllowanceReference =
+  | string
+  | {
+    readonly objectId: string
+    readonly funder?: string
+    readonly app?: { readonly type: string; readonly permit: T.Argument }
+  }
+
+/** Options for `coin` / `balance`: from the sender's funds, or under an allowance. */
+export type IntentOptions =
+  | {
+    readonly amount: bigint
+    /** The coin type `T`, not `Coin<T>`. Default SUI. */
+    readonly type?: string
+    /** SUI only: split from the gas coin when the address balance is short. Default `true`. */
+    readonly useGasCoin?: boolean
+    readonly allowance?: never
+  }
+  | {
+    readonly amount: bigint
+    readonly type?: string
+    /** Spend only from the allowance's funder; never falls back to the sender's funds. */
+    readonly allowance: AllowanceReference
+    readonly useGasCoin?: never
+  }
+
+const allowanceIntent = (
+  output: AllowanceIntent["output"],
+  options: { readonly amount: bigint; readonly type?: string; readonly allowance: AllowanceReference }
+) =>
+  Effect.gen(function*() {
+    const ref = typeof options.allowance === "string" ? { objectId: options.allowance } : options.allowance
+    const allowanceId = Address.normalize(ref.objectId)
+    // Input order matches @mysten/sui: allowance, clock, then the permit.
+    const allowance = yield* object(allowanceId)
+    const clockArg = yield* clock
+    return yield* addCommand({
+      _tag: "AllowanceIntent",
       coinType: TypeTag.normalizeString(options.type ?? TypeTag.SUI),
       amount: options.amount,
       output,
-      useGasCoin: options.useGasCoin ?? true
-    }))
+      allowanceId,
+      ...(ref.funder !== undefined && { funder: Address.normalize(ref.funder) }),
+      ...(ref.app !== undefined && { appType: TypeTag.normalizeString(ref.app.type), permit: ref.app.permit }),
+      allowance,
+      clock: clockArg
+    })
+  })
+
+const intent = (output: BalanceIntent["output"]) => (options: IntentOptions) =>
+  Effect.flatMap(checkAmount(options.amount), () =>
+    options.allowance !== undefined
+      ? allowanceIntent(output, { ...options, allowance: options.allowance })
+      : addCommand({
+        _tag: "BalanceIntent",
+        coinType: TypeTag.normalizeString(options.type ?? TypeTag.SUI),
+        amount: options.amount,
+        output,
+        useGasCoin: options.useGasCoin ?? true
+      }))
 
 /**
  * A `Coin<T>` worth `amount` (default SUI), sourced by `Resolve.balances`:
  * address balance first, then owned coins, then (SUI, unless
  * `useGasCoin: false`) the gas coin.
+ *
+ * With `allowance`, it is spent from the allowance funder's address balance
+ * instead (`Resolve.balances` reads the allowance, checks it, and emits a
+ * `SenderAllowance` withdrawal plus `allowance::balance_spend`).
  */
 export const coin = intent("coin")
 
-/** A `Balance<T>` worth `amount`, sourced like `coin`. */
+/** A `Balance<T>` worth `amount`, sourced like `coin` (also under an `allowance`). */
 export const balance = intent("balance")
 
 export const publish = (modules: ReadonlyArray<Uint8Array>, dependencies: ReadonlyArray<string>) =>
@@ -285,6 +395,7 @@ export const build = <A, E, R>(
 
 /** A draft with no unresolved inputs or intents is already a `ProgrammableTransaction`. */
 export const toProgrammable = (draft: Draft): T.ProgrammableTransaction | undefined =>
-  draft.inputs.every((i) => i._tag !== "UnresolvedObject") && draft.commands.every((c) => c._tag !== "BalanceIntent")
+  draft.inputs.every((i) => i._tag !== "UnresolvedObject") &&
+    draft.commands.every((c) => c._tag !== "BalanceIntent" && c._tag !== "AllowanceIntent")
     ? { inputs: draft.inputs as ReadonlyArray<T.CallArg>, commands: draft.commands as ReadonlyArray<T.Command> }
     : undefined

@@ -183,6 +183,7 @@ export const run = <A, E, R>(
   | Resolve.Incomplete
   | Resolve.InsufficientBalance
   | Resolve.InvalidBalanceIntent
+  | Resolve.AllowanceError
   | EnokiError
   | UnexpectedSponsoredTransaction
   | Signer.SigningError,
