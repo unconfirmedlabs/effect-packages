@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Stream from "effect/Stream"
-import { Address, Chain, CoinReservation, Coins, Ptb, Resolve, TransactionData as T, TypeTag } from "../src/index.ts"
+import { Address, Chain, CoinReservation, Coins, Objects, Ptb, Resolve, TransactionData as T, TypeTag } from "../src/index.ts"
 import { toB64 } from "./support.ts"
 
 const A = Address.normalize
@@ -234,7 +234,12 @@ describe("coin / balance intents match tx.coin / tx.balance", () => {
       Effect.gen(function*() {
         const { draft } = yield* Ptb.build(Ptb.coin({ amount: 10_000n, type: TOKEN }))
         return yield* Resolve.balances({ sender, draft })
-      }).pipe(Effect.flip, Effect.provide(coinsLayer({ balances: { [TOKEN]: 10n }, coins: { [TOKEN]: [{ id: "0xc1", version: 3n, balance: 20n }] } })))
+      }).pipe(
+        Effect.flip,
+        Effect.provide(coinsLayer({ balances: { [TOKEN]: 10n }, coins: { [TOKEN]: [{ id: "0xc1", version: 3n, balance: 20n }] } })),
+        // Only allowance intents read objects.
+        Effect.provideService(Objects.Objects, { get: (objectId) => Effect.fail(new Objects.ObjectNotFound({ objectId })), listOwned: () => Stream.empty })
+      )
     )
     expect(exit._tag === "Success" && exit.value._tag).toBe("InsufficientBalance")
     expect(exit._tag === "Success" && exit.value._tag === "InsufficientBalance" && exit.value.available).toBe(30n)
