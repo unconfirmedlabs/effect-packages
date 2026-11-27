@@ -529,6 +529,44 @@ describe("objectChanges paging", () => {
 })
 
 describe("parity with gRPC answers", () => {
+  test("getFunction: a closed generic datatype carries its type arguments, as over gRPC", async () => {
+    const coin = (typeParameters: ReadonlyArray<unknown>) => ({ datatype: { package: "0x2", module: "coin", type: "Coin", typeParameters } })
+    const { layer } = scripted(() =>
+      Effect.succeed({
+        body: {
+          data: {
+            package: {
+              module: {
+                function: {
+                  isEntry: false,
+                  parameters: [
+                    { signature: { ref: "&mut", body: coin([{ datatype: { package: "0xa1", module: "wal", type: "WAL", typeParameters: [] } }]) } },
+                    { signature: { ref: null, body: coin([{ typeParameter: 0 }]) } },
+                    {
+                      signature: {
+                        body: { datatype: { package: "0x2", module: "vec_map", type: "VecMap", typeParameters: ["address", { vector: "u16" }] } }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            object: { address: "0x2" }
+          }
+        }
+      })
+    )
+    const f = await run(
+      Effect.flatMap(Effect.service(Packages.Packages), (p) => p.getFunction({ package: A("0x2"), module: "m", function: "f" })),
+      layer
+    )
+    expect(f.parameters).toEqual([
+      { reference: "Mutable", typeName: `${A("0x2")}::coin::Coin`, typeArguments: [`${A("0xa1")}::wal::WAL`] },
+      { reference: "Value", typeName: `${A("0x2")}::coin::Coin` },
+      { reference: "Value", typeName: `${A("0x2")}::vec_map::VecMap`, typeArguments: ["address", "vector<u16>"] }
+    ])
+  })
+
   test("getFunction on an object that is not a package is INVALID_ARGUMENT", async () => {
     const { layer } = scripted(() => Effect.succeed({ body: { data: { package: null, object: { address: A("0x6") } } } }))
     const e = await run(

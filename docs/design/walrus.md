@@ -286,6 +286,7 @@ export const layer: (config: WalrusConfigService) => Layer.Layer<WalrusConfig>
 
 // System.ts
 export interface SystemState {
+  readonly systemObjectId: Address; readonly initialSharedVersion: bigint   // recipes build the shared system input offline
   readonly epoch: number; readonly nShards: number
   readonly packageId: Address          // where Move calls go (C2)
   readonly typeOrigin: Address         // for `${typeOrigin}::blob::Blob`
@@ -300,6 +301,7 @@ export class System extends Context.Service<System, {
   readonly walType: Effect.Effect<string, SystemError>
 }>()("@unconfirmed/walrus/System") {}
 export const layer: Layer.Layer<System, never, WalrusConfig | Objects.Objects | Packages.Packages>
+export const layerFromState: (state: SystemState, walType: string) => Layer.Layer<System>   // tests, offline builds
 export type SystemError = RpcError | ObjectNotFound | ObjectDecodeError | UnsupportedSystemVersion
 
 // Committee.ts
@@ -320,6 +322,8 @@ export const readCommittee: (c: ActiveCommittees, certifiedEpoch: number | undef
 export const checkAgainstSystem: (committee: Committee, system: SystemState) => Result.Result<void, CommitteeMismatch>
 export type CommitteeError = RpcError | ObjectNotFound | ObjectDecodeError | UnsupportedSystemVersion
 ```
+
+`walType` needs the type argument of `Coin<WAL>`, so `@unconfirmed/sui`'s `Packages.Parameter` gained an optional `typeArguments` (closed type strings; gRPC and GraphQL). `Committees` reads only the staking side (it does not need the system object). `readCommittee` with no certified epoch, or with no previous committee, gives the current one.
 
 Reading: the inner states are dynamic fields; compute their ids with `DynamicFields.deriveId(parent, "u64", bcs(version))` and read through the batched `Objects.get`, so loading a committee is three batched requests: the system and staking objects, then both inner fields (their ids depend on `version`), then every `StakingPool` of the current and previous committees. Decode with the generated schemas (`Move.Field(Bcs.u64, SystemStateInnerV1)`). A `version` whose inner type is not `…InnerV1` is `UnsupportedSystemVersion`.
 
@@ -424,6 +428,7 @@ Each is an ordinary recipe step (`README` "Transactions are Effects"), built on 
 ```ts
 // Recipes.ts
 export type RecipeServices = Ptb.PtbBuilder | System
+export type RecipeError = SystemError | Ptb.InvalidPureValue | BlobTooLarge   // a signer outside the committee is InvalidPureValue
 export const reserveSpace: (o: { readonly unencodedLength: number; readonly epochs: number; readonly payment?: Move.Argument }) => Effect.Effect<Move.Argument /* Storage */, RecipeError, RecipeServices>
 export const registerBlob: (o: { readonly blobId: BlobId; readonly rootHash: Uint8Array; readonly unencodedLength: number; readonly epochs: number
                                  readonly deletable: boolean; readonly attributes?: Readonly<Record<string, string>>; readonly storage?: Move.Argument })
@@ -433,9 +438,12 @@ export const deleteBlob: (blobObjectId: Address) => Effect.Effect<Move.Argument 
 export const extendBlob: (o: { readonly blobObjectId: Address; readonly storageSize: number; readonly epochs: number }) => Effect.Effect<void, RecipeError, RecipeServices>
 export const burnBlob: (blobObjectId: Address) => Effect.Effect<void, RecipeError, RecipeServices>
 export const blobType: Effect.Effect<string, SystemError, System>           // `${typeOrigin}::blob::Blob`
+export const destroyStorage: (storage: Move.Argument) => Effect.Effect<void, RecipeError, RecipeServices>   // storage_resource::destroy
 ```
 
 `registerBlob` without `storage` takes one `Ptb.coin({ amount: storage + write, type: walType })`, calls `reserve_space` and `register_blob` with it, then `0x2::coin::destroy_zero`. The amount is exact for the prices read at build time; a price change before execution aborts the transaction (nothing is spent but gas) and the step is retried. `attributes` adds `metadata::new`, `blob::add_metadata` and one `insert_or_update_metadata_pair` per entry. `certifyBlob` passes the system object as an immutable shared input and `signersBitmap(certificate.signers, state.members.length)`.
+
+The system object is always `Ptb.sharedObject(systemObjectId, initialSharedVersion, mutable)` with the call's mutability (`&mut` for reserve, register and extend; `&` for certify and delete), so recipes need no object lookup for it. Command-level parity with `@mysten/walrus` holds up to three asserted differences (`test/parity.recipes.test.ts`): one WAL coin instead of two, the system input as a shared object rather than an unresolved one, and `NestedResult(i, 0)` (our generated builders) where Mysten writes `Result(i)` for single-valued calls.
 
 ### 4.7 Write
 
@@ -613,7 +621,7 @@ All of these live in `Errors.ts` (W1), so that the flows share one set of classe
 ## 5. Codegen
 
 - `packages/walrus/sui-codegen.config.ts`: `{ output: "./src/generated", packages: [{ id: "<System.package_id on testnet>", network: "testnet", name: "walrus" }] }`, run by `packages/walrus/scripts/codegen.ts` (`Generate.run`). The output is committed.
-- Used schemas: `System`, `SystemStateInnerV1`, `Staking`, `StakingInnerV1`, `StakingPool` (with `StorageNodeInfo`), `Blob`, `Storage`, `Metadata`, `events::{BlobRegistered, BlobCertified}`. Used calls: `system::{reserve_space, register_blob, certify_blob, delete_blob, extend_blob}`, `blob::{burn, add_metadata, insert_or_update_metadata_pair}`, `metadata::new`, `storage_resource::destroy`. Everything else tree-shakes.
+- Used schemas: `System`, `SystemStateInnerV1`, `Staking`, `StakingInnerV1`, `StakingPool` (with `StorageNodeInfo`), `Blob`, `Storage`, `Metadata`, `events::{BlobRegistered, BlobCertified}`. Used calls: `system::{reserve_space, register_blob, certify_blob, delete_blob, extend_blob}`, `blob::{burn, add_metadata, insert_or_update_metadata_pair}`, `metadata::new`, `storage_resource::destroy`. Everything else tree-shakes. All modules are generated (unused ones cost nothing); parameters are positional (`arg0`, ...) because on-chain bytecode has no parameter names. The generator needed no changes for this package. `scripts/record-fixtures.ts` records the objects `System` and `Committees` read (and the `reserve_space` signature) for testnet and mainnet into `test/fixtures/<network>.json`; `test/fixtures.ts` serves them as `Objects` / `Packages` layers.
 - The generated `Package` default is the testnet id. **Library code never relies on it**: every call is wrapped with `Effect.provideService(Package, state.packageId)`. Generated `.type()` strings embed testnet's defining ids, so library code builds `Blob`'s type from `state.typeOrigin` instead.
 - If the generator cannot express a Walrus type (candidates: `ExtendedField`, `group_ops::Element<UncompressedG1>`, the positional `Committee` struct, `EpochState`), fix the generator in `packages/sui-codegen` with a fixture; do not hand-write the binding.
 

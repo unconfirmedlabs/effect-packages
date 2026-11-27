@@ -12,6 +12,12 @@ export interface Parameter {
   readonly reference: Reference
   /** For datatypes, the type name without type arguments (`0x…2::tx_context::TxContext`). */
   readonly typeName: string | undefined
+  /**
+   * For a generic datatype, its type arguments as type strings
+   * (`Coin<0x…::wal::WAL>` gives `["0x…::wal::WAL"]`). Absent when the
+   * datatype has none, or when an argument is a function type parameter.
+   */
+  readonly typeArguments?: ReadonlyArray<string>
 }
 
 export interface MoveFunction {
