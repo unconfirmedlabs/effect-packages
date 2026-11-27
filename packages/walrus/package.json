@@ -14,5 +14,8 @@
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@noble/curves": "^2.3.0"
   }
 }
