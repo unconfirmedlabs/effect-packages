@@ -1,0 +1,403 @@
+{
+ "network": "testnet",
+ "recordedAt": "2026-11-27T09:06:33.770Z",
+ "keyServers": [
+  {
+   "objectId": "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75",
+   "name": "mysten-v1-1",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8",
+   "name": "mysten-v1-2",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x6068c0acb197dddbacd4746a9de7f025b2ed5a5b6c1b1ab44dade4426d141da2",
+   "name": "ruby-nodes-free-testnet",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x5466b7df5c15b508678d51496ada8afab0d6f70a01c10613123382b1b8131007",
+   "name": "Testnet-Nodeinfra-open",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x164ac3d2b3b8694b8181c13f671950004765c23f270321a45fdd04d40cccf0f2",
+   "name": "studio-mirai-open",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x9c949e53c36ab7a9c484ed9e8b43267a77d4b8d70e79aa6b39042e3d4c434105",
+   "name": "overclock-open",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x39cef09b24b667bc6ed54f7159d82352fe2d5dd97ca9a5beaa1d21aa774f25a2",
+   "name": "H2O Nodes",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x4cded1abeb52a22b6becb42a91d3686a4c901cf52eee16234214d0b5b2da4c46",
+   "name": "triton-testnet-seal-1",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x3c93ec1474454e1b47cf485a4e5361a5878d722b9492daf10ef626a76adc3dad",
+   "name": "natsai-open-test",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0x6a0726a1ea3d62ba2f2ae51104f2c3633c003fb75621d06fde47f04dc930ba06",
+   "name": "Suiftly|Mhax.io",
+   "layout": 1,
+   "type": "Independent"
+  },
+  {
+   "objectId": "0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98",
+   "name": "5ebc6bb22acf21dc2a5f6b81ea297dd16e6c5be25dd446107ee2721bdd053b7e",
+   "layout": 2,
+   "type": "Committee"
+  }
+ ],
+ "objects": [
+  {
+   "objectId": "0x09cd529a7d20e3955a1d1d0d1225496e26fd7c46b21747e556f568fd54d0b205",
+   "version": "349179986",
+   "digest": "73dBZNsDTSeqE2vcPULNStqU1q2KusZAi8HDVEBhTzGb",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x5466b7df5c15b508678d51496ada8afab0d6f70a01c10613123382b1b8131007"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServerV1>",
+   "contents": "Cc1Smn0g45VaHR0NEiVJbib9fEayF0flVvVo/VTQsgUBAAAAAAAAABZUZXN0bmV0LU5vZGVpbmZyYS1vcGVuJ2h0dHBzOi8vb3Blbi1zZWFsLXRlc3RuZXQubm9kZWluZnJhLmNvbQBgtKFcCS+oDeM5YPiX8+IzAySyNUMP1HgPs8SbcDBcYC8DwvSaQwJh/bvHLOxSpe/vCXJl16R+eUp7E3ftyABgwPnWV6FrP9iQbQgbVhl/EQ4x/sDlIi6lUDR9QjyZqac3",
+   "previousTransaction": "eXPyJbJsSUnjBRryAaUN84tFJC4eAaTsnx3frqc9jiU"
+  },
+  {
+   "objectId": "0x155d12aad6fe7e458c0eee5767f3ed5ab073f5e4bd3d6d73c6d491415c554539",
+   "version": "349180383",
+   "digest": "9r8u5fZmHpwuwrwxa42wNtXF5SaWjyR3nRiCeecHafJA",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x164ac3d2b3b8694b8181c13f671950004765c23f270321a45fdd04d40cccf0f2"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x73bba649fe918ef501e2fb6ab82e83450a4c286f52cf3399e678e6da257f0c50::key_server::KeyServerV1>",
+   "contents": "FV0Sqtb+fkWMDu5XZ/PtWrBz9eS9PW1zxtSRQVxVRTkBAAAAAAAAABFzdHVkaW8tbWlyYWktb3BlbjBodHRwczovL29wZW4ua2V5LXNlcnZlci50ZXN0bmV0LnNlYWwubWlyYWkuY2xvdWQAYJDNIctLXoZsIvaJHOMbtc15HXlU3OdvpqyRpwqISpKX3Ym7ujPRA0Dv8g0bJq4RdQTIZ5PHUW/rngAm2TTYU8o4Qf95Itx+Nhz6fkowHtRe1ip3Wvbqjif+2sgXczN+4w==",
+   "previousTransaction": "GQTSb9A8XHD8vfauPAF5sXQiEg7RXT2yyYwisvZp2gSW"
+  },
+  {
+   "objectId": "0x164ac3d2b3b8694b8181c13f671950004765c23f270321a45fdd04d40cccf0f2",
+   "version": "349180383",
+   "digest": "3qvtjMBUVULszWsbe7yJEo36eqWSi4mBypC55bwGNCzK",
+   "owner": {
+    "_tag": "AddressOwner",
+    "address": "0x13cdcfab1a3db17a9723c165fefa68d44066f8f846b06c8045d6c86353b7c2b0"
+   },
+   "type": "0x73bba649fe918ef501e2fb6ab82e83450a4c286f52cf3399e678e6da257f0c50::key_server::KeyServer",
+   "contents": "FkrD0rO4aUuBgcE/ZxlQAEdlwj8nAyGkX90E1AzM8PIBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "GQTSb9A8XHD8vfauPAF5sXQiEg7RXT2yyYwisvZp2gSW"
+  },
+  {
+   "objectId": "0x39cef09b24b667bc6ed54f7159d82352fe2d5dd97ca9a5beaa1d21aa774f25a2",
+   "version": "349180140",
+   "digest": "CDbkgNnE7U5YTuWHLsBLdyuMK2n5GitQWVXZMpgU3A1G",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "349180140"
+   },
+   "type": "0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServer",
+   "contents": "Oc7wmyS2Z7xu1U9xWdgjUv4tXdl8qaW+qh0hqndPJaIBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "7VjjaAGR6rvqFeAP6shuALeKVTL5GSx3r6X87DH2QXeA"
+  },
+  {
+   "objectId": "0x3c93ec1474454e1b47cf485a4e5361a5878d722b9492daf10ef626a76adc3dad",
+   "version": "349180614",
+   "digest": "Dw4XnySewjCXwgQEbCmbT2Kx4bnjfHz9d4DihPtahwwZ",
+   "owner": {
+    "_tag": "AddressOwner",
+    "address": "0x2290fd39261c01acd6adcd083fa62ccb6aa76ffa288893038fff2ef68fb855d0"
+   },
+   "type": "0x4614e5da0136ee7d464992ddd3719d388ae2bfdb48dfec6d9ad579f87341f2e1::key_server::KeyServer",
+   "contents": "PJPsFHRFThtHz0haTlNhpYeNciuUktrxDvYmp2rcPa0BAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "Bi1drfoEAnneikGHSg3EbKr7EEa9BU878AEoPENuypja"
+  },
+  {
+   "objectId": "0x45345e0c6a6d3ecbbe380fd77d3ce4528e70c7437b9ba48ce5369d8deb0dd1c8",
+   "version": "349180614",
+   "digest": "71DS7D5MMuoQVXq18Zzp4Btq4dgxtSdkk81qHUSMEJ3C",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x3c93ec1474454e1b47cf485a4e5361a5878d722b9492daf10ef626a76adc3dad"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x4614e5da0136ee7d464992ddd3719d388ae2bfdb48dfec6d9ad579f87341f2e1::key_server::KeyServerV1>",
+   "contents": "RTReDGptPsu+OA/XfTzkUo5wx0N7m6SM5TadjesN0cgBAAAAAAAAABBuYXRzYWktb3Blbi10ZXN0IWh0dHBzOi8vc2VhbC1vcGVuLXRlc3QubmF0c2FpLnh5egBghX/jxzya2ZhhDT00OiEKxcVGbsRp0krzlCCRZ8qlX5O0PZjkGAvk2UtQYiSHhJ6AE3FzZgamzOQN9jHGF801CAqn3Uhmb3fyjSNfFdIHmQn6YL01PxzH2H9nv3ZTGFpV",
+   "previousTransaction": "Bi1drfoEAnneikGHSg3EbKr7EEa9BU878AEoPENuypja"
+  },
+  {
+   "objectId": "0x475c371bf0cfb7c39cecb0d0a75f975a9b58487c7ae23d86ff9f52a61a3fd744",
+   "version": "349180627",
+   "digest": "692Pd8jCQAG5DnAzPokWhBR1p1Uma617jXwjVgDTEAby",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x6a0726a1ea3d62ba2f2ae51104f2c3633c003fb75621d06fde47f04dc930ba06"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x4614e5da0136ee7d464992ddd3719d388ae2bfdb48dfec6d9ad579f87341f2e1::key_server::KeyServerV1>",
+   "contents": "R1w3G/DPt8Oc7LDQp1+XWptYSHx64j2G/59Spho/10QBAAAAAAAAAA9TdWlmdGx5fE1oYXguaW8kaHR0cHM6Ly9zZWFsLXRlc3RuZXQtb3Blbi5zdWlmdGx5LmlvAGCo9RpMioiQA7VH1haqy4MwijG+Gz4cXjQJYZy+AxetzyTPMe16+Q00aYNHUQ9OoxYZJkq5wIQOGBElpqEmJC8/5F2H3OqgqV+KPW2+R5jQy/Cd75MNJxxMsOYXxfMZSdI=",
+   "previousTransaction": "GtVmXhrmF9b5idyex333UsH9GV3WQvhwbrxJD1tpojeU"
+  },
+  {
+   "objectId": "0x4cded1abeb52a22b6becb42a91d3686a4c901cf52eee16234214d0b5b2da4c46",
+   "version": "40303058",
+   "digest": "CgCLa67tGQtsqa22SXRf7yVfR5CvzJRp7ynS4MtGUQuk",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "40303058"
+   },
+   "type": "0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServer",
+   "contents": "TN7Rq+tSoitr7LQqkdNoakyQHPUu7hYjQhTQtbLaTEYBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "3KKq9AJ5zDfXmYH96S1EGKKoEAAcSJLMnXNmU3jTpfBM"
+  },
+  {
+   "objectId": "0x5466b7df5c15b508678d51496ada8afab0d6f70a01c10613123382b1b8131007",
+   "version": "349179986",
+   "digest": "J6A6qtjHqQxbKtivyx89KE3SB47K4mrZiWpjFmpCEeSb",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "349179986"
+   },
+   "type": "0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServer",
+   "contents": "VGa331wVtQhnjVFJatqK+rDW9woBwQYTEjOCsbgTEAcBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "eXPyJbJsSUnjBRryAaUN84tFJC4eAaTsnx3frqc9jiU"
+  },
+  {
+   "objectId": "0x592136d18d8a55a4e34308c45992d30123658583327434dae2f7b6e6438214f5",
+   "version": "39967942",
+   "digest": "AxVALmKmdZJB7xXDy6nosszwk8zxfLDVP445Z6NYs82D",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x9c949e53c36ab7a9c484ed9e8b43267a77d4b8d70e79aa6b39042e3d4c434105"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServerV1>",
+   "contents": "WSE20Y2KVaTjQwjEWZLTASNlhYMydDTa4ve25kOCFPUBAAAAAAAAAA5vdmVyY2xvY2stb3BlbidodHRwczovL3NlYWwtdGVzdG5ldC1vcGVuLm92ZXJjbG9jay5ydW4AYLW1+ZFgYp7t/CF6N7dIqVQnJ/qdQUCfiACVtRNEjFniKhzt2kkD3mde1Jkcw7OpmwMIr1EmV+sVfZ6duB+ZazqVK4ikcgtztvnPkU6z3xabxMMajaFbR0JxleEsc3aeJg==",
+   "previousTransaction": "CbA4fyn4tCsbvozqapBarApx2TKuUkwAsmUVom1s49zm"
+  },
+  {
+   "objectId": "0x6068c0acb197dddbacd4746a9de7f025b2ed5a5b6c1b1ab44dade4426d141da2",
+   "version": "349180294",
+   "digest": "GYMvwj7KwGKeg5fLzUfhJEfzBRywS1ZFAK3mnwThNZCn",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "349180294"
+   },
+   "type": "0x62c79dfeb0a2ca8c308a56bde530ccf3846535e1623949d45c90d23128afff52::key_server::KeyServer",
+   "contents": "YGjArLGX3dus1HRqnefwJbLtWltsGxq0Ta3kQm0UHaIBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "6ZtGT1acYb4cs8staY8ggxu1DPRcuz6LiH7tRWK2Xox5"
+  },
+  {
+   "objectId": "0x6a0726a1ea3d62ba2f2ae51104f2c3633c003fb75621d06fde47f04dc930ba06",
+   "version": "349180627",
+   "digest": "D74oM5E1pecwqiRyXfSpM2vqwxnrdogNzr1kBvgEkxHb",
+   "owner": {
+    "_tag": "AddressOwner",
+    "address": "0xce9fe63c27d5cfd6892963e6c587f1a254db6a41b40875c827460834bbc6c573"
+   },
+   "type": "0x4614e5da0136ee7d464992ddd3719d388ae2bfdb48dfec6d9ad579f87341f2e1::key_server::KeyServer",
+   "contents": "agcmoeo9YrovKuURBPLDYzwAP7dWIdBv3kfwTckwugYBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "GtVmXhrmF9b5idyex333UsH9GV3WQvhwbrxJD1tpojeU"
+  },
+  {
+   "objectId": "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75",
+   "version": "443947654",
+   "digest": "7cjNdd3ARrsmoR61Y2oYPgw1ZQzyhHgf3H4JsBi6wz5T",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "443947654"
+   },
+   "type": "0x0f16e84a49dec8425e6900cfdfe3730aaf1e8bc608d9f0500fcfa2c2267abfb4::key_server::KeyServer",
+   "contents": "c9BdYsGNk3Tj6lKejg7WFh2hoUGpTT92rj/k6ZNW23UBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "DKPsZTsqAGg85THpZmoa2uSFZmayBCnErbNaRUpyuFZA"
+  },
+  {
+   "objectId": "0x86a34dcbedbdfa8070e85638d2e0cb6a9534ccc6b7b823f3840900aad37c445b",
+   "version": "349180140",
+   "digest": "2M4SVJEzfQqKyyxs8rkGjdzDwEQv2iV2QEpAVjkrHo7s",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x39cef09b24b667bc6ed54f7159d82352fe2d5dd97ca9a5beaa1d21aa774f25a2"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServerV1>",
+   "contents": "hqNNy+29+oBw6FY40uDLapU0zMa3uCPzhAkAqtN8RFsBAAAAAAAAAAlIMk8gTm9kZXMraHR0cHM6Ly9zZWFsLW9wZW4uc3VpLXRlc3RuZXQuaDJvLW5vZGVzLmNvbQBgi3hYD5D/WOaV/b0sJMG5bEmAVMcnu00Dtm6sZ8TQ7s+w+lnjbyO3YtXatf1t+aMEEeJUW9hE1ZVwG4ynXw/+DaX5frcO6zCuriv4KDZtJhQIecRCtymJExtjTZFlA2zV",
+   "previousTransaction": "7VjjaAGR6rvqFeAP6shuALeKVTL5GSx3r6X87DH2QXeA"
+  },
+  {
+   "objectId": "0x900cf6bb04db0c988e26128c5d463d74320a504c492533cfb7cfa12d062cf0ea",
+   "version": "349180294",
+   "digest": "2qTBHtWwM48f2Hw76rCbutfLvBKazGUHnvXBiaQNgJEc",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x6068c0acb197dddbacd4746a9de7f025b2ed5a5b6c1b1ab44dade4426d141da2"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x62c79dfeb0a2ca8c308a56bde530ccf3846535e1623949d45c90d23128afff52::key_server::KeyServerV1>",
+   "contents": "kAz2uwTbDJiOJhKMXUY9dDIKUExJJTPPt8+hLQYs8OoBAAAAAAAAABdydWJ5LW5vZGVzLWZyZWUtdGVzdG5ldCVodHRwczovL3NlYWwtdGVzdG5ldC5hcGkucnVieW5vZGVzLmlvAGCtMrFNstY+2SXn+B4Xm+ZuTlhvEsCAFsYpSYT49/CLKh28tXispid2Z0kbZPFgxxsWgY6HCW+ehRRtzFjmnwwqt6J8vxBW/KaLxn5hekCHmyGjqESMx1vilAg4X0VEqQo=",
+   "previousTransaction": "6ZtGT1acYb4cs8staY8ggxu1DPRcuz6LiH7tRWK2Xox5"
+  },
+  {
+   "objectId": "0x90d781b6e6d1e7e1cc6854ae9a77dbb5a4ee60a1901245ba9f0b7ee5eb445cdc",
+   "version": "40303058",
+   "digest": "AN8BR1WaRqh6VB34GSWhnAELDbgHVpqWTamaFNbrDxBk",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x4cded1abeb52a22b6becb42a91d3686a4c901cf52eee16234214d0b5b2da4c46"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServerV1>",
+   "contents": "kNeBtubR5+HMaFSumnfbtaTuYKGQEkW6nwt+5etEXNwBAAAAAAAAABV0cml0b24tdGVzdG5ldC1zZWFsLTEkaHR0cHM6Ly9zZWFsLnRlc3RuZXQuc3VpLnJwY3Bvb2wuY29tAGCE/cO6LBLcJmU1RQ6yGUDyOmoJ+2ZR70yqQQe5g1udhHr1bxpJYG7OjwfTcawCj+4LvG94qmXB+yPenDHubdbqccpOa/vfHSpFtDdDX+bBJr9S4tf7DNTPvazUVAMyl+4=",
+   "previousTransaction": "3KKq9AJ5zDfXmYH96S1EGKKoEAAcSJLMnXNmU3jTpfBM"
+  },
+  {
+   "objectId": "0x93193abb49d76b6156cbb1d3e274ae5cbeb7c11e74465c8e28d437c74d2f7eba",
+   "version": "452383794",
+   "digest": "CFSXPFQcLvMgFz9vx8VFr6yiMU29FZUYVyEbvrq4ZurJ",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x8d90881fc48eb30d4422db68083b49e7d0f879658444e3a0ed85ce47feaa54b2::key_server::KeyServerV2>",
+   "contents": "kxk6u0nXa2FWy7HT4nSuXL63wR50RlyOKNQ3x00vfroCAAAAAAAAAEA1ZWJjNmJiMjJhY2YyMWRjMmE1ZjZiODFlYTI5N2RkMTZlNmM1YmUyNWRkNDQ2MTA3ZWUyNzIxYmRkMDUzYjdlAGC4Bo6RbnZ5HsGIYkvoPKviVjcZ7ZkalzLlTooEJxA3vF87NTVrL54is/WqhIVoAPIZvHRyQi/8rO0Mkh9DtPGSZi3rKUwGOdvw4tAK3lSDvK58cLJfnIodPSETDORB/r4BAAAAAAMABRBteXN0ZW4tdGVzdG5ldC0wOmh0dHBzOi8vc2VhbC1rZXktc2VydmVyLWNvbW1pdHRlZS10ZXN0bmV0LTAubXlzdGVubGFicy5jb21gh/9W12ruJVj87FLW1naqCcaDwt48ZSRs1YI1L8uSVjTSJNLYoLlyOZfcMD96H2YoEpkbJDBXu1XBCUsfrdHdlQZYUJ32+3SJAEixCP/eNPClH/LYoS8IsW0Uh8tC7O8BAAAbbm9kZWluZnJhLWNvbW1pdHRlZS10ZXN0bmV0LGh0dHBzOi8vY29tbWl0dGVlLXNlYWwtdGVzdG5ldC5ub2RlaW5mcmEuY29tYIVoKLKAZNDz8zmzao0VqAEYpCwr2WOgt5O51AyTN4r618fOypnyehegupBhztLLAQkkj3cwzaXD/zoElJ24EV5Y524NQr2ZXmog0byYswM4/HEdBx+4kiH/CIfswJ56VAEAG3NlYWwtdGVzdG5ldC1tcGMtcnVieS1ub2RlcylodHRwczovL3NlYWwtdGVzdG5ldC1tcGMuYXBpLnJ1Ynlub2Rlcy5pb2CpZmv8QMWzgDDb63mfqEjR1tD2zu7lBNmJDSJMpb3cSO3xIfu0chQywNUZT4hO3CgArwXBq4SBaDqNEdfUYht7UXTGC2AOuXzvYeVzTZjHjfqqcGWbT/CVSB5fF0UVKMgCAAlvdmVyY2xvY2ssaHR0cHM6Ly9zZWFsLWNvbW1pdHRlZS10ZXN0bmV0Lm92ZXJjbG9jay5ydW5gg/ezPs24wpwJupGYx7dpGkObxYK4sGd8QurGUkxbpCWA4PMtAvYY+7oLpaNYDiWkAQxIHOY4Rq31Bb1t2rfHhgOZWTQeCUkiQMSmavwWgUxRjYxXI4BZABuJFgIr2q3UAwASbmF0c2FpLXNlYWwtdGVzdC0yJmh0dHBzOi8vc2VhbC1jb21taXR0ZWUtdGVzdC5uYXRzYWkueHl6YLGYlwOtFrdyDw0YROOk7YMoHCcjETQu/9nTWq7XbH4UMvDapgh5WcIZ914iiFoyUQGM20taM2ZLwNgbEuVxgJopktJJjk99lMR6gcMFCdTyzIwTqlzNd0Zq2Kqv7PWAXgQA",
+   "previousTransaction": "BoA455yc3MtUnRWQBvtTJCMLGMfawjBVAp2NLPu5oMCi"
+  },
+  {
+   "objectId": "0x9362cf8e5cd24424477a15f30e2cb0fe4b237096fd7c26a8a3e03f91e51a00fa",
+   "version": "443947655",
+   "digest": "AvB7Cu6upTTBm7LFqLzWi66iHXYJ4bknR7qE6MX7NAv3",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x0f16e84a49dec8425e6900cfdfe3730aaf1e8bc608d9f0500fcfa2c2267abfb4::key_server::KeyServerV1>",
+   "contents": "k2LPjlzSRCRHehXzDiyw/ksjcJb9fCaoo+A/keUaAPoBAAAAAAAAAAtteXN0ZW4tdjEtMjBodHRwczovL3NlYWwta2V5LXNlcnZlci10ZXN0bmV0LTIubXlzdGVubGFicy5jb20AYKjLb1kCfRTgo+l+ob15qmqULzb/yDX1AlWRxoDVmKVUHwh/rLOfsSodnXGzpRCUKxdg5fZoX4ZmCkw4sXiSi7bQNipsfiRJhVJ4MseDqLUZXbdD/yKJ3jsjIm2ths1w8Q==",
+   "previousTransaction": "QECe7j1vzutjZgpsGueM4t2CmGG1YZQooUVXHovmK59"
+  },
+  {
+   "objectId": "0x9642615b3a4e2382287504f7d12031e8807b070bb39853f6f355a5b3ed004fe8",
+   "version": "443947654",
+   "digest": "BoMHLctjN222zuqfCYYP8qbtp2M5Z3P225vNEyE8Qmah",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75"
+   },
+   "type": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field<u64,0x0f16e84a49dec8425e6900cfdfe3730aaf1e8bc608d9f0500fcfa2c2267abfb4::key_server::KeyServerV1>",
+   "contents": "lkJhWzpOI4IodQT30SAx6IB7BwuzmFP281Wls+0AT+gBAAAAAAAAAAtteXN0ZW4tdjEtMTBodHRwczovL3NlYWwta2V5LXNlcnZlci10ZXN0bmV0LTEubXlzdGVubGFicy5jb20AYKBAtVSLsEKPuhWYlcBwgMv9x27wG7iMos7VyFsHeC4JlwofVoTioN09PjG+tsvX6gLEmjeUsmxtPZ/9yZ5JhMyYHQ1y6TPCrzMJIWv3AR6egse2gnaILxi6Dqf0Wnch2w==",
+   "previousTransaction": "DKPsZTsqAGg85THpZmoa2uSFZmayBCnErbNaRUpyuFZA"
+  },
+  {
+   "objectId": "0x9c949e53c36ab7a9c484ed9e8b43267a77d4b8d70e79aa6b39042e3d4c434105",
+   "version": "39967942",
+   "digest": "ALhhoqY1Qj4S8nSceGh4VSY8DLediu8Woa6ixrvTVDHA",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "39967942"
+   },
+   "type": "0xe3d7e7a08ec189788f24840d27b02fee45cf3afc0fb579d6e3fd8450c5153d26::key_server::KeyServer",
+   "contents": "nJSeU8Nqt6nEhO2ei0MmenfUuNcOeaprOQQuPUxDQQUBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "CbA4fyn4tCsbvozqapBarApx2TKuUkwAsmUVom1s49zm"
+  },
+  {
+   "objectId": "0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98",
+   "version": "452383791",
+   "digest": "9TSYSAZaurrajtkpRhmy8e2cPXFeZwX4cdjxgB1XoNbf",
+   "owner": {
+    "_tag": "ObjectOwner",
+    "address": "0xeb24d4421215e68a98f46d2832df2791bf8b3daaca7d21780e177d9bf21386d2"
+   },
+   "type": "0x4614e5da0136ee7d464992ddd3719d388ae2bfdb48dfec6d9ad579f87341f2e1::key_server::KeyServer",
+   "contents": "sBI3jJ83mftbGnCD2nSkBp48PxyT3gsnISpXmc4eHpgCAAAAAAAAAAIAAAAAAAAA",
+   "previousTransaction": "7A5HC3CvSc9DGynKQbQATh4vZXomG7pxuBMnURUgzrCZ"
+  },
+  {
+   "objectId": "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8",
+   "version": "443947655",
+   "digest": "B21SRNU4eA1qztQKfxoHTzvPFxKxfBfiqfeyPEtD6Eax",
+   "owner": {
+    "_tag": "Shared",
+    "initialSharedVersion": "443947655"
+   },
+   "type": "0x0f16e84a49dec8425e6900cfdfe3730aaf1e8bc608d9f0500fcfa2c2267abfb4::key_server::KeyServer",
+   "contents": "9dFKgamCFErkQc19ZLCQJ/EWpGi9NufspJT3UFkWI8gBAAAAAAAAAAEAAAAAAAAA",
+   "previousTransaction": "QECe7j1vzutjZgpsGueM4t2CmGG1YZQooUVXHovmK59"
+  }
+ ],
+ "services": {
+  "0x164ac3d2b3b8694b8181c13f671950004765c23f270321a45fdd04d40cccf0f2": {
+   "url": "https://open.key-server.testnet.seal.mirai.cloud",
+   "status": 200,
+   "version": "0.6.14",
+   "body": "{\"service_id\":\"0x164ac3d2b3b8694b8181c13f671950004765c23f270321a45fdd04d40cccf0f2\",\"pop\":\"jz4NlNF5pG58+nMC+plVhvxp3toagO+q0IReZyG5nOV1vk37jSeOGZ14ixVqgOZN\"}"
+  },
+  "0x39cef09b24b667bc6ed54f7159d82352fe2d5dd97ca9a5beaa1d21aa774f25a2": {
+   "url": "https://seal-open.sui-testnet.h2o-nodes.com",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0x39cef09b24b667bc6ed54f7159d82352fe2d5dd97ca9a5beaa1d21aa774f25a2\",\"pop\":\"qj3zz3BPSVZpkDa5U4Yn6wuyMw6sUSHitoLFOsyVZxHexJxL9OdccnOr5a+TpHZh\"}"
+  },
+  "0x3c93ec1474454e1b47cf485a4e5361a5878d722b9492daf10ef626a76adc3dad": {
+   "url": "https://seal-open-test.natsai.xyz",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0x3c93ec1474454e1b47cf485a4e5361a5878d722b9492daf10ef626a76adc3dad\",\"pop\":\"iJITa1Xvo7w4tYM6osFHHvfXCZaauTJDnD6U3Ewnl4lWN6Q1z6xI3ZbeUJTDlotT\"}"
+  },
+  "0x4cded1abeb52a22b6becb42a91d3686a4c901cf52eee16234214d0b5b2da4c46": {
+   "url": "https://seal.testnet.sui.rpcpool.com",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0x4cded1abeb52a22b6becb42a91d3686a4c901cf52eee16234214d0b5b2da4c46\",\"pop\":\"tsYRROsDnnUWd0uirigBIKF6AK73o2GxgKfQlKQF8Db1PpYWPlsNEPwbsJV576/Z\"}"
+  },
+  "0x5466b7df5c15b508678d51496ada8afab0d6f70a01c10613123382b1b8131007": {
+   "url": "https://open-seal-testnet.nodeinfra.com",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0x5466b7df5c15b508678d51496ada8afab0d6f70a01c10613123382b1b8131007\",\"pop\":\"pPjGySA3/jVg9m+XxolG3RuwHTVXUGqPRo6GUbKDXQX2fukhbDj9BlMSUEXPibkX\"}"
+  },
+  "0x6068c0acb197dddbacd4746a9de7f025b2ed5a5b6c1b1ab44dade4426d141da2": {
+   "url": "https://seal-testnet.api.rubynodes.io",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0x6068c0acb197dddbacd4746a9de7f025b2ed5a5b6c1b1ab44dade4426d141da2\",\"pop\":\"qgyU+o7Dopj3/Zoi6aQEJBtomV5//4eCyHzuo9w8CuH532P347Swa8u9xyZjXE6z\"}"
+  },
+  "0x6a0726a1ea3d62ba2f2ae51104f2c3633c003fb75621d06fde47f04dc930ba06": {
+   "url": "https://seal-testnet-open.suiftly.io",
+   "status": 503,
+   "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n"
+  },
+  "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75": {
+   "url": "https://seal-key-server-testnet-1.mystenlabs.com",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75\",\"pop\":\"lyXUNwyEKphh6rJ28WRgnCC1LjT0AX9j7lbqoQjlKZWUXijHEnMTwmvgLlE8WUcc\"}"
+  },
+  "0x9c949e53c36ab7a9c484ed9e8b43267a77d4b8d70e79aa6b39042e3d4c434105": {
+   "url": "https://seal-testnet-open.overclock.run",
+   "error": "TimeoutError: The operation timed out."
+  },
+  "0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98": {
+   "url": "https://seal-aggregator-testnet.mystenlabs.com",
+   "status": 400,
+   "version": "0.6.16",
+   "body": "Unsupported"
+  },
+  "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8": {
+   "url": "https://seal-key-server-testnet-2.mystenlabs.com",
+   "status": 200,
+   "version": "0.6.16",
+   "body": "{\"service_id\":\"0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8\",\"pop\":\"o8HaTy68eARZEZkfGyHMOMjEFd4Qi8C4sRqMEq8SbFV73uLZ8gvHIluSDdn+w18/\"}"
+  }
+ }
+}
