@@ -3,11 +3,14 @@
  * server that takes the raw blob, encodes it, stores it on the nodes and
  * answers with a certificate, in exchange for a tip in SUI.
  *
- *   UploadRelay.layer({ host: "https://upload-relay.testnet.walrus.space" }).pipe(Layer.provide(FetchHttpClient.layer))
+ *   UploadRelay.layer({ host: "https://upload-relay.testnet.walrus.space", maxTip: 10_000_000n })
+ *     .pipe(Layer.provide(FetchHttpClient.layer))
  *
  * The relay is trusted with availability only: `verifyCertificate` checks
  * what it returns (signers, weight, message, aggregate signature) before a
- * certify transaction is built (item 16). `Write.run` with `via: "relay"`
+ * certify transaction is built (item 16). The tip is the one thing the relay
+ * decides that costs money, so it is bounded by the caller: `maxTip` is
+ * required, and `tipAddress` can pin where it goes. `Write.run` with `via: "relay"`
  * does all of this; the pieces are exported for flows that need them apart.
  *
  * Requests match `@mysten/walrus`'s `UploadRelayClient.writeBlob` (URL and
@@ -35,6 +38,7 @@ import type { Committee } from "./Committee.ts"
 import { Encoder } from "./Encoder.ts"
 import * as Encoding from "./Encoding.ts"
 import { type BlobTooLarge, CertificateInvalid, RelayError, TipTooHigh } from "./Errors.ts"
+import { DEFAULT_MIN_UPLOAD_RATE, scaledTimeout } from "./StorageNode.ts"
 import { System, type SystemError } from "./System.ts"
 
 // -----------------------------------------------------------------------------
@@ -125,8 +129,10 @@ export interface UploadOptions {
 export interface UploadRelayService {
   /** `GET /v1/tip-config`, cached for the layer's life once it succeeds. */
   readonly tipConfig: Effect.Effect<TipConfig, RelayError>
-  /** `authAndTip` refuses tips above this. */
-  readonly maxTip: bigint | undefined
+  /** `authAndTip` refuses tips above this (MIST). */
+  readonly maxTip: bigint
+  /** When set, `authAndTip` refuses a tip config that names another address. */
+  readonly tipAddress?: Address.Address | undefined
   /** `POST /v1/blob-upload-relay` (R2, R4): the relay's certificate, **unverified** (use `verifyCertificate`). */
   readonly upload: (o: UploadOptions) => Effect.Effect<Certificate.Certificate, RelayError>
 }
@@ -136,10 +142,25 @@ export class UploadRelay extends Context.Service<UploadRelay, UploadRelayService
 export interface UploadRelayOptions {
   /** The relay's base URL, e.g. `https://upload-relay.testnet.walrus.space`. */
   readonly host: string
-  /** The most the client will tip, in MIST; above it `authAndTip` fails with `TipTooHigh`. Default: no limit. */
-  readonly maxTip?: bigint
-  /** Per request, body included. Default 60 seconds (the relay stores the blob on the nodes before it answers). */
+  /**
+   * The most the client will tip per blob, in MIST; above it `authAndTip` fails with `TipTooHigh` before
+   * anything is signed. Required: the amount comes from the relay's `/v1/tip-config` answer, so without a
+   * bound the relay (or whoever answers for its host) would choose what the signer pays (`@mysten/walrus`
+   * likewise needs `sendTip: { max }`). `0n` accepts only relays that want no tip.
+   */
+  readonly maxTip: bigint
+  /**
+   * The address the tip must go to. When set, a tip config naming any other address is a `RelayError`
+   * before anything is signed. Default: whatever the relay's tip config says.
+   */
+  readonly tipAddress?: string
+  /**
+   * Per request. Default 60 seconds (the relay stores the blob on the nodes before it answers). The upload
+   * gets this plus the time the blob takes at `minUploadRate` (`StorageNode.scaledTimeout`).
+   */
   readonly requestTimeout?: Duration.Input
+  /** The slowest uplink an upload is expected to tolerate, in bytes per second. Default 125,000 (1 Mbit/s). */
+  readonly minUploadRate?: number
   /** Default `false`, as for storage nodes: trace headers would make browsers preflight. */
   readonly tracerPropagation?: boolean
 }
@@ -202,11 +223,16 @@ export const layer = (options: UploadRelayOptions): Layer.Layer<UploadRelay, nev
     Effect.gen(function*() {
       const http = yield* HttpClient.HttpClient
       const base = options.host.replace(/\/+$/, "")
-      const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60))
+      const baseTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60))
+      const minUploadRate = options.minUploadRate ?? DEFAULT_MIN_UPLOAD_RATE
       const tracerPropagation = options.tracerPropagation ?? false
 
       /** One request; a 2xx body parsed as JSON, everything else a `RelayError`. */
-      const call = (operation: string, request: HttpClientRequest.HttpClientRequest): Effect.Effect<unknown, RelayError> => {
+      const call = (
+        operation: string,
+        request: HttpClientRequest.HttpClientRequest,
+        timeout: Duration.Duration = baseTimeout
+      ): Effect.Effect<unknown, RelayError> => {
         const fail = (message: string, status?: number) =>
           new RelayError({ ...(status !== undefined && { status }), message: `${operation}: ${message}` })
         return http.execute(HttpClientRequest.prependUrl(request, base)).pipe(
@@ -255,7 +281,8 @@ export const layer = (options: UploadRelayOptions): Layer.Layer<UploadRelay, nev
             HttpClientRequest.post(uploadPath(o)).pipe(
               HttpClientRequest.acceptJson,
               HttpClientRequest.bodyUint8Array(o.blob, "application/octet-stream")
-            )
+            ),
+            scaledTimeout(baseTimeout, o.blob.length, minUploadRate)
           ),
           (json) => {
             const parsed = parseUploadResponse(json, o.blobId)
@@ -265,7 +292,10 @@ export const layer = (options: UploadRelayOptions): Layer.Layer<UploadRelay, nev
           }
         )
 
-      return UploadRelay.of({ tipConfig, maxTip: options.maxTip, upload })
+      // An untyped caller without `maxTip` gets no tip at all rather than an unbounded one.
+      const maxTip = typeof options.maxTip === "bigint" && options.maxTip >= 0n ? options.maxTip : 0n
+      const tipAddress = options.tipAddress === undefined ? undefined : Address.normalize(options.tipAddress)
+      return UploadRelay.of({ tipConfig, maxTip, tipAddress, upload })
     })
   )
 
@@ -302,8 +332,14 @@ export const authAndTipWith = (
     const state = yield* Effect.flatMap(Effect.service(System), (s) => s.state)
     const size = Encoding.symbolSize(o.blob.length, state.nShards)
     if (Result.isFailure(size)) return yield* size.failure
+    if (relay.tipAddress !== undefined && config.address !== relay.tipAddress) {
+      return yield* new RelayError({
+        message: `tipConfig: tip address ${config.address} differs from the configured ${relay.tipAddress}`
+      })
+    }
     const tip = tipAmount(config, o.blob.length, state.nShards)
-    if (relay.maxTip !== undefined && tip > relay.maxTip) return yield* new TipTooHigh({ tip, max: relay.maxTip })
+    const max = typeof relay.maxTip === "bigint" ? relay.maxTip : 0n
+    if (tip > max) return yield* new TipTooHigh({ tip, max })
     // Input 0 (R3): nothing may be added to the builder before this.
     yield* Ptb.pure(AuthPackage, authPackage(o.blob, o.nonce))
     const coin = yield* Ptb.coin({ amount: tip })

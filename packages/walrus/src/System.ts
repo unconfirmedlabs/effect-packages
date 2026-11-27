@@ -53,7 +53,7 @@ export interface SystemState {
 export type SystemError = RpcError | Objects.ObjectNotFound | Objects.ObjectDecodeError | UnsupportedSystemVersion
 
 export class System extends Context.Service<System, {
-  /** Cached; `refresh` drops the cache. */
+  /** Cached for `STATE_TTL` (prices, the package id and the epoch move); `refresh` drops the cache. */
   readonly state: Effect.Effect<SystemState, SystemError>
   readonly refresh: Effect.Effect<SystemState, SystemError>
   /** `Coin<T>`'s `T` in `system::reserve_space`'s `payment` parameter; cached for the layer's life. */
@@ -149,11 +149,15 @@ export const loadWalType = (packageId: Address.Address): Effect.Effect<string, S
 
 const successForever = (exit: Exit.Exit<unknown, unknown>) => Exit.isSuccess(exit) ? Duration.infinity : Duration.zero
 
+/** How long `System.state` is reused: the committee's default TTL. Register transactions pay exact prices. */
+export const STATE_TTL: Duration.Duration = /* @__PURE__ */ Duration.minutes(1)
+const successForTtl = (exit: Exit.Exit<unknown, unknown>) => Exit.isSuccess(exit) ? STATE_TTL : Duration.zero
+
 export const layer: Layer.Layer<System, never, WalrusConfig | Objects.Objects | Packages.Packages> = Layer.effect(
   System,
   Effect.gen(function*() {
     const context = yield* Effect.context<WalrusConfig | Objects.Objects | Packages.Packages>()
-    const [state, invalidate] = yield* Effect.cachedInvalidateWithTTL(Effect.provideContext(load, context), successForever)
+    const [state, invalidate] = yield* Effect.cachedInvalidateWithTTL(Effect.provideContext(load, context), successForTtl)
     const [walType] = yield* Effect.cachedInvalidateWithTTL(
       Effect.flatMap(state, (s) => loadWalType(s.packageId)).pipe(Effect.provideContext(context)),
       successForever

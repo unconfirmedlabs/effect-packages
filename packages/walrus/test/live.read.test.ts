@@ -27,7 +27,7 @@ import * as Read from "../src/Read.ts"
 import * as Status from "../src/Status.ts"
 import * as StorageNode from "../src/StorageNode.ts"
 import * as System from "../src/System.ts"
-import { live, recentCertified, suiLayer, TESTNET_FULLNODE } from "./support.ts"
+import { describeReadFailure, live, readableCandidates, suiLayer, TESTNET_FULLNODE } from "./support.ts"
 
 const suite = live ? describe : describe.skip
 const AGGREGATOR = "https://aggregator.walrus-testnet.walrus.space"
@@ -59,19 +59,31 @@ suite("live testnet reads (SUI_LIVE=1)", () => {
     const result = await runLive(
       Effect.gen(function*() {
         const { current } = yield* (yield* Effect.service(Committee.Committees)).get
-        const candidates = (yield* recentCertified(50)).filter((c) => !c.isExtension && c.endEpoch >= current.epoch + 2)
-        for (const candidate of candidates) {
+        const candidates = yield* readableCandidates(current.epoch)
+        const skipped: Array<string> = []
+        for (const candidate of candidates.slice(0, 20)) {
           const metadata = yield* Effect.result(Read.metadata(candidate.blobId))
-          if (Result.isFailure(metadata) || metadata.success.unencodedLength >= MAX_CANDIDATE) continue
+          if (Result.isFailure(metadata)) {
+            skipped.push(`${candidate.blobId} metadata: ${describeReadFailure(metadata.failure)}`)
+            continue
+          }
+          if (metadata.success.unencodedLength >= MAX_CANDIDATE) continue
           const status = yield* Read.status(candidate.blobId)
           const started = performance.now()
-          const bytes = yield* Read.blob(candidate.blobId)
+          const read = yield* Effect.result(Read.blob(candidate.blobId))
+          if (Result.isFailure(read)) {
+            expect(read.failure._tag).not.toBe("InconsistentBlob")
+            skipped.push(`${candidate.blobId} read: ${describeReadFailure(read.failure)}`)
+            continue
+          }
+          if (skipped.length > 0) console.warn(`skipped candidates:\n  ${skipped.join("\n  ")}`)
+          const bytes = read.success
           const elapsed = performance.now() - started
           const encoder = yield* Effect.service(Encoder.Encoder)
           const { blobId } = yield* encoder.blobId(current.nShards, bytes)
           return { candidate, metadata: metadata.success, status, bytes, elapsed, blobId }
         }
-        return yield* Effect.die(new Error(`no readable candidate among ${candidates.length}`))
+        return yield* Effect.die(new Error(`no readable candidate among ${candidates.length}:\n  ${skipped.join("\n  ")}`))
       })
     )
     console.log(

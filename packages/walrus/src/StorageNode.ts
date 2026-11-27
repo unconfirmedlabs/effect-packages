@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
+import * as Stream from "effect/Stream"
 import * as HttpClient from "effect/http/HttpClient"
 import * as HttpClientRequest from "effect/http/HttpClientRequest"
 import type * as HttpClientResponse from "effect/http/HttpClientResponse"
@@ -140,25 +141,75 @@ export interface SignedConfirmation {
 }
 
 export interface StorageNodesOptions {
-  /** Per request, body included. Default 30 seconds; a timeout is `NodeError` `"Timeout"`. */
+  /**
+   * Per request. Default 30 seconds; a timeout is `NodeError` `"Timeout"`. Uploads (`putMetadata`,
+   * `putSliver`) get this plus the time their bytes take at `minUploadRate` (`scaledTimeout`).
+   */
   readonly requestTimeout?: Duration.Input
+  /**
+   * The slowest uplink an upload is expected to tolerate, in bytes per second. Default 125,000
+   * (1 Mbit/s). An upload's timeout grows by `bytes / minUploadRate`, where `bytes` is its body, or the
+   * bytes it shares the link with when the caller says so (`Write` passes its in-flight window).
+   */
+  readonly minUploadRate?: number
   /** Default `false`: nodes do not list trace headers for CORS, so browsers would preflight and fail. */
   readonly tracerPropagation?: boolean
 }
 
+/** Per-call hints for uploads. */
+export interface UploadHints {
+  /**
+   * Bytes in flight on the same uplink as this request, its own included (default: its body). The
+   * request's timeout allows for all of them to drain at `minUploadRate`.
+   */
+  readonly sharedBytes?: number
+}
+
+/** Per-call limits for downloads. */
+export interface DownloadLimits {
+  /** Refuse a body larger than this (`Malformed`), checked against `content-length` and while reading. */
+  readonly maxBytes?: number
+}
+
+/** 1 Mbit/s. */
+export const DEFAULT_MIN_UPLOAD_RATE = 125_000
+
+/**
+ * The timeout of a request that sends `bytes`: `base + bytes / bytesPerSecond`. A slow uplink then
+ * delays a large upload instead of timing it out and sending it again. Non-finite or non-positive
+ * rates add nothing.
+ */
+export const scaledTimeout = (base: Duration.Input, bytes: number, bytesPerSecond: number): Duration.Duration => {
+  const b = Duration.fromInputUnsafe(base)
+  if (!(bytes > 0) || !(bytesPerSecond > 0) || !Number.isFinite(bytesPerSecond)) return b
+  return Duration.sum(b, Duration.millis(Math.ceil((bytes / bytesPerSecond) * 1000)))
+}
+
+/** Body caps when the caller gives none: JSON answers are small; metadata at the largest `n` (65,535 shards) is ~4.2 MB. */
+const MAX_JSON_BYTES = 1024 * 1024
+const MAX_METADATA_BYTES = 8 * 1024 * 1024
+const MAX_SLIVER_BYTES = 256 * 1024 * 1024
+
 export class StorageNodes extends Context.Service<StorageNodes, {
   /** N1: raw BCS `BlobMetadataWithId`; check it with `Messages.verifyMetadata`. */
-  readonly metadata: (node: Node, blobId: BlobId) => Effect.Effect<Uint8Array, NodeError>
+  readonly metadata: (node: Node, blobId: BlobId, limits?: DownloadLimits) => Effect.Effect<Uint8Array, NodeError>
   /** N4: whether the node holds the metadata. */
   readonly metadataStatus: (node: Node, blobId: BlobId) => Effect.Effect<StoredOnNode, NodeError>
   /** N3: raw BCS `SliverData`; check it with `Messages.checkSliver`. */
-  readonly sliver: (node: Node, blobId: BlobId, pairIndex: number, axis: Axis) => Effect.Effect<Uint8Array, NodeError>
+  readonly sliver: (node: Node, blobId: BlobId, pairIndex: number, axis: Axis, limits?: DownloadLimits) => Effect.Effect<Uint8Array, NodeError>
   /** N6: an unknown blob is `Nonexistent` (the node answers `200 "nonexistent"`). */
   readonly status: (node: Node, blobId: BlobId) => Effect.Effect<BlobStatus, NodeError>
   /** N2: the body is BCS `BlobMetadata` (no id), `VerifiedMetadata.bytes`. */
-  readonly putMetadata: (node: Node, blobId: BlobId, metadata: Uint8Array) => Effect.Effect<StoreResult, NodeError>
+  readonly putMetadata: (node: Node, blobId: BlobId, metadata: Uint8Array, hints?: UploadHints) => Effect.Effect<StoreResult, NodeError>
   /** N3: the body is BCS `SliverData`. */
-  readonly putSliver: (node: Node, blobId: BlobId, pairIndex: number, axis: Axis, sliver: Uint8Array) => Effect.Effect<StoreResult, NodeError>
+  readonly putSliver: (
+    node: Node,
+    blobId: BlobId,
+    pairIndex: number,
+    axis: Axis,
+    sliver: Uint8Array,
+    hints?: UploadHints
+  ) => Effect.Effect<StoreResult, NodeError>
   /** N4. */
   readonly sliverStatus: (node: Node, blobId: BlobId, pairIndex: number, axis: Axis) => Effect.Effect<StoredOnNode, NodeError>
   /** N5: the raw signed confirmation; the caller checks the message and the signature. */
@@ -183,27 +234,53 @@ export const layer = (options: StorageNodesOptions = {}): Layer.Layer<StorageNod
     StorageNodes,
     Effect.gen(function*() {
       const http = yield* HttpClient.HttpClient
-      const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(30))
+      const baseTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(30))
+      const minUploadRate = options.minUploadRate ?? DEFAULT_MIN_UPLOAD_RATE
       const tracerPropagation = options.tracerPropagation ?? false
 
-      /** One request: 2xx bodies as bytes, everything else as a `NodeError`. */
+      /** One request: 2xx bodies as bytes (at most `maxBytes`), everything else as a `NodeError`. */
       const call = (
         operation: Operation,
         node: Node,
-        request: HttpClientRequest.HttpClientRequest
+        request: HttpClientRequest.HttpClientRequest,
+        maxBytes: number,
+        timeout: Duration.Duration = baseTimeout
       ): Effect.Effect<{ readonly status: number; readonly body: Uint8Array }, NodeError> => {
         const base = node.url.replace(/\/+$/, "")
         const fail = (kind: NodeErrorKind, message: string, status?: number) =>
           new NodeError({ node: base, kind, ...(status !== undefined && { status }), message: `${operation}: ${message}` })
-        const read = (res: HttpClientResponse.HttpClientResponse) =>
-          Effect.mapError(res.arrayBuffer, (e) => fail("Unavailable", e.message, res.status))
+        // A node cannot make us buffer more than the answer can be: `content-length` first, then while reading.
+        const read = (res: HttpClientResponse.HttpClientResponse, limit: number) => {
+          const tooLarge = (size: number | string) => fail("Malformed", `body of ${size} bytes exceeds ${limit}`, res.status)
+          const declared = Number(res.headers["content-length"])
+          if (Number.isFinite(declared) && declared > limit) return Effect.fail(tooLarge(declared))
+          return Stream.runFoldEffect(
+            Stream.mapError(res.stream, (e) => fail("Unavailable", e.message, res.status)),
+            () => ({ chunks: [] as Array<Uint8Array>, size: 0 }),
+            (acc, chunk) => {
+              acc.size += chunk.length
+              if (acc.size > limit) return Effect.fail(tooLarge(`more than ${limit}`))
+              acc.chunks.push(chunk)
+              return Effect.succeed(acc)
+            }
+          ).pipe(Effect.map(({ chunks, size }) => {
+            if (chunks.length === 1) return chunks[0]!
+            const out = new Uint8Array(size)
+            let offset = 0
+            for (const c of chunks) {
+              out.set(c, offset)
+              offset += c.length
+            }
+            return out
+          }))
+        }
         return http.execute(HttpClientRequest.prependUrl(request, base)).pipe(
           Effect.mapError((e) => fail("Unavailable", e.message)),
           Effect.flatMap((res) =>
             res.status >= 200 && res.status < 300
-              ? Effect.map(read(res), (buf) => ({ status: res.status, body: new Uint8Array(buf) }))
-              : read(res).pipe(
-                Effect.orElseSucceed(() => new ArrayBuffer(0)),
+              ? Effect.map(read(res, maxBytes), (body) => ({ status: res.status, body }))
+              : read(res, MAX_JSON_BYTES).pipe(
+                Effect.orElseSucceed(() => new Uint8Array(0)),
                 Effect.flatMap((buf) => Effect.fail(fromResponse(base, operation, res.status, new TextDecoder().decode(buf))))
               )
           ),
@@ -224,7 +301,7 @@ export const layer = (options: StorageNodesOptions = {}): Layer.Layer<StorageNod
         request: HttpClientRequest.HttpClientRequest,
         decode: (u: unknown) => Result.Result<A, Schema.SchemaError>
       ): Effect.Effect<A, NodeError> =>
-        Effect.flatMap(call(operation, node, HttpClientRequest.acceptJson(request)), ({ status, body }) => {
+        Effect.flatMap(call(operation, node, HttpClientRequest.acceptJson(request), MAX_JSON_BYTES), ({ status, body }) => {
           const malformed = (message: string) =>
             Effect.fail(new NodeError({ node: node.url.replace(/\/+$/, ""), kind: "Malformed", status, message: `${operation}: ${message}` }))
           let parsed: unknown
@@ -237,28 +314,36 @@ export const layer = (options: StorageNodesOptions = {}): Layer.Layer<StorageNod
           return Result.isSuccess(result) ? Effect.succeed(result.success) : malformed(result.failure.message)
         })
 
-      const store = (operation: Operation, node: Node, path: string, body: Uint8Array): Effect.Effect<StoreResult, NodeError> =>
+      const store = (operation: Operation, node: Node, path: string, body: Uint8Array, hints?: UploadHints): Effect.Effect<StoreResult, NodeError> =>
         Effect.map(
-          call(operation, node, HttpClientRequest.put(path).pipe(HttpClientRequest.acceptJson, HttpClientRequest.bodyUint8Array(body, OCTETS))),
+          call(
+            operation,
+            node,
+            HttpClientRequest.put(path).pipe(HttpClientRequest.acceptJson, HttpClientRequest.bodyUint8Array(body, OCTETS)),
+            MAX_JSON_BYTES,
+            scaledTimeout(baseTimeout, Math.max(body.length, hints?.sharedBytes ?? 0), minUploadRate)
+          ),
           // 201 stored, 202 buffered (only with `?pending=true`, which we never send), 200 already stored (N2).
           ({ status }) => (status === 200 ? "alreadyStored" : "stored")
         )
 
-      const bytes = (operation: Operation, node: Node, path: string) =>
-        Effect.map(call(operation, node, HttpClientRequest.get(path).pipe(HttpClientRequest.accept(OCTETS))), (r) => r.body)
+      const bytes = (operation: Operation, node: Node, path: string, maxBytes: number) =>
+        Effect.map(call(operation, node, HttpClientRequest.get(path).pipe(HttpClientRequest.accept(OCTETS)), maxBytes), (r) => r.body)
 
       const blob = (blobId: BlobId) => `/v1/blobs/${blobId}`
       const sliverPath = (blobId: BlobId, pairIndex: number, axis: Axis) => `${blob(blobId)}/slivers/${pairIndex}/${axis}`
 
       return StorageNodes.of({
-        metadata: (node, blobId) => bytes("metadata", node, `${blob(blobId)}/metadata`),
+        metadata: (node, blobId, limits) => bytes("metadata", node, `${blob(blobId)}/metadata`, limits?.maxBytes ?? MAX_METADATA_BYTES),
         metadataStatus: (node, blobId) =>
           Effect.map(json("metadataStatus", node, HttpClientRequest.get(`${blob(blobId)}/metadata/status`), decodeStored), (r) => r.success.data),
-        sliver: (node, blobId, pairIndex, axis) => bytes("sliver", node, sliverPath(blobId, pairIndex, axis)),
+        sliver: (node, blobId, pairIndex, axis, limits) =>
+          bytes("sliver", node, sliverPath(blobId, pairIndex, axis), limits?.maxBytes ?? MAX_SLIVER_BYTES),
         status: (node, blobId) =>
           Effect.map(json("status", node, HttpClientRequest.get(`${blob(blobId)}/status`), decodeStatus), (r) => r.success.data),
-        putMetadata: (node, blobId, metadata) => store("putMetadata", node, `${blob(blobId)}/metadata`, metadata),
-        putSliver: (node, blobId, pairIndex, axis, sliver) => store("putSliver", node, sliverPath(blobId, pairIndex, axis), sliver),
+        putMetadata: (node, blobId, metadata, hints) => store("putMetadata", node, `${blob(blobId)}/metadata`, metadata, hints),
+        putSliver: (node, blobId, pairIndex, axis, sliver, hints) =>
+          store("putSliver", node, sliverPath(blobId, pairIndex, axis), sliver, hints),
         sliverStatus: (node, blobId, pairIndex, axis) =>
           Effect.map(json("sliverStatus", node, HttpClientRequest.get(`${sliverPath(blobId, pairIndex, axis)}/status`), decodeStored), (r) => r.success.data),
         confirmation: (node, blobId, persistence) =>

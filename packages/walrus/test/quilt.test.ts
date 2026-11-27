@@ -283,9 +283,23 @@ describe("QuiltRead", () => {
     expect(idx.calls.sliverRoots).toBe(1)
     expect(idx.requests.filter(isSecondary).map(columnOf)).toEqual([0])
 
+    // The index and the patch columns are verified together: one WASM call.
     const by = await run(QuiltRead.byIdentifier(QUILT_ID, "z/empty"), current(c), nodesFor(c, true))
     expect(value(by.exit)).toEqual(fileOf("z/empty"))
-    expect(by.calls).toEqual({ decode: 0, blobId: 0, sliverRoots: 2 })
+    expect(by.calls).toEqual({ decode: 0, blobId: 0, sliverRoots: 1 })
+  })
+
+  test("byIdentifier: a corrupted index or patch column is caught by the joint check and falls back", async () => {
+    for (const column of [0, readme.startIndex]) {
+      const target = Encoding.pairOfSecondary(column, N)
+      const nodes = nodesFor(c, true, (req) =>
+        secondaryPair(req) === target
+          ? { status: 200, contentType: "application/octet-stream", body: corrupt(encoded.secondary[target]!) }
+          : undefined)
+      const { exit, calls } = await run(QuiltRead.byIdentifier(QUILT_ID, "readme.md"), current(c), nodes)
+      expect(value(exit)).toEqual(fileOf("readme.md"))
+      expect(calls.decode).toBe(1) // the verified full read
+    }
   })
 
   test("a corrupted column fails the Merkle check: falls back to a verified full read", async () => {

@@ -6,12 +6,14 @@
  * Live (SUI_LIVE=1): a status and a metadata from one reachable testnet node.
  */
 import { describe, expect, test } from "bun:test"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
 import * as HttpClient from "effect/http/HttpClient"
+import * as HttpClientResponse from "effect/http/HttpClientResponse"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
 import { TestClock } from "effect/testing"
 import type { BlobId } from "../src/BlobId.ts"
@@ -25,7 +27,7 @@ import {
   type FixtureResponse,
   live,
   type Outcome,
-  recentCertified,
+  readableCandidates,
   recorded,
   type Recorded,
   replyOf,
@@ -238,6 +240,82 @@ describe("error mapping", () => {
       }).pipe(Effect.provide(Layer.merge(layer, TestClock.layer())))
     )
     expect(failure(exit).kind).toBe("Timeout")
+  })
+
+  test("scaledTimeout: base + bytes / rate, rounded up to the millisecond; bad rates add nothing", () => {
+    const ms = (d: ReturnType<typeof StorageNode.scaledTimeout>) => Duration.toMillis(d)
+    expect(ms(StorageNode.scaledTimeout("15 seconds", 0, 125_000))).toBe(15_000)
+    // The reviewer's case: a 12.5 MB window at 1 Mbit/s needs 100 s on top of the base.
+    expect(ms(StorageNode.scaledTimeout("15 seconds", 12_500_000, 125_000))).toBe(115_000)
+    expect(ms(StorageNode.scaledTimeout("60 seconds", 75_000_000, StorageNode.DEFAULT_MIN_UPLOAD_RATE))).toBe(660_000)
+    expect(ms(StorageNode.scaledTimeout("1 second", 1, 3))).toBe(1334)
+    for (const rate of [0, -1, NaN, Infinity]) expect(ms(StorageNode.scaledTimeout("2 seconds", 1_000_000, rate))).toBe(2000)
+  })
+
+  const putTimesOutAt = async (hints: StorageNode.UploadHints | undefined, options: StorageNode.StorageNodesOptions) => {
+    const { layer } = scriptedNodes(() => "hang", options)
+    return Effect.runPromise(
+      Effect.gen(function*() {
+        const body = new Uint8Array(250_000)
+        const fiber = yield* Effect.forkChild(
+          Effect.flatMap(Effect.service(StorageNode.StorageNodes), (s) => s.putSliver(NODE, permanentId, 1, "primary", body, hints))
+        )
+        let elapsed = 0
+        while (fiber.pollUnsafe() === undefined && elapsed < 600_000) {
+          yield* TestClock.adjust("100 millis")
+          elapsed += 100
+        }
+        expect(failure(yield* Fiber.await(fiber)).kind).toBe("Timeout")
+        return elapsed
+      }).pipe(Effect.provide(Layer.merge(layer, TestClock.layer())))
+    )
+  }
+
+  test("uploads get more time for their bytes: the body, or the shared in-flight window", async () => {
+    // 250 kB at 125 kB/s: 2 s on top of 5 s.
+    expect(await putTimesOutAt(undefined, { requestTimeout: "5 seconds" })).toBe(7000)
+    // 2.5 MB in flight on the same link: 20 s on top.
+    expect(await putTimesOutAt({ sharedBytes: 2_500_000 }, { requestTimeout: "5 seconds" })).toBe(25_000)
+    // A faster floor.
+    expect(await putTimesOutAt({ sharedBytes: 2_500_000 }, { requestTimeout: "5 seconds", minUploadRate: 1_250_000 })).toBe(7000)
+  })
+
+  test("a body larger than the caller's limit is Malformed (content-length, or while reading)", async () => {
+    const big = new Uint8Array(5000)
+    const declared = failure((await run({ status: 200, contentType: "application/octet-stream", body: big }, (s) =>
+      s.sliver(NODE, permanentId, 1, "primary", { maxBytes: 4999 }))).exit)
+    expectError(declared, { kind: "Malformed", status: 200 })
+    expect(declared.message).toContain("exceeds 4999")
+    expect(value((await run({ status: 200, body: big }, (s) => s.sliver(NODE, permanentId, 1, "primary", { maxBytes: 5000 }))).exit).length)
+      .toBe(5000)
+    // Without content-length (a stream): counted while reading.
+    const streaming = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(
+          request,
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                for (let i = 0; i < 10; i++) controller.enqueue(new Uint8Array(1000))
+                controller.close()
+              }
+            }),
+            { status: 200 }
+          )
+        ))
+      )
+    )
+    const read = (maxBytes: number) =>
+      Effect.runPromiseExit(
+        Effect.flatMap(Effect.service(StorageNode.StorageNodes), (s) => s.metadata(NODE, permanentId, { maxBytes })).pipe(
+          Effect.provide(StorageNode.layer().pipe(Layer.provide(streaming)))
+        )
+      )
+    const capped = failure(await read(9999))
+    expectError(capped, { kind: "Malformed", status: 200 })
+    expect(capped.message).toContain("more than 9999")
+    expect(value(await read(10_000)).length).toBe(10_000)
   })
 
   test("429 → RateLimited", async () => {
@@ -453,7 +531,7 @@ suite("live testnet (SUI_LIVE=1)", () => {
       Effect.gen(function*() {
         const nodes = [...(yield* committeeNodes)].sort((a, b) => b.shards.length - a.shards.length)
         // A node may not have synced the newest blobs yet (seen live: METADATA_NOT_FOUND for the latest one), so try a few.
-        const candidates = (yield* recentCertified(20)).filter((c) => !c.isExtension)
+        const candidates = (yield* readableCandidates(0, 100)).slice(0, 20)
         const s = yield* StorageNode.StorageNodes
         // About a fifth of testnet is unreachable from fetch (§7 risk 1): take the first node that answers.
         const errors: Array<StorageNode.NodeError> = []

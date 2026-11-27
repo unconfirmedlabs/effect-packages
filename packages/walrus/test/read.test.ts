@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "@unconfirmed/sui/Address"
+import * as Objects from "@unconfirmed/sui/Objects"
 import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
@@ -24,7 +25,7 @@ import * as Encoding from "../src/Encoding.ts"
 import * as Merkle from "../src/Merkle.ts"
 import * as Messages from "../src/Messages.ts"
 import * as Read from "../src/Read.ts"
-import { fakeNode, type FakeNode, fakeNodes, type Outcome, type Recorded, sliverKey } from "./support.ts"
+import { fakeNode, type FakeNode, fakeNodes, nodeErrors, type Outcome, type Recorded, sliverKey } from "./support.ts"
 
 const N = 10 // f = 3: metadata needs 1 shard, slivers n − 2f = 4, 404/451 quorum 2f + 1 = 7, status f + 1 = 4 of 7
 const NEED = 4
@@ -98,6 +99,8 @@ const nodesFor = (
       ...(intercept && { intercept: (req, self) => intercept(i, req, self) })
     })
     if (blob) {
+      // Certified in the committee's epoch: a failed read keeps its own error instead of becoming BlobNotFound.
+      node.statuses.set(blob.blobId, permanent(c.epoch))
       node.metadata.set(blob.blobId, blob.metadata)
       for (const shard of n.shards) {
         const pair = Encoding.pairOfShard(shard, blob.blobId, N)
@@ -260,8 +263,11 @@ describe("Read.blob", () => {
     if (e._tag !== "NotEnoughSlivers") return
     expect(e.required).toBe(NEED)
     expect(e.failures.every((f) => f.kind === "Malformed")).toBe(true)
-    // Round 1 used 4, round 2 four more, round 3 is short (2 left): NotEnoughSlivers from the quorum.
-    expect(calls.sliverRoots).toBe(2)
+    // Round 1 used 4 (or more: answers that arrive with the deciding one are kept), round 2 as many again,
+    // round 3 is short: NotEnoughSlivers from the quorum after two decodes. More than 4 slivers in a round
+    // take a second `sliverRoots` call.
+    expect(calls.decode).toBe(2)
+    expect(calls.sliverRoots).toBeGreaterThanOrEqual(2)
   })
 
   test("a wrongly encoded blob is InconsistentBlob, not a node's fault", async () => {
@@ -416,6 +422,7 @@ describe("epoch change", () => {
 
   test("not certified during EpochChangeSync: BlobNotFound; marked invalid: InvalidBlob", async () => {
     const nodes = nodesFor(current, encoded)
+    for (const n of nodes) n.statuses.set(encoded.blobId, "nonexistent")
     const missing = await run(Read.blob(encoded.blobId), active(current, previous, true), nodes)
     expect(failure(missing.exit)._tag).toBe("BlobNotFound")
     for (const n of nodes) n.statuses.set(encoded.blobId, { invalid: { event: { txDigest: "4Cs5bMDqzd6m4ZHN3C3QJzmWv5mbVzv7ZnPhR2F1ZT1b", eventSeq: "1" } } })
@@ -516,18 +523,26 @@ describe("timing (TestClock)", () => {
     expect(bytes).toEqual(BLOB)
   })
 
-  test("retries follow the default schedule: 200 ms, then 400 ms", async () => {
+  test("sliver retries follow the default schedule: 200 ms, then 400 ms", async () => {
     const c = committee(1, [Array.from({ length: N }, (_, i) => i)])
-    let failures = 2
-    const nodes = nodesFor(c, encoded, (_, req) => (isMetadata(req) && failures-- > 0 ? unavailable : undefined))
+    // Every sliver fails twice, then succeeds: the four first members retry together.
+    const failures = new Map<string, number>()
+    const nodes = nodesFor(c, encoded, (_, req) => {
+      if (!isSliver(req)) return undefined
+      const left = failures.get(req.path) ?? 2
+      failures.set(req.path, left - 1)
+      return left > 0 ? unavailable : undefined
+    })
     const s = servicesFor(active(c), nodes)
-    const metadataRequests = () => s.requests.filter(isMetadata).length
+    const metadataRequests = () => s.requests.filter(isSliver).length
     const seen = await Effect.runPromise(
       Effect.gen(function*() {
         const fiber = yield* Effect.forkChild(Read.blob(encoded.blobId))
         const seen: Array<number> = []
         const at = function*(ms: number) {
           yield* TestClock.adjust(`${ms} millis`)
+          // The fake HTTP answers go through real promises: let them settle.
+          for (let i = 0; i < 20; i++) yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)))
           seen.push(metadataRequests())
         }
         yield* at(0)
@@ -540,7 +555,71 @@ describe("timing (TestClock)", () => {
         return seen
       }).pipe(Effect.provide(Layer.merge(s.layer, TestClock.layer())))
     )
-    expect(seen).toEqual([1, 1, 2, 2, 3])
+    // At 600 ms the four first members succeed; members started after one of them failed are on their own clocks.
+    expect(seen.slice(0, 4)).toEqual([NEED, NEED, 2 * NEED, 2 * NEED])
+    expect(seen[4]).toBeGreaterThanOrEqual(3 * NEED)
   })
 })
 
+
+describe("failure paths", () => {
+  test("a read that fails while the nodes call the blob Nonexistent is BlobNotFound (deleted meanwhile)", async () => {
+    const c = committee(1, ONE_EACH)
+    const nodes = nodesFor(c, encoded, (_, req) => (isSliver(req) ? unavailable : undefined))
+    for (const n of nodes) n.statuses.set(encoded.blobId, "nonexistent")
+    const { exit } = await run(Read.blob(encoded.blobId, { retry: noRetry }), active(c), nodes)
+    expect(failure(exit)._tag).toBe("BlobNotFound")
+    // Still certified: the read's own error.
+    for (const n of nodes) n.statuses.set(encoded.blobId, permanent(1))
+    const certified = await run(Read.blob(encoded.blobId, { retry: noRetry }), active(c), nodes)
+    expect(failure(certified.exit)._tag).toBe("NotEnoughSlivers")
+  })
+
+  test("EpochChangeSync without an agreed status: read from the current committee", async () => {
+    const previous = committee(4, ONE_EACH, "old")
+    const current = committee(5, ONE_EACH, "new")
+    const nodes = nodesFor(current, encoded, (_, req) => (req.path.endsWith("/status") ? unavailable : undefined))
+    const { exit } = await run(Read.blob(encoded.blobId, { retry: noRetry }), active(current, previous, true), nodes)
+    expect(value(exit)).toEqual(BLOB)
+  })
+
+  test("metadata: a failing node is not asked again, another one is", async () => {
+    const c = committee(1, ONE_EACH)
+    const nodes = nodesFor(c, encoded, (i, req) => (isMetadata(req) && i < 7 ? unavailable : undefined))
+    const { exit, requests } = await run(Read.blob(encoded.blobId), active(c), nodes)
+    expect(value(exit)).toEqual(BLOB)
+    const perNode = new Map<string, number>()
+    for (const r of requests.filter(isMetadata)) perNode.set(r.origin, (perNode.get(r.origin) ?? 0) + 1)
+    expect(Math.max(...perNode.values())).toBe(1)
+  })
+
+  test("a shard the node no longer holds fails that shard alone, not the node's other shards", async () => {
+    // Node 0 lists 5 shards but has moved shard 0; node 1 is down. The other 4 of node 0 are enough.
+    const c = committee(1, [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]])
+    const nodes = nodesFor(c, encoded, (i, req) => {
+      if (!isSliver(req)) return undefined
+      if (i === 1) return unavailable
+      return sliverPair(req) === Encoding.pairOfShard(0, encoded.blobId, N) ? nodeErrors.shardNotAssigned(0, 1) : undefined
+    })
+    for (let round = 0; round < 5; round++) {
+      const { exit } = await run(Read.blob(encoded.blobId, { retry: noRetry }).pipe(Random.withSeed(`moved-${round}`)), active(c), nodes)
+      expect(value(exit)).toEqual(BLOB)
+    }
+  })
+
+  test("a failed committee refresh keeps the read's own error", async () => {
+    const c = committee(1, ONE_EACH)
+    const committees = Layer.succeed(
+      Committee.Committees,
+      Committee.Committees.of({
+        get: Effect.succeed(active(c)),
+        refresh: Effect.fail(new Objects.ObjectNotFound({ objectId: Address.normalize("0x5") }))
+      })
+    )
+    const nodes = nodesFor(c, undefined) // nobody has the metadata, nobody says not found either
+    for (const n of nodes) n.statuses.set(encoded.blobId, permanent(1))
+    const unreachable = nodes.map((n) => fakeNode({ url: n.url, nShards: N, intercept: () => unavailable }))
+    const { exit } = await run(Read.blob(encoded.blobId, { retry: noRetry }), committees, unreachable)
+    expect(failure(exit)._tag).toBe("NoMetadata")
+  })
+})

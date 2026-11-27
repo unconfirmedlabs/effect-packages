@@ -294,20 +294,21 @@ export const make = (options?: EncoderOptions): Effect.Effect<EncoderService, En
           if (d.length !== symbols * symbolSize) return yield* fail(op, `sliver ${i}: ${d.length} data bytes, expected ${symbols * symbolSize}`)
           data.push(d)
         }
-        // The crafted blob: exactly `rows × columns × symbolSize` bytes, so its symbol size is `symbolSize` (E2),
-        // with the slivers as its first rows (primary) or columns (secondary), zeros elsewhere (W6).
-        const blob = new Uint8Array(rows * columns * symbolSize)
-        const rowBytes = columns * symbolSize
-        if (axis === "primary") {
-          data.forEach((d, r) => blob.set(d, r * rowBytes))
-        } else {
-          data.forEach((d, c) => {
-            for (let r = 0; r < rows; r++) {
-              blob.set(d.subarray(r * symbolSize, (r + 1) * symbolSize), r * rowBytes + c * symbolSize)
-            }
-          })
-        }
         return yield* attempt(op, () => {
+          // The crafted blob: exactly `rows × columns × symbolSize` bytes, so its symbol size is `symbolSize` (E2),
+          // with the slivers as its first rows (primary) or columns (secondary), zeros elsewhere (W6). Built
+          // inside `attempt`: at the largest sizes the allocation itself can throw (`RangeError`).
+          const blob = new Uint8Array(rows * columns * symbolSize)
+          const rowBytes = columns * symbolSize
+          if (axis === "primary") {
+            data.forEach((d, r) => blob.set(d, r * rowBytes))
+          } else {
+            data.forEach((d, c) => {
+              for (let r = 0; r < rows; r++) {
+                blob.set(d.subarray(r * symbolSize, (r + 1) * symbolSize), r * rowBytes + c * symbolSize)
+              }
+            })
+          }
           const hashes = rawEncode(nShards, blob).metadata.metadata.V1.hashes
           return data.map((_, i) =>
             axis === "primary"
