@@ -6,6 +6,7 @@
  *
  *   Layer.mergeAll(ObjectsGraphQL.layer, PackagesGraphQL.layer).pipe(Layer.provide(SuiGraphQL.protocol({ url })))
  */
+import type * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import type * as HttpClient from "effect/http/HttpClient"
 import * as Layer from "effect/Layer"
 import type { Chain } from "@unconfirmed/sui/Chain"
@@ -54,8 +55,14 @@ export type Services =
   | Events
   | CheckpointData
 
-/** All capability services over one Sui GraphQL endpoint. Needs an `HttpClient`. */
-export const layer = (options: SuiGraphQL.SuiGraphQLOptions): Layer.Layer<Services, never, HttpClient.HttpClient> =>
+/**
+ * All capability services over one Sui GraphQL endpoint, plus its
+ * `GraphQLProtocol` (for `EvidenceGraphQL` or your own queries on the same
+ * endpoint). Needs an `HttpClient`.
+ */
+export const layer = (
+  options: SuiGraphQL.SuiGraphQLOptions
+): Layer.Layer<Services | GraphQLProtocol.GraphQLProtocol, never, HttpClient.HttpClient> =>
   Layer.mergeAll(
     ChainGraphQL.layer,
     PackagesGraphQL.layer,
@@ -64,4 +71,4 @@ export const layer = (options: SuiGraphQL.SuiGraphQLOptions): Layer.Layer<Servic
     EventsGraphQL.layer,
     CheckpointDataGraphQL.layer,
     Layer.mergeAll(CoinsGraphQL.layer, DynamicFieldsGraphQL.layer).pipe(Layer.provideMerge(ObjectsGraphQL.layer))
-  ).pipe(Layer.provide(SuiGraphQL.protocol(options)))
+  ).pipe(Layer.provideMerge(SuiGraphQL.protocol(options)))

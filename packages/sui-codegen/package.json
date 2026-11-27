@@ -15,5 +15,10 @@
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@mysten/codegen": "0.12.26",
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/test-support": "workspace:*"
   }
 }

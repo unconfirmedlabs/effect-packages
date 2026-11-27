@@ -6,7 +6,7 @@ import { Ed25519, Ptb, Resolve, Tx } from "@unconfirmed/sui"
 import * as MultiSig from "@unconfirmed/sui-multisig"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { DEVNET, faucet, grpcLayer, live } from "../../sui/test/support.ts"
+import { DEVNET, faucet, grpcLayer, live } from "@unconfirmed/test-support/live"
 import * as Passkey from "../src/index.ts"
 
 const suite = live ? describe : describe.skip

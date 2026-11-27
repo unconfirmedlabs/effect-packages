@@ -50,6 +50,7 @@ import * as Status from "./Status.ts"
 import type { BlobStatus } from "./Status.ts"
 import { NodeError, StorageNodes } from "./StorageNode.ts"
 import * as StorageNode from "./StorageNode.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 // -----------------------------------------------------------------------------
 // API
@@ -413,11 +414,6 @@ interface Fetched {
   readonly bytes: Uint8Array
 }
 
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-  return true
-}
 
 /** Failures about one shard of a node, not the node: they do not fail its other shards. */
 const SHARD_LEVEL: ReadonlySet<NodeError["kind"]> = /* @__PURE__ */ new Set<NodeError["kind"]>(["ShardNotAssigned", "NotFound"])
@@ -549,7 +545,7 @@ const readSlivers = (
       const roots = yield* primaryRoots(encoder, n, symbolSize, unchecked.map((f) => f.bytes))
       const bad = new Set<Fetched>()
       unchecked.forEach((f, i) => {
-        if (sameBytes(roots[i]!, metadata.hashes[f.pair]!.primary)) verified.add(f.shard)
+        if (Bytes.equal(roots[i]!, metadata.hashes[f.pair]!.primary)) verified.add(f.shard)
         else bad.add(f)
       })
       if (bad.size === 0) return yield* new InconsistentBlob({ blobId })

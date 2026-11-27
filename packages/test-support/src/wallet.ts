@@ -6,7 +6,7 @@
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { Transaction, TransactionDataBuilder } from "@mysten/sui/transactions"
 import type { Wallet, WalletAccount } from "@wallet-standard/base"
-import type * as Features from "../src/Features.ts"
+import type * as Features from "@unconfirmed/sui-wallet/Features"
 
 const ICON = "data:image/svg+xml;base64,PHN2Zy8+" as const
 

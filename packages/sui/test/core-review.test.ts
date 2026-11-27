@@ -127,6 +127,21 @@ describe("gRPC-web framing", () => {
     expect(ok.chain_id).toBe("abc")
   })
 
+  test("X-9: a unary call without an answer fails with a retryable DEADLINE_EXCEEDED; no trace headers by default", async () => {
+    const seen: Array<Record<string, string>> = []
+    const hanging = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        seen.push({ ...request.headers })
+        return Effect.never
+      })
+    )
+    const layer = GrpcWeb.layer({ baseUrl: "http://node", requestTimeout: "20 millis" }).pipe(Layer.provide(hanging))
+    const e = failureOf(await Effect.runPromiseExit(Effect.provide(serviceInfo, layer))) as RpcError
+    expect([e.code, e.retryable]).toEqual(["DEADLINE_EXCEEDED", true])
+    expect(Object.keys(seen[0]!).some((k) => k === "traceparent" || k === "b3")).toBe(false)
+  })
+
   test("CORE-19: HTTP failures map to gRPC codes", async () => {
     const codes: Array<string> = []
     for (const status of [400, 401, 403, 404, 429, 502, 418]) {
@@ -356,12 +371,12 @@ describe("in-flight sharing", () => {
     expect(g.requests).toHaveLength(1)
   })
 
-  test("CORE-9/10: concurrent Chain.info and referenceGasPrice share one GetEpoch", async () => {
+  test("CORE-9/10: concurrent Chain.info and referenceGasPrice readers share one request each", async () => {
     const g = fakeGrpc({
       unary: (m) =>
         Effect.as(
           Effect.sleep("10 millis"),
-          m === "GetServiceInfo" ? SERVICE_INFO : { epoch: { epoch: 7n, first_checkpoint: 1n, reference_gas_price: 750n } }
+          m === "GetServiceInfo" ? SERVICE_INFO : { epoch: { reference_gas_price: 750n } }
         )
     })
     await Effect.runPromise(
@@ -410,7 +425,7 @@ const chainLayer = (calls: Array<string> = []) =>
   Layer.succeed(Chain.Chain, {
     info: Effect.sync(() => {
       calls.push("info")
-      return { chainId: CHAIN, chain: "test", epoch: 812n, checkpointHeight: 1n, lowestAvailableCheckpoint: 0n, epochFirstCheckpoint: 0n }
+      return { chainId: CHAIN, chain: "test", epoch: 812n, checkpointHeight: 1n }
     }),
     referenceGasPrice: Effect.sync(() => {
       calls.push("price")

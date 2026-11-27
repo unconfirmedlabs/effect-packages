@@ -34,13 +34,21 @@ import * as Schema from "effect/Schema"
 
 export class InvalidMnemonic extends Schema.TaggedError<InvalidMnemonic>()("InvalidMnemonic", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 export class InvalidPath extends Schema.TaggedError<InvalidPath>()("InvalidPath", {
   scheme: Schema.String,
   path: Schema.String,
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid ${this.scheme} path ${this.path}: ${this.reason}`
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Mnemonics

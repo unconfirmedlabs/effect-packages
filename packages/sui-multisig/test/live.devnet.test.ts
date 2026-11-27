@@ -6,7 +6,7 @@ import { Ed25519, Ptb, Resolve, Tx } from "@unconfirmed/sui"
 import * as Secp256k1 from "@unconfirmed/sui-secp256k1"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { DEVNET, faucet, grpcLayer, live } from "../../sui/test/support.ts"
+import { DEVNET, faucet, grpcLayer, live } from "@unconfirmed/test-support/live"
 import * as MultiSig from "../src/index.ts"
 
 const suite = live ? describe : describe.skip

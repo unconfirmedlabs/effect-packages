@@ -269,7 +269,7 @@ describe("coin reservation refs", () => {
 
 describe("gas payment strategies", () => {
   const chain = Layer.succeed(Chain.Chain, {
-    info: Effect.succeed({ chainId: CHAIN, chain: "test", epoch: 812n, checkpointHeight: 1n, lowestAvailableCheckpoint: 0n, epochFirstCheckpoint: 0n }),
+    info: Effect.succeed({ chainId: CHAIN, chain: "test", epoch: 812n, checkpointHeight: 1n }),
     referenceGasPrice: Effect.succeed(1000n)
   })
   const run = <E, R>(

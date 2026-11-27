@@ -9,10 +9,10 @@ import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
-import { live, TESTNET } from "../../sui/test/support.ts"
+import { live, TESTNET } from "@unconfirmed/test-support/live"
 import * as ZkLogin from "../src/ZkLogin.ts"
 import * as ZkLoginVerifierGrpc from "../src/ZkLoginVerifierGrpc.ts"
-import { claims, inputs } from "./fixtures.ts"
+import { claims, inputs } from "@unconfirmed/test-support/zklogin"
 
 const msg = new TextEncoder().encode("zkLogin live")
 

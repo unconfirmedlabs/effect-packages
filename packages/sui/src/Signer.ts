@@ -23,7 +23,11 @@ export class SigningError extends /* @__PURE__ */ Schema.TaggedError<SigningErro
 export class InvalidKey extends /* @__PURE__ */ Schema.TaggedError<InvalidKey>()("InvalidKey", {
   scheme: Schema.String,
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid ${this.scheme} key: ${this.reason}`
+  }
+}
 
 export interface Signer {
   readonly address: Address

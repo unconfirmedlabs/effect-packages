@@ -240,16 +240,16 @@ describe("evidence fields (review B10, 17)", () => {
     expect(pkg!.owner).toEqual({ _tag: "Immutable" })
   })
 
-  test("ChainInfo: an unreported floor is undefined (not 0n); the epoch's first checkpoint is reported", async () => {
+  test("ChainInfo comes from GetServiceInfo alone", async () => {
     const g = fakeGrpc({
       unary: (m) =>
-        Effect.succeed(m === "GetServiceInfo" ? { chain_id: "x", epoch: 7n, checkpoint_height: 10n } : { epoch: { epoch: 7n, first_checkpoint: 3n, reference_gas_price: 1000n } })
+        Effect.succeed(m === "GetServiceInfo" ? { chain_id: "x", epoch: 7n, checkpoint_height: 10n } : { epoch: { reference_gas_price: 1000n } })
     })
     const info = await Effect.runPromise(Effect.flatMap(Effect.service(Chain.Chain), (c) => c.info).pipe(
       Effect.provide(ChainGrpc.layer.pipe(Layer.provide(g.layer)))
     ))
-    expect(info.lowestAvailableCheckpoint).toBeUndefined()
-    expect(info.epochFirstCheckpoint).toBe(3n)
+    expect(info).toEqual({ chainId: "x" as any, chain: "unknown", epoch: 7n, checkpointHeight: 10n })
+    expect(g.requests.map((r) => r.method)).toEqual(["GetServiceInfo"])
   })
 })
 
@@ -279,7 +279,7 @@ describe("success-only caches (review 16)", () => {
         if (m === "GetServiceInfo") return n === 0 ? Effect.fail(unavailable(m)) : Effect.succeed(SERVICE_INFO)
         return gasCalls++ === 0
           ? Effect.fail(unavailable(m))
-          : Effect.succeed({ epoch: { epoch: 7n, first_checkpoint: 1n, reference_gas_price: 750n } })
+          : Effect.succeed({ epoch: { reference_gas_price: 750n } })
       }
     })
     const r = await Effect.runPromise(Effect.gen(function*() {
@@ -291,7 +291,7 @@ describe("success-only caches (review 16)", () => {
       return { e1, i2, g1, g2 }
     }).pipe(Effect.provide(ChainGrpc.layer.pipe(Layer.provide(g.layer)))))
     expect(r.e1.code).toBe("UNAVAILABLE")
-    expect(r.i2.lowestAvailableCheckpoint).toBe(400n)
+    expect(r.i2.epoch).toBe(SERVICE_INFO.epoch)
     expect(r.g1.code).toBe("UNAVAILABLE")
     expect(r.g2).toBe(750n)
   })

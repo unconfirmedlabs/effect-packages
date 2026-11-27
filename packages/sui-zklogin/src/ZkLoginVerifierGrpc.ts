@@ -3,7 +3,7 @@
  * on a full node, which checks the proof against on-chain JWKs and the
  * current epoch.
  *
- *   ZkLoginVerifierGrpc.layer.pipe(Layer.provide(GrpcWeb.GrpcWeb.layer({ baseUrl })))
+ *   ZkLoginVerifierGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))
  */
 import * as GrpcWeb from "@unconfirmed/sui/grpc/GrpcWeb"
 import * as Rpc from "@unconfirmed/sui/grpc/generated/rpc"

@@ -38,13 +38,21 @@ export const refOf = (o: SuiObject): ObjectRef => ({ objectId: o.objectId, versi
 
 export class ObjectNotFound extends /* @__PURE__ */ Schema.TaggedError<ObjectNotFound>()("ObjectNotFound", {
   objectId: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `object ${this.objectId} not found`
+  }
+}
 
 export class ObjectDecodeError extends /* @__PURE__ */ Schema.TaggedError<ObjectDecodeError>()("ObjectDecodeError", {
   objectId: Schema.String,
   type: Schema.String,
   issue: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `cannot decode object ${this.objectId} as ${this.type}: ${this.issue}`
+  }
+}
 
 /** Decode an object's contents with a BCS schema. */
 export const decode = <T, E>(schema: Schema.Codec<T, E>) => {

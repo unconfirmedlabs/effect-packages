@@ -28,6 +28,11 @@ import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "./Address.ts"
+import type { Coins } from "./Coins.ts"
+import * as Allowances from "./internal/allowances.ts"
+import type { Objects } from "./Objects.ts"
+import type { AllowanceError, InsufficientBalance, InvalidBalanceIntent, Plan } from "./Resolve.ts"
+import type { RpcError } from "./RpcError.ts"
 import * as T from "./TransactionData.ts"
 import * as TypeTag from "./TypeTag.ts"
 
@@ -83,6 +88,13 @@ export interface AllowanceIntent {
   readonly clock: T.Argument
   /** The `SpendPermit<A>` (app-bound allowances only). */
   readonly permit?: T.Argument
+  /**
+   * The resolver `Resolve.allowances` runs for every allowance intent of a plan. It travels with the
+   * intent so that only programs that make allowance intents ship it.
+   */
+  readonly resolve: (
+    plan: Plan
+  ) => Effect.Effect<Plan, AllowanceError | InsufficientBalance | InvalidBalanceIntent | RpcError, Objects | Coins>
 }
 
 export type Command = T.Command | BalanceIntent | AllowanceIntent
@@ -95,7 +107,11 @@ export interface Draft {
 
 export class InvalidPureValue extends /* @__PURE__ */ Schema.TaggedError<InvalidPureValue>()("InvalidPureValue", {
   issue: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.issue
+  }
+}
 
 /** Run a parse that throws on bad input (an address, a type string); a throw is `InvalidPureValue`, not a defect. */
 const attempt = <A>(f: () => A): Effect.Effect<A, InvalidPureValue> =>
@@ -204,8 +220,12 @@ export const moveCall = (call: {
     (target) => addCommand({ _tag: "MoveCall", ...target, arguments: call.arguments ?? [] })
   )
 
-export const splitCoins = (coin: T.Argument, amounts: ReadonlyArray<T.Argument>) =>
-  Effect.map(addCommand({ _tag: "SplitCoins", coin, amounts }), (r) => amounts.map((_, i) => nested(r, i)))
+/** One coin per amount, as a tuple of the same length: `const [a, b] = yield* splitCoins(gas, [x, y])` needs no `!`. */
+export const splitCoins = <const Amounts extends ReadonlyArray<T.Argument>>(coin: T.Argument, amounts: Amounts) =>
+  Effect.map(
+    addCommand({ _tag: "SplitCoins", coin, amounts }),
+    (r) => amounts.map((_, i) => nested(r, i)) as unknown as { -readonly [K in keyof Amounts]: T.Argument }
+  )
 
 export const mergeCoins = (destination: T.Argument, sources: ReadonlyArray<T.Argument>) =>
   addCommand({ _tag: "MergeCoins", destination, sources })
@@ -350,7 +370,15 @@ const allowanceIntent = (
     // Input order matches @mysten/sui: allowance, clock, then the permit.
     const allowance = yield* object(parsed.allowanceId)
     const clockArg = yield* clock
-    return yield* addCommand({ _tag: "AllowanceIntent", amount: options.amount, output, ...parsed, allowance, clock: clockArg })
+    return yield* addCommand({
+      _tag: "AllowanceIntent",
+      amount: options.amount,
+      output,
+      ...parsed,
+      allowance,
+      clock: clockArg,
+      resolve: Allowances.resolve
+    })
   })
 
 const intent = (output: BalanceIntent["output"]) => (options: IntentOptions) =>

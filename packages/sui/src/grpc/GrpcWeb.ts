@@ -8,6 +8,7 @@
  * is `HttpClient` middleware; this module only frames and decodes.
  */
 import * as Context from "effect/Context"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -158,6 +159,17 @@ export interface GrpcWebOptions {
   readonly baseUrl: string
   /** Extra headers on every call (API keys, routing). */
   readonly headers?: Readonly<Record<string, string>>
+  /**
+   * Bound on each unary call; a call without an answer in time fails with a
+   * retryable `DEADLINE_EXCEEDED`. Server streams are not bounded. Default 30 seconds.
+   */
+  readonly requestTimeout?: Duration.Input
+  /**
+   * Send `traceparent` / `b3` headers. Off by default, as in every other
+   * layer here: browsers preflight them, and a provider with a strict CORS
+   * allow-list refuses them. Spans are recorded either way.
+   */
+  readonly tracerPropagation?: boolean
 }
 
 export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
@@ -170,6 +182,8 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
       Effect.gen(function*() {
         const http = yield* HttpClient.HttpClient
         const baseUrl = options.baseUrl.replace(/\/+$/, "")
+        const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? "30 seconds")
+        const tracerPropagation = options.tracerPropagation ?? false
 
         const call = <I, O>(method: Rpc<I, O, boolean>, request: I): Stream.Stream<O, RpcError> => {
           const path = method.path
@@ -185,6 +199,7 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
                 HttpClientRequest.setHeaders({ ...options.headers, "x-grpc-web": "1", accept: "application/grpc-web+proto" }),
                 HttpClientRequest.bodyUint8Array(body, "application/grpc-web+proto"),
                 http.execute,
+                Effect.provideService(HttpClient.TracerPropagationEnabled, tracerPropagation),
                 Effect.mapError((e) => fail(e.message))
               )
             ),
@@ -224,6 +239,11 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
                 onNone: () => Effect.fail(new RpcError({ method: method.path, code: "INTERNAL", message: "no response message" })),
                 onSome: Effect.succeed
               })),
+              Effect.timeoutOrElse({
+                duration: timeout,
+                orElse: () =>
+                  Effect.fail(new RpcError({ method: method.path, code: "DEADLINE_EXCEEDED", message: `no answer within ${Duration.format(timeout)}` }))
+              }),
               Effect.withSpan(`grpc ${method.path}`, { attributes: { "rpc.system": "grpc", "rpc.method": method.path } })
             ),
           serverStream: (method, request) => call(method, request)

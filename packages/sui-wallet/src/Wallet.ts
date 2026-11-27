@@ -48,25 +48,41 @@ export type Wallet = StandardWallet
 
 export class WalletNotFound extends Schema.TaggedError<WalletNotFound>()("WalletNotFound", {
   name: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `wallet ${this.name} not found`
+  }
+}
 
 /** The wallet doesn't implement a feature this operation needs. */
 export class UnsupportedFeature extends Schema.TaggedError<UnsupportedFeature>()("UnsupportedFeature", {
   wallet: Schema.String,
   feature: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `${this.wallet} does not support ${this.feature}`
+  }
+}
 
 /** Neither the account nor the wallet lists this chain. */
 export class UnsupportedChain extends Schema.TaggedError<UnsupportedChain>()("UnsupportedChain", {
   wallet: Schema.String,
   chain: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `${this.wallet} does not support ${this.chain}`
+  }
+}
 
 /** No such account is connected (connect first, or name an account the wallet authorized). */
 export class AccountNotFound extends Schema.TaggedError<AccountNotFound>()("AccountNotFound", {
   wallet: Schema.String,
   address: Schema.optionalKey(Schema.String)
-}) {}
+}) {
+  override get message(): string {
+    return this.address === undefined ? `no account connected to ${this.wallet}` : `account ${this.address} not connected to ${this.wallet}`
+  }
+}
 
 export class ConnectionError extends Schema.TaggedError<ConnectionError>()("ConnectionError", {
   wallet: Schema.String,

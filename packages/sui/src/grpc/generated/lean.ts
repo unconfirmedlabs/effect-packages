@@ -72,7 +72,7 @@ const d_sui_rpc_v2_ExecutedTransaction_2 = /* @__PURE__ */ chunk(f10, "message",
 const d_sui_rpc_v2_GetCheckpointRequest = /* @__PURE__ */ chunk(f1, "message", {"field":[{"name":"sequence_number","number":1,"label":1,"type":4,"oneof_index":0},{"name":"digest","number":2,"label":1,"type":9,"oneof_index":0},{"name":"read_mask","number":3,"label":1,"type":11,"type_name":".google.protobuf.FieldMask","oneof_index":1,"proto3_optional":true}],"oneof_decl":[{"name":"checkpoint_id"},{"name":"_read_mask"}],"name":"GetCheckpointRequest"})
 const d_sui_rpc_v2_GetCheckpointResponse = /* @__PURE__ */ chunk(f1, "message", {"field":[{"name":"checkpoint","number":1,"label":1,"type":11,"type_name":".sui.rpc.v2.Checkpoint","oneof_index":0,"proto3_optional":true}],"oneof_decl":[{"name":"_checkpoint"}],"name":"GetCheckpointResponse"})
 const d_sui_rpc_v2_TransactionEvents = /* @__PURE__ */ chunk(f14, "message", {"field":[{"name":"events","number":3,"label":3,"type":11,"type_name":".sui.rpc.v2.Event"}],"name":"TransactionEvents"})
-const d_sui_rpc_v2_Epoch = /* @__PURE__ */ chunk(f15, "message", {"field":[{"name":"epoch","number":1,"label":1,"type":4,"oneof_index":0,"proto3_optional":true},{"name":"first_checkpoint","number":4,"label":1,"type":4,"oneof_index":1,"proto3_optional":true},{"name":"reference_gas_price","number":8,"label":1,"type":4,"oneof_index":2,"proto3_optional":true}],"oneof_decl":[{"name":"_epoch"},{"name":"_first_checkpoint"},{"name":"_reference_gas_price"}],"name":"Epoch"})
+const d_sui_rpc_v2_Epoch = /* @__PURE__ */ chunk(f15, "message", {"field":[{"name":"reference_gas_price","number":8,"label":1,"type":4,"oneof_index":0,"proto3_optional":true}],"oneof_decl":[{"name":"_reference_gas_price"}],"name":"Epoch"})
 const d_sui_rpc_v2_GetEpochRequest = /* @__PURE__ */ chunk(f1, "message", {"field":[{"name":"epoch","number":1,"label":1,"type":4,"oneof_index":0,"proto3_optional":true},{"name":"read_mask","number":2,"label":1,"type":11,"type_name":".google.protobuf.FieldMask","oneof_index":1,"proto3_optional":true}],"oneof_decl":[{"name":"_epoch"},{"name":"_read_mask"}],"name":"GetEpochRequest"})
 const d_sui_rpc_v2_GetEpochResponse = /* @__PURE__ */ chunk(f1, "message", {"field":[{"name":"epoch","number":1,"label":1,"type":11,"type_name":".sui.rpc.v2.Epoch","oneof_index":0,"proto3_optional":true}],"oneof_decl":[{"name":"_epoch"}],"name":"GetEpochResponse"})
 const d_sui_rpc_v2_AffectedAddressFilter = /* @__PURE__ */ chunk(f16, "message", {"field":[{"name":"address","number":1,"label":1,"type":9,"oneof_index":0,"proto3_optional":true}],"oneof_decl":[{"name":"_address"}],"name":"AffectedAddressFilter"})
@@ -170,7 +170,7 @@ export const LedgerService_GetCheckpoint = /* @__PURE__ */ lean<P.GetCheckpointR
 export const LedgerService_GetEpoch = /* @__PURE__ */ lean<P.GetEpochRequest, P.GetEpochResponse, false>(
   "sui.rpc.v2.LedgerService/GetEpoch", "sui.rpc.v2.GetEpochRequest", "sui.rpc.v2.GetEpochResponse", false,
   () => [d_google_protobuf_FieldMask, d_sui_rpc_v2_Epoch, d_sui_rpc_v2_GetEpochRequest, d_sui_rpc_v2_GetEpochResponse],
-  ["epoch","first_checkpoint","reference_gas_price"]
+  ["reference_gas_price"]
 )
 /** `sui.rpc.v2.LedgerService/ListCheckpoints`, pruned to what the SDK reads */
 export const LedgerService_ListCheckpoints = /* @__PURE__ */ lean<P.ListCheckpointsRequest, P.ListCheckpointsResponse, true>(

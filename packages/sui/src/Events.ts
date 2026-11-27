@@ -34,7 +34,11 @@ export class EventDecodeError extends /* @__PURE__ */ Schema.TaggedError<EventDe
   eventIndex: Schema.Number,
   type: Schema.String,
   issue: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `cannot decode event ${this.eventIndex} of ${this.transactionDigest} as ${this.type}: ${this.issue}`
+  }
+}
 
 /** Decode an event's contents with a BCS schema. */
 export const decode = <T, E>(schema: Schema.Codec<T, E>) => {

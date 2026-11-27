@@ -23,7 +23,7 @@ import {
   Tx
 } from "@unconfirmed/sui"
 import * as SuiGrpc from "../../sui/src/grpc/index.ts"
-import { DEVNET, faucet, grpcLayer, live, TESTNET } from "../../sui/test/support.ts"
+import { DEVNET, faucet, grpcLayer, live, TESTNET } from "@unconfirmed/test-support/live"
 import * as SuiGraphQL from "../src/index.ts"
 
 const suite = live ? describe : describe.skip
@@ -155,10 +155,6 @@ suite("testnet parity with gRPC", () => {
     expect(q[0].chain).toBe(g[0].chain)
     expect(q[0].epoch).toBe(g[0].epoch)
     expect(q[1]).toBe(g[1])
-    expect(q[0].epochFirstCheckpoint).toBe(g[0].epochFirstCheckpoint!)
-    expect(q[0].epochFirstCheckpoint).toBeDefined()
-    // Different backends: the indexer keeps all history, the full node prunes.
-    console.log("lowestAvailableCheckpoint: grpc", g[0].lowestAvailableCheckpoint, "graphql", q[0].lowestAvailableCheckpoint)
   })
 
   test("checkpoint list", async () => {

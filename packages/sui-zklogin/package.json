@@ -14,5 +14,10 @@
     "effect": "4.1.6",
     "@scure/base": "^2.3.0",
     "poseidon-lite": "0.3.0"
+  },
+  "devDependencies": {
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/sui-multisig": "workspace:*",
+    "@unconfirmed/test-support": "workspace:*"
   }
 }

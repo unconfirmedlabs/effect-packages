@@ -15,7 +15,6 @@
  *   lives under `value`; a unit variant is just `{ _tag }`.
  */
 import { base58 } from "@scure/base"
-import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
@@ -23,6 +22,7 @@ import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
+import * as Bytes from "./Bytes.ts"
 
 // -----------------------------------------------------------------------------
 // Layout
@@ -453,17 +453,6 @@ const checkLength = (r: Reader, n: number, min: number) => {
   }
 }
 
-const HEX = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"))
-const hex = (b: Uint8Array) => {
-  let out = ""
-  for (let i = 0; i < b.length; i++) out += HEX[b[i]!]
-  return out
-}
-const unhex = (s: string) => {
-  const out = new Uint8Array(s.length / 2)
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16)
-  return out
-}
 const utf8e = /* @__PURE__ */ new TextEncoder()
 // ignoreBOM: keep a leading U+FEFF as data, so decoding never changes the string's bytes.
 const utf8d = /* @__PURE__ */ new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
@@ -510,7 +499,7 @@ const write = (w: Writer, l: Layout, v: any): void => {
       return w.raw(v)
     case "address":
       invalid(typeof v === "string" && ADDRESS.test(v))
-      return w.raw(unhex(v.slice(2)))
+      return w.raw(Bytes.fromHex(v.slice(2)))
     case "base58": {
       invalid(typeof v === "string")
       const b = base58.decode(v)
@@ -576,7 +565,7 @@ const read = (r: Reader, l: Layout): any => {
     case "byteVector":
       return r.raw(r.uleb())
     case "address":
-      return "0x" + hex(r.raw(32))
+      return "0x" + Bytes.toHex(r.raw(32))
     case "base58": {
       const b = r.raw(r.uleb())
       // Not a digest: the schema pass reports it.
@@ -625,10 +614,10 @@ const read = (r: Reader, l: Layout): any => {
 // Public codec API
 // -----------------------------------------------------------------------------
 
-export class BcsDecodeError extends /* @__PURE__ */ Data.TaggedError("BcsDecodeError")<{
-  readonly message: string
-  readonly offset: number
-}> {}
+export class BcsDecodeError extends /* @__PURE__ */ Schema.TaggedError<BcsDecodeError>()("BcsDecodeError", {
+  message: Schema.String,
+  offset: Schema.Number
+}) {}
 
 /**
  * Serialize the *encoded* side of a BCS schema. Pure and synchronous: BCS of a

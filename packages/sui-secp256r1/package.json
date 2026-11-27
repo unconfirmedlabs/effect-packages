@@ -11,5 +11,8 @@
     "@noble/curves": "^2.3.0",
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@mysten/sui": "3.0.1"
   }
 }

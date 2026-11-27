@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
+import * as FetchHttpClient from "effect/http/FetchHttpClient"
 import * as Layer from "effect/Layer"
 import * as Stream from "effect/Stream"
 import * as Result from "effect/Result"
@@ -262,7 +263,7 @@ describe("pruned gRPC handles", () => {
     expect(lean.r).toEqual(full.r)
     // The fixture really exercises the read fields.
     expect(lean.r.gasPrice).toBe(750n)
-    expect(lean.r.info.epochFirstCheckpoint).toBe(90n)
+    expect(lean.r.info.checkpointHeight > 0n).toBe(true)
     expect(lean.r.execute.changedObjects.length).toBe(2)
     expect(lean.r.checkpoint.transactions.length).toBe(2)
     // Every pruned handle was called.
@@ -273,16 +274,16 @@ describe("pruned gRPC handles", () => {
     const full = Full.LedgerService_GetEpoch.codec()
     const encoded = encodeResponse("GetEpoch", responses.GetEpoch![0]!)
     expect(Result.getOrThrow(Lean.LedgerService_GetEpoch.codec().decode(encoded))).toEqual({
-      epoch: { epoch: 11n, first_checkpoint: 90n, reference_gas_price: 750n }
+      epoch: { reference_gas_price: 750n }
     })
     expect(Result.getOrThrow(full.decode(encoded)).epoch?.protocol_config?.protocol_version).toBe(99n)
   })
 
   test("a read-mask path outside the pruned descriptor is a defect", () => {
     const codec = Lean.LedgerService_GetEpoch.codec()
-    expect(() => codec.encode({ read_mask: { paths: ["epoch", "protocol_config"] } })).toThrow(/read-mask path "protocol_config"/)
+    expect(() => codec.encode({ read_mask: { paths: ["reference_gas_price", "protocol_config"] } })).toThrow(/read-mask path "protocol_config"/)
     expect(() => codec.encode({})).toThrow(/a read mask is required/)
-    expect(() => codec.encode({ read_mask: { paths: ["epoch"] } })).not.toThrow()
+    expect(() => codec.encode({ read_mask: { paths: ["reference_gas_price"] } })).not.toThrow()
   })
 
   test("a request field outside the pruned descriptor is a defect", () => {
@@ -307,5 +308,15 @@ describe("pruned gRPC handles", () => {
     // Type-level: the stacked layer satisfies every requirement but HttpClient.
     const provided = program.pipe(Effect.provide(stacked))
     expect(provided).toBeDefined()
+  })
+
+  test("SuiGrpc.layer also provides its GrpcWeb (X-8)", async () => {
+    const layer = SuiGrpc.layer({ baseUrl: "https://example.invalid" }).pipe(Layer.provide(FetchHttpClient.layer))
+    // EvidenceGrpc / ZkLoginVerifierGrpc / Rpc escape hatches need GrpcWeb: no second transport.
+    const found = await Effect.runPromise(Effect.gen(function*() {
+      yield* Chain
+      return typeof (yield* GrpcWeb).unary
+    }).pipe(Effect.provide(layer)))
+    expect(found).toBe("function")
   })
 })

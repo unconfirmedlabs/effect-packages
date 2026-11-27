@@ -19,6 +19,7 @@ import * as Signer from "@unconfirmed/sui/Signer"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 export const FLAG = 0x03
 const MAX_MEMBERS = 10
@@ -84,9 +85,12 @@ export interface MultiSigPublicKey extends MultiSigPublicKeyInput {
 
 export class InvalidMultiSig extends Schema.TaggedError<InvalidMultiSig>()("InvalidMultiSig", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
  * Why a member's key bytes can't be what its flag says, or `undefined`. A
@@ -116,7 +120,7 @@ export const publicKey = (input: MultiSigPublicKeyInput): Effect.Effect<MultiSig
     const problem = keyProblem(variant, m.publicKey.bytes)
     if (problem) return fail(`member ${i}: ${problem}`)
     if (!Number.isInteger(m.weight) || m.weight < 1 || m.weight > 255) return fail(`member ${i}: invalid weight ${m.weight}`)
-    if (members.slice(0, i).some((o) => o.publicKey.flag === m.publicKey.flag && sameBytes(o.publicKey.bytes, m.publicKey.bytes))) {
+    if (members.slice(0, i).some((o) => o.publicKey.flag === m.publicKey.flag && Bytes.equal(o.publicKey.bytes, m.publicKey.bytes))) {
       return fail(`member ${i}: duplicate public key`)
     }
     total += m.weight
@@ -259,7 +263,7 @@ const combineValid = (pk: MultiSigPublicKey, signatures: ReadonlyArray<PartialSi
         claimed = entry.publicKey
         if (claimed.flag !== flag) return yield* new InvalidMultiSig({ reason: "signature scheme does not match the named member" })
       }
-      const index = pk.members.findIndex((m) => m.publicKey.flag === flag && sameBytes(m.publicKey.bytes, claimed.bytes))
+      const index = pk.members.findIndex((m) => m.publicKey.flag === flag && Bytes.equal(m.publicKey.bytes, claimed.bytes))
       if (index < 0) return yield* new InvalidMultiSig({ reason: "signature from a key that is not a member" })
       return { index, flag, signature }
     })).pipe(
@@ -288,7 +292,7 @@ const signerUnsuspended = (
   signers: ReadonlyArray<Signer.Signer>
 ): Effect.Effect<Signer.Signer, InvalidMultiSig> => {
   const members = signers.map((s) =>
-    pk.members.findIndex((m) => m.publicKey.flag === s.publicKey.flag && sameBytes(m.publicKey.bytes, s.publicKey.bytes))
+    pk.members.findIndex((m) => m.publicKey.flag === s.publicKey.flag && Bytes.equal(m.publicKey.bytes, s.publicKey.bytes))
   )
   if (members.some((i) => i < 0)) return Effect.fail(new InvalidMultiSig({ reason: "a signer is not a member" }))
   if (new Set(members).size !== members.length) return Effect.fail(new InvalidMultiSig({ reason: "duplicate signer" }))

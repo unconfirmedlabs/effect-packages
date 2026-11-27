@@ -12,5 +12,8 @@
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@unconfirmed/test-support": "workspace:*"
   }
 }

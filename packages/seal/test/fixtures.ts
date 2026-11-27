@@ -6,11 +6,12 @@
  */
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Stream from "effect/Stream"
 import { base64 } from "@scure/base"
 import type { Address } from "@unconfirmed/sui/Address"
 import * as Objects from "@unconfirmed/sui/Objects"
 import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
+import * as Recorded from "@unconfirmed/test-support/recorded"
+import type { RecordedObject } from "@unconfirmed/test-support/recorded"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
@@ -18,15 +19,8 @@ import * as Move from "@unconfirmed/sui/Move"
 import * as KeyServer from "../src/KeyServer.ts"
 import { KeyServerApi, KeyServerError } from "../src/KeyServerApi.ts"
 
-export interface RecordedObject {
-  readonly objectId: string
-  readonly version: string
-  readonly digest: string
-  readonly owner: Record<string, unknown> & { readonly _tag: string }
-  readonly type: string
-  readonly contents: string // base64
-  readonly previousTransaction?: string
-}
+export type { RecordedObject } from "@unconfirmed/test-support/recorded"
+export { recordObject, restoreObject } from "@unconfirmed/test-support/recorded"
 
 /** One `GET /v1/service?service_id=<id>` as it went. */
 export interface RecordedService {
@@ -71,66 +65,12 @@ export const loadFixture = (network: "testnet" | "mainnet"): Fixture =>
   JSON.parse(readFileSync(join(fixturesDir, `${network}.json`), "utf-8"))
 
 // -----------------------------------------------------------------------------
-// Serialization
-// -----------------------------------------------------------------------------
-
-const BIGINT_OWNER_FIELDS = ["initialSharedVersion", "startVersion"] as const
-
-export const recordObject = (o: Objects.SuiObject): RecordedObject => {
-  const owner: Record<string, unknown> = { ...o.owner }
-  for (const k of BIGINT_OWNER_FIELDS) if (typeof owner[k] === "bigint") owner[k] = (owner[k] as bigint).toString()
-  return {
-    objectId: o.objectId,
-    version: o.version.toString(),
-    digest: o.digest,
-    owner: owner as RecordedObject["owner"],
-    type: o.type,
-    contents: base64.encode(o.contents),
-    ...(o.previousTransaction !== undefined && { previousTransaction: o.previousTransaction })
-  }
-}
-
-export const restoreObject = (r: RecordedObject): Objects.SuiObject => {
-  const owner: Record<string, unknown> = { ...r.owner }
-  for (const k of BIGINT_OWNER_FIELDS) if (typeof owner[k] === "string") owner[k] = BigInt(owner[k] as string)
-  return {
-    objectId: r.objectId as Address,
-    version: BigInt(r.version),
-    digest: r.digest as ObjectDigest,
-    owner: owner as unknown as Objects.Owner,
-    type: r.type,
-    contents: base64.decode(r.contents),
-    previousTransaction: r.previousTransaction
-  }
-}
-
-// -----------------------------------------------------------------------------
 // Layers
 // -----------------------------------------------------------------------------
 
 /** `Objects` over fixtures and extra objects; `gets` counts reads by id (to test caching). */
-export const objectsLayer = (
-  fixtures: ReadonlyArray<Fixture>,
-  overrides: ReadonlyArray<Objects.SuiObject> = []
-) => {
-  const byId = new Map<string, Objects.SuiObject>()
-  for (const f of fixtures) for (const r of f.objects) byId.set(r.objectId, restoreObject(r))
-  for (const o of overrides) byId.set(o.objectId, o)
-  const gets = new Map<string, number>()
-  const layer = Layer.succeed(
-    Objects.Objects,
-    Objects.Objects.of({
-      get: (objectId) =>
-        Effect.suspend(() => {
-          gets.set(objectId, (gets.get(objectId) ?? 0) + 1)
-          const o = byId.get(objectId)
-          return o === undefined ? Effect.fail(new Objects.ObjectNotFound({ objectId })) : Effect.succeed(o)
-        }),
-      listOwned: () => Stream.empty
-    })
-  )
-  return { layer, gets, byId }
-}
+export const objectsLayer = (fixtures: ReadonlyArray<Fixture>, overrides: ReadonlyArray<Objects.SuiObject> = []) =>
+  Recorded.objectsLayer(fixtures.flatMap((f) => f.objects), overrides)
 
 /**
  * A stub `KeyServerApi` answering `service` from recorded answers (by object

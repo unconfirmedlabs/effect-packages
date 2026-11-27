@@ -54,7 +54,11 @@ export class JwtNonceMismatch extends Schema.TaggedError<JwtNonceMismatch>()("Jw
 /** Enoki's nonce does not commit to our ephemeral key, `maxEpoch` and randomness. */
 export class InvalidEnokiNonce extends Schema.TaggedError<InvalidEnokiNonce>()("InvalidEnokiNonce", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid Enoki nonce: ${this.reason}`
+  }
+}
 
 /**
  * Ask Enoki for a nonce committing to the ephemeral key. The nonce is

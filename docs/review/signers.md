@@ -225,6 +225,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
   - `sameBytes` is defined four times in these packages (`sui-multisig`, `sui-passkey`, `sui-zklogin`, `sui-enoki`), written inline in `sui-wallet`, and defined five more times elsewhere in the repo (`sui/Tx.ts`, `sui/grpc/scan.ts`, three in `walrus`).
   - "Prefix the flag byte" is written out about eight times.
   - Only `Sponsor.sponsorAndExecute` uses `Effect.fn`; the other effectful entry points (`Wallet.*`, `ZkLoginFlow.*`, `Passkey.create` / `recover`, `MultiSig.signer`) have no span.
+- **Resolution** Fixed for the duplicates. New `@unconfirmed/sui/Ecdsa` (`Ecdsa.make(curve, flag, name)`, the curve passed in, so the core links no curve); `sui-secp256k1` and `sui-secp256r1` are now 25-line modules over noble's `secp256k1` / `p256` with the same exports and behaviour. "Verify, Ed25519 + k1 + r1 + multisig" went from 179.0 to 178.5 KB (Bun). `sameBytes` everywhere is `@unconfirmed/bcs/Bytes.equal` (X-11). Not changed: the "flag byte prefix" lines (each is one `out[0] = flag` inside a function that builds a different layout; a helper would not shorten them) and spans on the other entry points (`Effect.fn` adds weight to every caller; Seal chose `withSpan` for the same reason, and none of these is a hot or opaque path).
 
 ### SIGN-20: unused dependencies
 

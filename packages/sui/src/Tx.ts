@@ -15,6 +15,7 @@ import * as Resolve from "./Resolve.ts"
 import { isTransactionSigner, type Signer, SigningError, signTransaction, type TransactionSigner } from "./Signer.ts"
 import * as T from "./TransactionData.ts"
 import { type Effects, Transactions } from "./Transactions.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 export interface ResolveOptions<E = never, R = never> {
   readonly sender: Address
@@ -84,9 +85,12 @@ export class ExecutionFailed extends /* @__PURE__ */ Schema.TaggedError<Executio
   abortCode: Schema.optionalKey(Schema.BigInt),
   /** The aborting module, `0x…::module` (and `::function` when known). */
   location: Schema.optionalKey(Schema.String)
-}) {}
+}) {
+  override get message(): string {
+    return `transaction ${this.digest} failed: ${this.description}${this.command === undefined ? "" : ` in command ${this.command}`}${this.abortCode === undefined ? "" : `, abort code ${this.abortCode}`}${this.location === undefined ? "" : ` at ${this.location}`}`
+  }
+}
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
  * What a transaction signer may change. Its returned bytes must keep the
@@ -106,10 +110,10 @@ const checkChange = (
   if (after.sender !== before.sender) return refused("sender")
   if (after.gasData.owner !== before.gasData.owner) return refused("gas owner")
   const restOf = (d: T.TransactionData) => T.encode({ ...d, gasData: before.gasData, expiration: before.expiration })
-  if (!sameBytes(restOf(after), restOf(before))) return refused("commands or inputs")
+  if (!Bytes.equal(restOf(after), restOf(before))) return refused("commands or inputs")
   const keyIs = (address: string) => keySigners.some((k) => k.address === address)
-  const gasChanged = !sameBytes(T.encode({ ...before, gasData: after.gasData }), T.encode(before))
-  const expirationChanged = !sameBytes(T.encode({ ...before, expiration: after.expiration }), T.encode(before))
+  const gasChanged = !Bytes.equal(T.encode({ ...before, gasData: after.gasData }), T.encode(before))
+  const expirationChanged = !Bytes.equal(T.encode({ ...before, expiration: after.expiration }), T.encode(before))
   if (gasChanged && keyIs(before.gasData.owner)) return refused("gas or expiration, which a key signer pays for")
   if (expirationChanged && (keyIs(before.sender) || keyIs(before.gasData.owner))) {
     return refused("expiration, which a key signer signs")
@@ -132,7 +136,7 @@ const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData
   for (const [i, s] of signers.entries()) {
     if (!isTransactionSigner(s)) continue
     const signed = yield* s.signTransaction(current)
-    if (!sameBytes(signed.bytes, bytes)) {
+    if (!Bytes.equal(signed.bytes, bytes)) {
       if (signedByTransactionSigner) {
         return yield* new SigningError({
           reason: "failed",

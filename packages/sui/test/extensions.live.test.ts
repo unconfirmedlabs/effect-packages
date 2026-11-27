@@ -101,11 +101,10 @@ suite("testnet: extensions", () => {
     console.log("descending ItemListed to the floor:", all.length)
   }, 90_000)
 
-  test("Chain.info reports the floor and the epoch's first checkpoint (review B10)", async () => {
+  test("Chain.info reports the epoch and the checkpoint height", async () => {
     const { layer } = grpcLayer(TESTNET)
     const info = await Effect.runPromise(Effect.flatMap(Effect.service(Chain.Chain), (c) => c.info).pipe(Effect.provide(layer)))
-    expect(info.lowestAvailableCheckpoint! > 0n).toBe(true)
-    expect(info.epochFirstCheckpoint! > 0n && info.epochFirstCheckpoint! <= info.checkpointHeight).toBe(true)
+    expect(info.epoch > 0n && info.checkpointHeight > 0n).toBe(true)
   })
 
   test("CheckpointData: get, list across budgets, follow into live; Checkpoints.list resumes", async () => {

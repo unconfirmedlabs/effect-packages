@@ -57,19 +57,31 @@ export class DynamicFieldNotFound extends /* @__PURE__ */ Schema.TaggedError<Dyn
   parent: Schema.String,
   nameType: Schema.String,
   fieldId: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `dynamic field ${this.fieldId} (${this.nameType}) of ${this.parent} not found`
+  }
+}
 
 /** The name's type doesn't parse, or its value doesn't encode with the given schema. */
 export class InvalidDynamicFieldName extends /* @__PURE__ */ Schema.TaggedError<InvalidDynamicFieldName>()("InvalidDynamicFieldName", {
   nameType: Schema.String,
   issue: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid dynamic field name of type ${this.nameType}: ${this.issue}`
+  }
+}
 
 export class DynamicFieldDecodeError extends /* @__PURE__ */ Schema.TaggedError<DynamicFieldDecodeError>()("DynamicFieldDecodeError", {
   fieldId: Schema.String,
   valueType: Schema.String,
   issue: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `cannot decode dynamic field ${this.fieldId} as ${this.valueType}: ${this.issue}`
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Pure

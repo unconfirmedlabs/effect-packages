@@ -16,7 +16,11 @@ export const LENGTH = 32
 /** `InvalidBlobId` lives here (not in `Errors.ts`) so that `Errors.ts` can import `BlobId` without a cycle. */
 export class InvalidBlobId extends /* @__PURE__ */ Schema.TaggedError<InvalidBlobId>()("InvalidBlobId", {
   input: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid blob id ${JSON.stringify(this.input.length > 64 ? this.input.slice(0, 64) + "…" : this.input)}`
+  }
+}
 
 // 32 bytes = 256 bits = 42 full sextets + 4 bits, so the last character carries
 // 4 data bits and 2 zero bits: it must be one of A,E,I,...,w,0,4,8 (index % 4 === 0).

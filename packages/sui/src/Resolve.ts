@@ -16,7 +16,6 @@
  */
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
@@ -59,12 +58,20 @@ export interface Prefetched {
 
 export class Incomplete extends /* @__PURE__ */ Schema.TaggedError<Incomplete>()("Incomplete", {
   missing: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `missing ${this.missing}`
+  }
+}
 
 /** The plan can't become valid transaction data (an invalid address, too many inputs, a reference to a later result, ...). */
 export class InvalidTransaction extends /* @__PURE__ */ Schema.TaggedError<InvalidTransaction>()("InvalidTransaction", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** The budget dry run failed: the transaction would fail on chain as it stands. */
 export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", {
@@ -73,7 +80,11 @@ export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasE
   abortCode: Schema.optionalKey(Schema.BigInt),
   /** The aborting module, `0x…::module` (and `::function` when known). */
   location: Schema.optionalKey(Schema.String)
-}) {}
+}) {
+  override get message(): string {
+    return `gas estimation failed: ${this.description}${this.command === undefined ? "" : ` in command ${this.command}`}${this.abortCode === undefined ? "" : `, abort code ${this.abortCode}`}${this.location === undefined ? "" : ` at ${this.location}`}`
+  }
+}
 
 /**
  * The gas owner's SUI can't pay. `required` is the budget, plus, when commands
@@ -83,29 +94,49 @@ export class InsufficientGas extends /* @__PURE__ */ Schema.TaggedError<Insuffic
   owner: Schema.String,
   required: Schema.BigInt,
   available: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `${this.owner} has ${this.available} MIST for gas, needs ${this.required}`
+  }
+}
 
 export class InsufficientBalance extends /* @__PURE__ */ Schema.TaggedError<InsufficientBalance>()("InsufficientBalance", {
   owner: Schema.String,
   coinType: Schema.String,
   required: Schema.BigInt,
   available: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `${this.owner} has ${this.available} of ${this.coinType}, needs ${this.required}`
+  }
+}
 
 export class InvalidBalanceIntent extends /* @__PURE__ */ Schema.TaggedError<InvalidBalanceIntent>()("InvalidBalanceIntent", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** No object with the allowance's id. */
 export class AllowanceNotFound extends /* @__PURE__ */ Schema.TaggedError<AllowanceNotFound>()("AllowanceNotFound", {
   allowance: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance} not found`
+  }
+}
 
 /** The object isn't a shared `Allowance<Balance<T>>` for the intent's coin type, or its funder isn't the one the caller named. */
 export class InvalidAllowance extends /* @__PURE__ */ Schema.TaggedError<InvalidAllowance>()("InvalidAllowance", {
   allowance: Schema.String,
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance}: ${this.reason}`
+  }
+}
 
 /**
  * The permit doesn't fit the allowance: an app-bound allowance spent without a
@@ -116,28 +147,44 @@ export class AllowanceAppMismatch extends /* @__PURE__ */ Schema.TaggedError<All
   allowance: Schema.String,
   allowanceApp: Schema.NullOr(Schema.String),
   permitApp: Schema.NullOr(Schema.String)
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance} is for app ${this.allowanceApp ?? "none"}, permit is for ${this.permitApp ?? "none"}`
+  }
+}
 
 /** The sender isn't the allowance's spender (`null`: the allowance has none, so nobody can spend). */
 export class AllowanceSpenderMismatch extends /* @__PURE__ */ Schema.TaggedError<AllowanceSpenderMismatch>()("AllowanceSpenderMismatch", {
   allowance: Schema.String,
   spender: Schema.NullOr(Schema.String),
   sender: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance} spender is ${this.spender ?? "none"}, sender is ${this.sender}`
+  }
+}
 
 /** The allowance's start time (inclusive) is after the chain clock. */
 export class AllowanceNotStarted extends /* @__PURE__ */ Schema.TaggedError<AllowanceNotStarted>()("AllowanceNotStarted", {
   allowance: Schema.String,
   startTimestampMs: Schema.BigInt,
   nowMs: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance} starts at ${this.startTimestampMs} ms, now ${this.nowMs}`
+  }
+}
 
 /** The allowance's expiration (exclusive) has passed on the chain clock. */
 export class AllowanceExpired extends /* @__PURE__ */ Schema.TaggedError<AllowanceExpired>()("AllowanceExpired", {
   allowance: Schema.String,
   expirationTimestampMs: Schema.BigInt,
   nowMs: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance} expired at ${this.expirationTimestampMs} ms, now ${this.nowMs}`
+  }
+}
 
 /** The transaction's spends would exceed the allowance's lifetime cap or its current rate-limit window. */
 export class InsufficientAllowance extends /* @__PURE__ */ Schema.TaggedError<InsufficientAllowance>()("InsufficientAllowance", {
@@ -146,7 +193,11 @@ export class InsufficientAllowance extends /* @__PURE__ */ Schema.TaggedError<In
   limit: Schema.Literals(["lifetime", "rate"]),
   required: Schema.BigInt,
   available: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `allowance ${this.allowance} ${this.limit} limit has ${this.available} of ${this.coinType}, needs ${this.required}`
+  }
+}
 
 /** Everything allowance resolution can refuse before signing. */
 export type AllowanceError =
@@ -291,9 +342,9 @@ export const argumentsOf = (c: Command): ReadonlyArray<T.Argument> => {
   }
 }
 
-function mapArguments(c: T.Command, f: (a: T.Argument) => T.Argument): T.Command
-function mapArguments(c: Command, f: (a: T.Argument) => T.Argument): Command
-function mapArguments(c: Command, f: (a: T.Argument) => T.Argument): Command {
+export function mapArguments(c: T.Command, f: (a: T.Argument) => T.Argument): T.Command
+export function mapArguments(c: Command, f: (a: T.Argument) => T.Argument): Command
+export function mapArguments(c: Command, f: (a: T.Argument) => T.Argument): Command {
   switch (c._tag) {
     case "MoveCall":
       return { ...c, arguments: c.arguments.map(f) }
@@ -318,7 +369,8 @@ const encodeU64 = /* @__PURE__ */ Bcs.encodeSync(Bcs.u64)
 const encodeAddress = /* @__PURE__ */ Bcs.encodeSync(Bcs.Address)
 const GAS = "gas"
 
-const moveCall = (
+/** @internal */
+export const moveCall = (
   target: string,
   typeArguments: string | ReadonlyArray<string>,
   args: ReadonlyArray<T.Argument>
@@ -335,7 +387,8 @@ const moveCall = (
 }
 
 /** Where a command's results go after a rewrite: the same shape at a new position. */
-const movedTo = (at: number) => (n: number | undefined): T.Argument =>
+/** @internal */
+export const movedTo = (at: number) => (n: number | undefined): T.Argument =>
   n === undefined ? { _tag: "Result", value: at } : { _tag: "NestedResult", value: [at, n] }
 
 /** A draft the intent rewrite can't map; thrown inside the rewrite and turned into `InvalidBalanceIntent`. */
@@ -344,13 +397,15 @@ class RewriteError {
 }
 
 /** An intent's single result, which is all a `Result` or `NestedResult(_, 0)` of it can mean. */
-const singleResult = (index: number, r: T.Argument) => (n: number | undefined): T.Argument => {
+/** @internal */
+export const singleResult = (index: number, r: T.Argument) => (n: number | undefined): T.Argument => {
   if (n === undefined || n === 0) return r
   throw new RewriteError(`a coin/balance intent has a single result; NestedResult(${index}, ${n}) is invalid`)
 }
 
 /** Map a result reference through the rewrite so far; a reference to a command not yet seen is invalid. */
-const remapWith = (results: ReadonlyMap<number, (nested: number | undefined) => T.Argument>) => (a: T.Argument): T.Argument => {
+/** @internal */
+export const remapWith = (results: ReadonlyMap<number, (nested: number | undefined) => T.Argument>) => (a: T.Argument): T.Argument => {
   if (a._tag !== "Result" && a._tag !== "NestedResult") return a
   const index = a._tag === "Result" ? a.value : a.value[0]
   const to = results.get(index)
@@ -359,7 +414,8 @@ const remapWith = (results: ReadonlyMap<number, (nested: number | undefined) => 
 }
 
 /** Run a rewrite; its `RewriteError` becomes `InvalidBalanceIntent`. */
-const rewrite = <A>(f: () => A): Effect.Effect<A, InvalidBalanceIntent> =>
+/** @internal */
+export const rewrite = <A>(f: () => A): Effect.Effect<A, InvalidBalanceIntent> =>
   Effect.try({
     try: f,
     catch: (e) => {
@@ -371,54 +427,6 @@ const rewrite = <A>(f: () => A): Effect.Effect<A, InvalidBalanceIntent> =>
 // -----------------------------------------------------------------------------
 // allowances (coin / balance intents under an allowance)
 // -----------------------------------------------------------------------------
-
-const Window = /* @__PURE__ */ Bcs.enum({ PeriodicMs: Bcs.u64, CalendarMonths: Bcs.u8 })
-const RateLimit = /* @__PURE__ */ Bcs.enum({
-  Windowed: Bcs.struct({ limit: Bcs.u256, spent: Bcs.u256, anchorMs: Bcs.option(Bcs.u64), index: Bcs.u64, window: Window })
-})
-
-/** `0x2::allowance::Allowance<T>`: settings plus cumulative spend. */
-const AllowanceObject = /* @__PURE__ */ Bcs.struct({
-  id: Bcs.Address,
-  settings: Bcs.struct({
-    funder: Bcs.Address,
-    spender: Bcs.option(Bcs.Address),
-    /** `0x1::type_name::TypeName { name }`: the type without `0x`. */
-    app: Bcs.option(Bcs.string),
-    lifetimeCap: Bcs.option(Bcs.u256),
-    startTimestampMs: Bcs.option(Bcs.u64),
-    expirationTimestampMs: Bcs.option(Bcs.u64),
-    rateLimit: Bcs.option(RateLimit),
-    name: Bcs.string
-  }),
-  currentSpend: Bcs.u256
-})
-type AllowanceObject = typeof AllowanceObject.Type
-
-const decodeAllowance = /* @__PURE__ */ Bcs.decode(AllowanceObject)
-const decodeClock = /* @__PURE__ */ Bcs.decode(Bcs.struct({ id: Bcs.Address, timestampMs: Bcs.u64 }))
-
-const normalizeType = (s: string) => {
-  try {
-    return TypeTag.normalizeString(s)
-  } catch {
-    return s
-  }
-}
-
-const allowanceType = (coinType: string) => TypeTag.normalizeString(`0x2::allowance::Allowance<0x2::balance::Balance<${coinType}>>`)
-
-/** What the current rate-limit window still allows, from the chain clock (never an under-estimate). */
-const rateAvailable = (rate: Extract<AllowanceObject["settings"]["rateLimit"], { _tag: "Some" }>["value"], nowMs: bigint | undefined) => {
-  let spent = 0n
-  // A periodic window is current when `(now - anchor) / period` is still the charged index.
-  // A calendar window may have rolled, so its spend is not counted.
-  if (Option.isSome(rate.anchorMs) && rate.window._tag === "PeriodicMs" && nowMs !== undefined && rate.window.value > 0n) {
-    const elapsed = nowMs - rate.anchorMs.value
-    if (elapsed >= 0n && elapsed / rate.window.value === rate.index) spent = rate.spent
-  }
-  return rate.limit > spent ? rate.limit - spent : 0n
-}
 
 /**
  * Resolve allowance intents (`Ptb.coin({ allowance })` / `Ptb.balance({ allowance })`)
@@ -437,151 +445,12 @@ const rateAvailable = (rate: Extract<AllowanceObject["settings"]["rateLimit"], {
  */
 export const allowances = (
   plan: Plan
-): Effect.Effect<Plan, AllowanceError | InsufficientBalance | InvalidBalanceIntent | RpcError, Objects | Coins> =>
-  Effect.gen(function*() {
-    const intents = plan.draft.commands.filter((c): c is AllowanceIntent => c._tag === "AllowanceIntent")
-    if (intents.length === 0) return plan
-    const objects = yield* Objects
+): Effect.Effect<Plan, AllowanceError | InsufficientBalance | InvalidBalanceIntent | RpcError, Objects | Coins> => {
+  // The resolver travels with the intent, so programs without allowance intents don't link it.
+  const intent = plan.draft.commands.find((c): c is AllowanceIntent => c._tag === "AllowanceIntent")
+  return intent === undefined ? Effect.succeed(plan) : intent.resolve(plan)
+}
 
-    // Read every allowance once.
-    const ids = [...new Set(intents.map((i) => i.allowanceId))]
-    const read = yield* Effect.forEach(ids, (id) =>
-      objects.get(id).pipe(
-        Effect.catchTag("ObjectNotFound", () => Effect.fail(new AllowanceNotFound({ allowance: id }))),
-        Effect.flatMap((object) => {
-          if (object.owner._tag !== "Shared") {
-            return Effect.fail(new InvalidAllowance({ allowance: id, reason: `not a shared object (owner: ${object.owner._tag})` }))
-          }
-          const shared = object.owner
-          return Result.match(decodeAllowance(object.contents), {
-            onFailure: (e) => Effect.fail(new InvalidAllowance({ allowance: id, reason: `${object.type} is not an Allowance: ${e.message}` })),
-            onSuccess: (state) => Effect.succeed({ object, initialSharedVersion: shared.initialSharedVersion, state })
-          })
-        })
-      ), { concurrency: "unbounded" })
-    const byId = new Map(ids.map((id, k) => [id, read[k]!] as const))
-
-    // Per intent: type, funder, app binding, spender.
-    for (const i of intents) {
-      const { object, state } = byId.get(i.allowanceId)!
-      const s = state.settings
-      const expected = allowanceType(i.coinType)
-      if (normalizeType(object.type) !== expected) {
-        return yield* new InvalidAllowance({ allowance: i.allowanceId, reason: `expected ${expected}, found ${object.type}` })
-      }
-      if (i.funder !== undefined && i.funder !== s.funder) {
-        return yield* new InvalidAllowance({ allowance: i.allowanceId, reason: `funded by ${s.funder}, not ${i.funder}` })
-      }
-      const app = Option.isSome(s.app) ? normalizeType(s.app.value) : null
-      const permitApp = i.permit !== undefined ? i.appType ?? null : null
-      if (app !== permitApp) {
-        return yield* new AllowanceAppMismatch({ allowance: i.allowanceId, allowanceApp: app, permitApp })
-      }
-      if (Option.isNone(s.spender) || s.spender.value !== plan.sender) {
-        return yield* new AllowanceSpenderMismatch({
-          allowance: i.allowanceId,
-          spender: Option.isSome(s.spender) ? s.spender.value : null,
-          sender: plan.sender
-        })
-      }
-    }
-
-    // Per allowance: time window, lifetime cap and rate limit against this transaction's total.
-    const needsClock = read.some(({ state: { settings: s } }) =>
-      Option.isSome(s.startTimestampMs) || Option.isSome(s.expirationTimestampMs) ||
-      (Option.isSome(s.rateLimit) && Option.isSome(s.rateLimit.value.anchorMs))
-    )
-    const nowMs = needsClock
-      ? yield* objects.get(normalize("0x6")).pipe(
-        Effect.flatMap((o) =>
-          Result.match(decodeClock(o.contents), {
-            onFailure: () => Effect.succeed(undefined),
-            onSuccess: (c) => Effect.succeed(c.timestampMs)
-          })
-        ),
-        Effect.catchTag("ObjectNotFound", () => Effect.succeed(undefined))
-      )
-      : undefined
-    for (const id of ids) {
-      const { state } = byId.get(id)!
-      const s = state.settings
-      const mine = intents.filter((i) => i.allowanceId === id)
-      const total = mine.reduce((sum, i) => sum + i.amount, 0n)
-      const coinType = mine[0]!.coinType
-      if (nowMs !== undefined && Option.isSome(s.startTimestampMs) && nowMs < s.startTimestampMs.value) {
-        return yield* new AllowanceNotStarted({ allowance: id, startTimestampMs: s.startTimestampMs.value, nowMs })
-      }
-      if (nowMs !== undefined && Option.isSome(s.expirationTimestampMs) && nowMs >= s.expirationTimestampMs.value) {
-        return yield* new AllowanceExpired({ allowance: id, expirationTimestampMs: s.expirationTimestampMs.value, nowMs })
-      }
-      if (Option.isSome(s.lifetimeCap)) {
-        const available = s.lifetimeCap.value > state.currentSpend ? s.lifetimeCap.value - state.currentSpend : 0n
-        if (total > available) return yield* new InsufficientAllowance({ allowance: id, coinType, limit: "lifetime", required: total, available })
-      }
-      if (Option.isSome(s.rateLimit)) {
-        const available = rateAvailable(s.rateLimit.value, nowMs)
-        if (total > available) return yield* new InsufficientAllowance({ allowance: id, coinType, limit: "rate", required: total, available })
-      }
-    }
-
-    // Per funder and type: the funder's address balance, beyond what the transaction already withdraws.
-    const owed = new Map<string, { funder: Address; coinType: string; total: bigint }>()
-    for (const i of intents) {
-      const funder = byId.get(i.allowanceId)!.state.settings.funder
-      const key = `${funder}|${i.coinType}`
-      const entry = owed.get(key) ?? { funder, coinType: i.coinType, total: 0n }
-      owed.set(key, { ...entry, total: entry.total + i.amount })
-    }
-    const coinsService = yield* Coins
-    yield* Effect.forEach(owed.values(), ({ funder, coinType, total }) =>
-      Effect.flatMap(coinsService.getBalance(funder, coinType), (balance) => {
-        const available = balance.addressBalance - reservedBy(plan, funder, coinType)
-        return available < total
-          ? Effect.fail(new InsufficientBalance({ owner: funder, coinType, required: total, available: available < 0n ? 0n : available }))
-          : Effect.void
-      }), { concurrency: "unbounded", discard: true })
-
-    // Rewrite: allowance inputs become mutable shared objects; each intent its withdrawal and spend.
-    const inputs: Array<Input> = [...plan.draft.inputs]
-    for (const i of intents) {
-      if (i.allowance._tag !== "Input") continue
-      const { object, initialSharedVersion } = byId.get(i.allowanceId)!
-      inputs[i.allowance.value] = {
-        _tag: "Object",
-        value: { _tag: "SharedObject", objectId: object.objectId, initialSharedVersion, mutability: { _tag: "Mutable" } }
-      }
-    }
-    const out: Array<Command> = []
-    const results = new Map<number, (nested: number | undefined) => T.Argument>()
-    const remap = remapWith(results)
-    yield* rewrite(() => {
-    for (const [index, c] of plan.draft.commands.entries()) {
-      if (c._tag !== "AllowanceIntent") {
-        out.push(mapArguments(c, remap))
-        results.set(index, movedTo(out.length - 1))
-        continue
-      }
-      const funder = byId.get(c.allowanceId)!.state.settings.funder
-      inputs.push({
-        _tag: "FundsWithdrawal",
-        reservation: { _tag: "MaxAmountU64", value: c.amount },
-        typeArg: { _tag: "Balance", value: TypeTag.parse(c.coinType) },
-        withdrawFrom: { _tag: "SenderAllowance", funder, allowance: c.allowanceId }
-      })
-      const withdrawal: T.Argument = { _tag: "Input", value: inputs.length - 1 }
-      const allowance = remap(c.allowance)
-      const clock = remap(c.clock)
-      out.push(
-        c.appType !== undefined && c.permit !== undefined
-          ? moveCall("0x2::allowance::app_balance_spend", [c.coinType, c.appType], [allowance, remap(c.permit), withdrawal, clock])
-          : moveCall("0x2::allowance::balance_spend", c.coinType, [allowance, withdrawal, clock])
-      )
-      if (c.output === "coin") out.push(moveCall("0x2::coin::from_balance", c.coinType, [{ _tag: "Result", value: out.length - 1 }]))
-      results.set(index, singleResult(index, { _tag: "NestedResult", value: [out.length - 1, 0] }))
-    }
-    })
-    return { ...plan, draft: { inputs, commands: out } }
-  })
 
 const senderWithdrawal = (amount: bigint, coinType: string): T.CallArg => ({
   _tag: "FundsWithdrawal",

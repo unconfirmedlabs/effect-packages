@@ -38,7 +38,11 @@ export const toSuiBytes = (pk: PublicKey): Uint8Array => {
 export class InvalidSignature extends /* @__PURE__ */ Schema.TaggedError<InvalidSignature>()("InvalidSignature", {
   scheme: Schema.String,
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid ${this.scheme} signature: ${this.reason}`
+  }
+}
 
 export class UnsupportedScheme extends /* @__PURE__ */ Schema.TaggedError<UnsupportedScheme>()("UnsupportedScheme", {
   flag: Schema.Number
@@ -57,7 +61,11 @@ export class VerificationUnavailable extends /* @__PURE__ */ Schema.TaggedError<
   scheme: Schema.String,
   reason: Schema.String,
   retryable: Schema.Boolean
-}) {}
+}) {
+  override get message(): string {
+    return `cannot verify ${this.scheme} signature: ${this.reason}`
+  }
+}
 
 /**
  * `InvalidSignature`: the signature is wrong. `UnsupportedScheme`: its scheme

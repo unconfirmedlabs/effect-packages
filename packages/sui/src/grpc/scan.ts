@@ -11,6 +11,7 @@ import { convert } from "./convert.ts"
 import type * as P from "./generated/proto.ts"
 import * as Rpc from "./generated/lean.ts"
 import type { GrpcWeb } from "./GrpcWeb.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 interface Frame<A> {
   readonly item: A | undefined
@@ -21,7 +22,6 @@ interface Frame<A> {
 /** ITEM_LIMIT and SCAN_LIMIT: the server stopped early; resume from the watermark. */
 const budgetExhausted = (end: P.QueryEnd) => end.reason === 1 || end.reason === 2
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 export { convert }
 
@@ -68,7 +68,7 @@ export const resumable = <F, A>(
       )
       const guarded = recovery === undefined ? body : body.pipe(
         Stream.catch((error) => {
-          const progressed = last?.cursor !== undefined && !(resume?.cursor && sameBytes(resume.cursor, last.cursor))
+          const progressed = last?.cursor !== undefined && !(resume?.cursor && Bytes.equal(resume.cursor, last.cursor))
           const tries = progressed ? 1 : attempts + 1
           if (tries > maxAttempts) return Stream.fail(error)
           recovered = true
@@ -86,7 +86,7 @@ export const resumable = <F, A>(
           if (!sawEnd) return fail("the scan stream ended without its QueryEnd frame")
           if (!stoppedEarly) return Stream.empty
           if (!last?.cursor) return fail("scan stopped at a budget without a resume cursor")
-          if (items === 0 && resume?.cursor && sameBytes(resume.cursor, last.cursor)) {
+          if (items === 0 && resume?.cursor && Bytes.equal(resume.cursor, last.cursor)) {
             return fail("scan made no progress (the same resume cursor twice)")
           }
           return go(last, 0)

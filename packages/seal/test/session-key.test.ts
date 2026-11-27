@@ -19,7 +19,7 @@ import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import { TestClock } from "effect/testing"
-import { fakeWallet } from "../../sui-wallet/test/FakeWallet.ts"
+import { fakeWallet } from "@unconfirmed/test-support/wallet"
 import { Entropy, SessionKey } from "../src/index.ts"
 import { b64, hex, seeded, toB64, unhex, utf8 } from "./support.ts"
 

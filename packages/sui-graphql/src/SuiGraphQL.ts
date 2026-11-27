@@ -9,10 +9,12 @@
  * Everything else HTTP-shaped (proxies, logging, recording for tests) is
  * `HttpClient` middleware.
  */
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
+import * as GraphQLClientError from "effect/graphql/GraphQLClientError"
 import * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import * as Headers from "effect/http/Headers"
-import type * as HttpClient from "effect/http/HttpClient"
+import * as HttpClient from "effect/http/HttpClient"
 import * as Layer from "effect/Layer"
 import * as Stream from "effect/Stream"
 
@@ -27,6 +29,13 @@ export interface SuiGraphQLOptions {
   readonly subscriptionUrl?: string
   /** Extra headers on every request (API keys, routing). */
   readonly headers?: Readonly<Record<string, string>>
+  /**
+   * Bound on each query or mutation; one without an answer in time fails with a
+   * retryable `RpcError` (`UNAVAILABLE`). Subscriptions are not bounded. Default 30 seconds.
+   */
+  readonly requestTimeout?: Duration.Input
+  /** Send `traceparent` / `b3` headers. Off by default (CORS preflights); spans are recorded either way. */
+  readonly tracerPropagation?: boolean
 }
 
 export const subscriptionUrlFor = (url: string): string => {
@@ -45,14 +54,23 @@ export const protocol = (options: SuiGraphQLOptions): Layer.Layer<GraphQLProtoco
         url: ({ kind }) => (kind === "subscription" ? subscriptionUrl : options.url)
       })
       const extra = options.headers
-      if (extra === undefined) return http
-      const withHeaders = (request: GraphQLProtocol.GraphQLRequest): GraphQLProtocol.GraphQLRequest => ({
-        ...request,
-        headers: Headers.merge(Headers.fromInput(extra), request.headers)
-      })
+      const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? "30 seconds")
+      const tracerPropagation = options.tracerPropagation ?? false
+      const withHeaders = (request: GraphQLProtocol.GraphQLRequest): GraphQLProtocol.GraphQLRequest =>
+        extra === undefined ? request : { ...request, headers: Headers.merge(Headers.fromInput(extra), request.headers) }
       return GraphQLProtocol.GraphQLProtocol.of({
-        execute: (request) => http.execute(withHeaders(request)),
-        subscribe: (request) => Stream.suspend(() => http.subscribe(withHeaders(request))),
+        execute: (request) =>
+          http.execute(withHeaders(request)).pipe(
+            Effect.timeoutOrElse({
+              duration: timeout,
+              orElse: () => Effect.fail(new GraphQLClientError.TransportError({ description: `no answer within ${Duration.format(timeout)}` }))
+            }),
+            Effect.provideService(HttpClient.TracerPropagationEnabled, tracerPropagation)
+          ),
+        subscribe: (request) =>
+          Stream.suspend(() => http.subscribe(withHeaders(request))).pipe(
+            Stream.provideService(HttpClient.TracerPropagationEnabled, tracerPropagation)
+          ),
         url: http.url
       })
     })

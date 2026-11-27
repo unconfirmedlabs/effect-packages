@@ -7,6 +7,7 @@
  * ("legacy") address. Identifier bytes here are always the padded form, as in
  * `@mysten/sui`; legacy-ness is a property of the address you derive.
  */
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 import * as Address from "@unconfirmed/sui/Address"
 import * as Effect from "effect/Effect"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"
@@ -15,17 +16,9 @@ import { BN254_FIELD_SIZE } from "./internal/poseidon.ts"
 
 export const FLAG = 0x05
 
-const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("")
-
-const hexToBytes = (h: string): Uint8Array => {
-  const out = new Uint8Array(h.length / 2)
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16)
-  return out
-}
-
 /** `num` as `width` big-endian bytes, left-padded with zeros (truncated if wider). */
 export const toPaddedBigEndianBytes = (num: bigint, width: number): Uint8Array =>
-  hexToBytes(num.toString(16).padStart(width * 2, "0").slice(-width * 2))
+  Bytes.fromHex(num.toString(16).padStart(width * 2, "0").slice(-width * 2))
 
 /** `num` as big-endian bytes without leading zeros (`[0]` for zero). */
 export const toBigEndianBytes = (num: bigint, width: number): Uint8Array => {
@@ -70,7 +63,7 @@ export const parse = (bytes: Uint8Array): Effect.Effect<Parsed, InvalidZkLoginIn
   }
   const seed = bytes.subarray(1 + issLength)
   if (seed.length > 32) return Effect.fail(new InvalidZkLoginInput({ reason: "address seed is longer than 32 bytes" }))
-  const addressSeed = BigInt("0x" + hex(seed))
+  const addressSeed = BigInt("0x" + Bytes.toHex(seed))
   if (addressSeed >= BN254_FIELD_SIZE) return Effect.fail(new InvalidZkLoginInput({ reason: "address seed is not in the BN254 field" }))
   return Effect.succeed({ iss: new TextDecoder().decode(bytes.subarray(1, 1 + issLength)), addressSeed })
 }
@@ -78,7 +71,7 @@ export const parse = (bytes: Uint8Array): Effect.Effect<Parsed, InvalidZkLoginIn
 /** @internal Re-encode identifier bytes with a padded (or legacy) seed. Assumes `bytes` parse. */
 export const normalizeUnsafe = (bytes: Uint8Array, legacyAddress: boolean): Uint8Array => {
   const issEnd = bytes[0]! + 1
-  const seedHex = hex(bytes.subarray(issEnd))
+  const seedHex = Bytes.toHex(bytes.subarray(issEnd))
   const seed = seedBytes(seedHex.length === 0 ? 0n : BigInt("0x" + seedHex), legacyAddress)
   const out = new Uint8Array(issEnd + seed.length)
   out.set(bytes.subarray(0, issEnd))
