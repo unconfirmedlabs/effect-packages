@@ -15,7 +15,6 @@
  *
  * `Quorum`'s errors never escape: they become the Schema errors of `Errors.ts`.
  */
-import * as Deferred from "effect/Deferred"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
@@ -310,12 +309,15 @@ const malformed = (node: string, message: string) => new NodeError({ node, kind:
 // Metadata
 // -----------------------------------------------------------------------------
 
+/** Not-found and blocked answers: a node judging the blob, not failing to serve it. */
+const absent = (e: NodeError): boolean => e.kind === "NotFound" || e.kind === "Blocked"
+
 /**
  * Step 2: the first node whose metadata verifies against the blob id, three
  * nodes at a time. Not-found and blocked answers are final; once they weigh
- * `2f + 1` the read stops there (`node_client.rs:2386-2456`) instead of
- * waiting for every other node to fail, which with threshold 1 is what
- * `Quorum.run` alone would do.
+ * `2f + 1` the read gives up there (`node_client.rs:2386-2456`, `Quorum`'s
+ * `giveUp`) instead of waiting for every other node to fail, which with
+ * threshold 1 is what `Quorum.run` alone would do.
  */
 const fetchMetadata = (
   nodes: Nodes,
@@ -325,17 +327,6 @@ const fetchMetadata = (
 ): Effect.Effect<Messages.VerifiedMetadata, BlobNotFound | BlobBlocked | NoMetadata> =>
   Effect.gen(function*() {
     const n = committee.nShards
-    const verdict = yield* Deferred.make<never, BlobNotFound | BlobBlocked>()
-    let notFound = 0
-    let blocked = 0
-    const absent = (node: CommitteeNode, error: NodeError) =>
-      Effect.suspend(() => {
-        if (error.kind === "NotFound") notFound += node.shards.length
-        else if (error.kind === "Blocked") blocked += node.shards.length
-        else return Effect.void
-        if (notFound + blocked < Bft.quorum(n)) return Effect.void
-        return Deferred.fail(verdict, notFound > blocked ? new BlobNotFound({ blobId }) : new BlobBlocked({ blobId }))
-      })
     const verify = (node: CommitteeNode, bytes: Uint8Array) =>
       Effect.flatMap(
         Effect.try({
@@ -346,25 +337,26 @@ const fetchMetadata = (
       )
     // Three lanes, plus one more for every node that fails for good: a present blob costs about three
     // metadata downloads, an absent one does not wait for 2f + 1 not-found answers three at a time.
+    // (Quorum's `concurrency` is fixed, so the widening window is a resizable semaphore inside `run`.)
     let width = METADATA_LANES
     const lanes = yield* Semaphore.make(width)
     const widen = Effect.suspend(() => lanes.resize(++width))
-    const quorum = Quorum.run(committee.nodes, {
+    return yield* Quorum.run(committee.nodes, {
       weight: (node) => node.shards.length,
       run: (node) =>
         Effect.flatMap(nodes.metadata(node, blobId), (bytes) => verify(node, bytes)).pipe(
           Effect.retry({ schedule: retry, while: StorageNode.retryable }),
-          Effect.tapError((e) => Effect.andThen(absent(node, e), widen)),
+          Effect.tapError(() => widen),
           Semaphore.withPermit(lanes)
         ),
       threshold: 1,
-      order: "shuffle"
+      order: "shuffle",
+      giveUp: { when: absent, weight: Bft.quorum(n) }
     }).pipe(
       Effect.map((reached) => reached.successes[0]!.value),
       Effect.catchTag("QuorumFailed", (e) =>
         Effect.fail(classify(blobId, n, e.failures, () => new NoMetadata({ blobId, failures: summarize(e.failures) }))))
     )
-    return yield* Effect.raceFirst(quorum, Deferred.await(verdict))
   })
 
 // -----------------------------------------------------------------------------

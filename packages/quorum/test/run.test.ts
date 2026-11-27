@@ -349,6 +349,172 @@ describe("Quorum.run", () => {
     expect(e.message).not.toContain("secret")
   })
 
+  describe("20. giveUp", () => {
+    const notFound = () => new NodeError("notFound", false)
+    const isNotFound = (e: NodeError) => e.code === "notFound"
+
+    test("fails at once without grace when matching failures reach the weight", async () => {
+      const { world, effect } = setup(
+        [
+          { weight: 3, delay: 1000, outcomes: [notFound()] },
+          { weight: 3, delay: 2000, outcomes: [notFound()] },
+          { weight: 3, delay: 10_000 },
+          { weight: 1, delay: 10_000 }
+        ],
+        { giveUp: { when: isNotFound, weight: 6 } }
+      )
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(2000)
+      const e = error(exit)
+      expect(e.reason).toBe("gaveUp")
+      expect(e.failures.map((f) => f.index)).toEqual([0, 1])
+      expect(e.unsettled.map((u) => [u.index, u.started])).toEqual([[2, true], [3, true]])
+      expect(e.message).toBe("quorum gave up: 0 of 1 reached, 6 failed, 4 unsettled (total 10)")
+      expect(world.of("interrupted").sort()).toEqual([2, 3])
+      expect(world.inFlight.size).toBe(0)
+    })
+
+    test("a zero grace is no grace", async () => {
+      const { effect } = setup([{ delay: 100, outcomes: [notFound()] }, { delay: 200 }], {
+        giveUp: { when: isNotFound, weight: 1, grace: 0 }
+      })
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(100)
+      expect(error(exit).reason).toBe("gaveUp")
+    })
+
+    test("non-matching failures do not count", async () => {
+      const giveUp = { when: isNotFound, weight: 2 }
+      const a = setup(
+        [{ delay: 100, outcomes: [notFound()] }, { delay: 200, outcomes: [new NodeError("down")] }, { delay: 1000 }],
+        { giveUp }
+      )
+      const ra = await timed(a.effect)
+      expect(ra.at).toBe(1000)
+      expect(value(ra.exit).failures.map((f) => f.error.code)).toEqual(["notFound", "down"])
+
+      const b = setup(
+        [
+          { delay: 100, outcomes: [notFound()] },
+          { delay: 200, outcomes: [new NodeError("down")] },
+          { delay: 300, outcomes: [notFound()] },
+          { delay: 1000 }
+        ],
+        { giveUp }
+      )
+      const rb = await timed(b.effect)
+      expect(rb.at).toBe(300)
+      expect(error(rb.exit).reason).toBe("gaveUp")
+      expect(error(rb.exit).failures.map((f) => f.index)).toEqual([0, 1, 2])
+    })
+
+    test("a retrying member counts only once its failure is final", async () => {
+      const seen: Array<string> = []
+      const { world, effect } = setup(
+        [{ delay: 100, outcomes: [new NodeError("notFound")] }, { delay: "never" }],
+        {
+          schedule: Schedule.recurs(2),
+          giveUp: {
+            when: (e, m) => {
+              seen.push(`${m.id}:${e.code}`)
+              return isNotFound(e)
+            },
+            weight: 1
+          }
+        }
+      )
+      const { exit, at } = await timed(effect)
+      // attempts end at 100, 200 and 300 ms; only the last is final
+      expect(at).toBe(300)
+      expect(error(exit).reason).toBe("gaveUp")
+      expect(world.attempts(0)).toBe(3)
+      expect(seen).toEqual(["0:notFound"])
+    })
+
+    test("with grace, a threshold reached inside the window succeeds", async () => {
+      const { world, effect } = setup(
+        [{ delay: 100, outcomes: [notFound()] }, { delay: 1500 }, { delay: "never" }],
+        { giveUp: { when: isNotFound, weight: 1, grace: "2 seconds" } }
+      )
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(1500)
+      const r = value(exit)
+      expect(r.successes.map((s) => s.index)).toEqual([1])
+      expect(r.failures.map((f) => f.index)).toEqual([0])
+      expect(r.unsettled.map((u) => [u.index, u.started])).toEqual([[2, true]])
+      expect(world.at(2, "interrupted")).toBe(1500)
+    })
+
+    test("with grace, the window keeps starting queued members", async () => {
+      const { world, effect } = setup(
+        [{ delay: 100, outcomes: [notFound()] }, { delay: 100, outcomes: [notFound()] }, { delay: 300 }],
+        { concurrency: 1, giveUp: { when: isNotFound, weight: 1, grace: "1 second" } }
+      )
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(500)
+      expect(value(exit).successes.map((s) => s.index)).toEqual([2])
+      expect(world.of("start")).toEqual([0, 1, 2])
+    })
+
+    test("the window ends in gaveUp at the exact time", async () => {
+      const { world, effect } = setup(
+        [{ delay: 100, outcomes: [notFound()] }, { delay: 5000 }],
+        { giveUp: { when: isNotFound, weight: 1, grace: "2 seconds" } }
+      )
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(2100)
+      const e = error(exit)
+      expect(e.reason).toBe("gaveUp")
+      expect(e.unsettled.map((u) => [u.index, u.started])).toEqual([[1, true]])
+      expect(world.at(1, "interrupted")).toBe(2100)
+    })
+
+    test("the window ends early, as gaveUp, once the threshold is out of reach", async () => {
+      const { effect } = setup(
+        [{ delay: 100, outcomes: [notFound()] }, { delay: 500, outcomes: [new NodeError("down")] }],
+        { giveUp: { when: isNotFound, weight: 1, grace: "2 seconds" } }
+      )
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(500)
+      expect(error(exit).reason).toBe("gaveUp")
+      expect(error(exit).failures.map((f) => f.index)).toEqual([0, 1])
+    })
+
+    test("unreachable still wins when it comes first", async () => {
+      const { effect } = setup(
+        [
+          { weight: 3, delay: 1000, outcomes: [new NodeError("down")] },
+          { weight: 3, delay: 2000, outcomes: [notFound()] },
+          { weight: 3, delay: 10_000 },
+          { weight: 1, delay: 10_000 }
+        ],
+        { threshold: 7, giveUp: { when: isNotFound, weight: 3, grace: "5 seconds" } }
+      )
+      const { exit, at } = await timed(effect)
+      expect(at).toBe(2000)
+      expect(error(exit).reason).toBe("unreachable")
+    })
+
+    test("invalid weight or grace dies", async () => {
+      const cases: Array<Quorum.GiveUp<Member, NodeError>> = [
+        { when: isNotFound, weight: 0 },
+        { when: isNotFound, weight: -1 },
+        { when: isNotFound, weight: NaN },
+        { when: isNotFound, weight: Infinity },
+        { when: isNotFound, weight: 1, grace: -1 },
+        { when: isNotFound, weight: 1, grace: NaN },
+        { when: isNotFound, weight: 1, grace: "-1 second" }
+      ]
+      for (const giveUp of cases) {
+        const { world, effect } = setup([{ delay: 100 }], { giveUp })
+        const d = defect((await timed(effect)).exit)
+        expect(d).toBeInstanceOf(Cause.IllegalArgumentError)
+        expect(String((d as Error).message)).toStartWith("Quorum: giveUp.")
+        expect(world.attempts(0)).toBe(0)
+      }
+    })
+  })
+
   test("helpers", () => {
     const failures = [
       { member: "a", index: 0, weight: 2, error: "notFound" },
