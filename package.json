@@ -31,6 +31,7 @@
     "@unconfirmed/sui-graphql": "workspace:*",
     "@unconfirmed/sui-mldsa65": "workspace:*",
     "@unconfirmed/sui-mnemonic": "workspace:*",
+    "@unconfirmed/sui-wallet": "workspace:*",
     "@mysten/enoki": "2.0.1"
   }
 }
