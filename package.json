@@ -18,6 +18,7 @@
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "@unconfirmed/sui-multisig": "workspace:*",
+    "@unconfirmed/sui-passkey": "workspace:*",
     "@unconfirmed/sui-secp256k1": "workspace:*",
     "@unconfirmed/sui-secp256r1": "workspace:*",
     "effect": "4.1.6",

@@ -1,0 +1,19 @@
+{
+  "name": "@unconfirmed/sui-passkey",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@scure/base": "^2.3.0",
+    "@unconfirmed/bcs": "workspace:*",
+    "@unconfirmed/sui": "workspace:*",
+    "effect": "4.1.6"
+  }
+}
