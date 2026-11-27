@@ -16,6 +16,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Result from "effect/Result"
 import type * as Dem from "./Dem.ts"
 import { InvalidCiphertext } from "./Errors.ts"
+import { isCanonical } from "./ids.ts"
 
 export { InvalidCiphertext }
 
@@ -78,8 +79,7 @@ type _SameCiphertext = Assert<Same<Ciphertext, Dem.Ciphertext>>
 const decodeBcs = /* @__PURE__ */ Bcs.decode(EncryptedObjectBcs)
 const encodeBcs = /* @__PURE__ */ Bcs.encodeSync(EncryptedObjectBcs)
 
-/** Parsed objects always match; hand-built ones (given to `Envelope.open`) are checked too. */
-const ADDRESS = /^0x[0-9a-f]{64}$/
+// Parsed objects always have canonical ids; hand-built ones (given to `Envelope.open`) are checked too.
 
 const invalid = (reason: string) => Result.fail(new InvalidCiphertext({ reason }))
 
@@ -89,9 +89,9 @@ const invalid = (reason: string) => Result.fail(new InvalidCiphertext({ reason }
  */
 export const validate = (object: typeof EncryptedObjectBcs.Type): Result.Result<EncryptedObject, InvalidCiphertext> => {
   if (object.version !== 0) return invalid(`unsupported version ${object.version}`)
-  if (!ADDRESS.test(object.packageId)) return invalid(`invalid package id ${object.packageId}`)
+  if (!isCanonical(object.packageId)) return invalid(`invalid package id ${object.packageId}`)
   const n = object.services.length
-  if (object.threshold < 1 || object.threshold > n) {
+  if (!Number.isInteger(object.threshold) || object.threshold < 1 || object.threshold > n) {
     return invalid(`threshold ${object.threshold} out of range for ${n} services`)
   }
   const shares = object.encryptedShares.encryptedShares.length
@@ -99,7 +99,7 @@ export const validate = (object: typeof EncryptedObjectBcs.Type): Result.Result<
   const seen = new Set<number>()
   if (object.encryptedShares.encryptedShares.some((s) => s.length !== 32)) return invalid("encrypted shares must be 32 bytes")
   for (const [server, index] of object.services) {
-    if (!ADDRESS.test(server)) return invalid(`invalid key server id ${server}`)
+    if (!isCanonical(server)) return invalid(`invalid key server id ${server}`)
     if (!Number.isInteger(index) || index < 1 || index > 255) return invalid(`share index ${index}`)
     if (seen.has(index)) return invalid(`duplicate share index ${index}`)
     seen.add(index)

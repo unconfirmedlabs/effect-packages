@@ -66,6 +66,43 @@ describe("shares", () => {
     // A public key at infinity would "verify" a key at infinity (C18); both are refused.
     expect(Ibe.verifyUserSecretKey(Bls.g1Zero, fullId, Bls.g2Zero)).toBe(false)
   })
+
+  test("verifyDerivedKeys (batched, SEAL-9) agrees with checking each key", () => {
+    const [a, b] = servers as [ReturnType<typeof server>, ReturnType<typeof server>]
+    const ids = [utf8("one"), utf8("two"), utf8("three")].map((id) => Kdf.fullId(Address.normalize("0xcafe"), id))
+    const good = ids.map((id) => ({ userSecretKey: Ibe.extract(a.masterKey, id), gid: Kdf.gid(id) }))
+    const rho = [0x1234567890abcdef1234567890abcdefn, 0xfedcba0987654321fedcba0987654321n, 3n]
+    expect(Ibe.verifyDerivedKeys(good, a.pk, rho)).toBe(true)
+    expect(Ibe.verifyDerivedKeys(good.slice(0, 1), a.pk, rho)).toBe(true)
+    expect(Ibe.verifyDerivedKeys([], a.pk, [])).toBe(true)
+    expect(Ibe.verifyDerivedKeys(good, b.pk, rho)).toBe(false)
+    // One key from another server, one for another id, one tweaked, one at infinity.
+    const swap = (i: number, k: Bls.G1) => good.map((g, j) => (j === i ? { ...g, userSecretKey: k } : g))
+    expect(Ibe.verifyDerivedKeys(swap(1, Ibe.extract(b.masterKey, ids[1]!)), a.pk, rho)).toBe(false)
+    expect(Ibe.verifyDerivedKeys(swap(2, Ibe.extract(a.masterKey, ids[0]!)), a.pk, rho)).toBe(false)
+    expect(Ibe.verifyDerivedKeys(swap(0, good[0]!.userSecretKey.add(Bls.g1Generator)), a.pk, rho)).toBe(false)
+    expect(Ibe.verifyDerivedKeys(swap(0, Bls.g1Zero), a.pk, rho)).toBe(false)
+    // Coefficients must be non-zero scalars, one per key.
+    expect(Ibe.verifyDerivedKeys(good, a.pk, [0n, 1n, 2n])).toBe(false)
+    expect(Ibe.verifyDerivedKeys(good, a.pk, [1n, 2n])).toBe(false)
+    expect(Ibe.verifyDerivedKeys(good, Bls.g2Zero, rho)).toBe(false)
+  })
+
+  test("decap + unmask equal decryptShare (SEAL-5)", () => {
+    const s = servers[0]!
+    const r = 0x42n
+    const services = [{ objectId: s.objectId, index: 1 }, { objectId: s.objectId, index: 2 }]
+    const shares = [new Uint8Array(32).fill(1), new Uint8Array(32).fill(2)]
+    const { nonce, encryptedShares } = Ibe.encryptShares(r, shares, [s.pk, s.pk], fullId, services)
+    const n = Result.getOrThrow(Bls.g2FromBytes(nonce))
+    const usk = Ibe.extract(s.masterKey, fullId)
+    const gt = Ibe.decap(n, usk)
+    for (const i of [0, 1]) {
+      const one = Ibe.decryptShare(n, usk, encryptedShares[i]!, fullId, services[i]!)
+      expect(one).toEqual(shares[i]!)
+      expect(Ibe.unmask(gt, nonce, Bls.g1ToBytes(Kdf.gid(fullId)), encryptedShares[i]!, services[i]!)).toEqual(one)
+    }
+  })
 })
 
 describe("proof of possession (C17)", () => {

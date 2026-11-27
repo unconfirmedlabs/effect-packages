@@ -109,14 +109,14 @@ const programs: Record<string, string> = {
       packageId: objectId, id: new Uint8Array([1]), recipients: [{ objectId, publicKey }], threshold: 1,
       input: { _tag: "AesGcm256", data: new Uint8Array(32) }, randomness
     }))).then(console.log)`,
+  // Seal needs only Objects and Packages from the chain (SealGrpc.layer); SuiGrpc.layer would add every RPC's codec.
   "seal: encrypt + decrypt": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/sui", "Ed25519")}
-    ${I("@unconfirmed/seal", "Approval", "Config", "Seal")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/seal", "Approval", "Config", "Seal", "SealGrpc")}
     const packageId = "0x58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2"
-    const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provideMerge(FetchHttpClient.layer))
+    const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" } }).pipe(Layer.provideMerge(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       const id = new Uint8Array(32)

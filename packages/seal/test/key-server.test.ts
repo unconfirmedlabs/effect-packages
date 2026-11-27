@@ -169,10 +169,13 @@ describe("KeyServer.read: recorded objects", () => {
     }
   })
 
-  test("reads the object and one field, nothing else", async () => {
+  test("reads the object and both candidate fields in one round, nothing else", async () => {
     const objects = objectsLayer([testnet])
     await Effect.runPromise(KeyServer.read(ID.mysten1).pipe(Effect.provide(objects.layer)))
-    expect([...objects.gets.keys()]).toEqual([ID.mysten1, KeyServer.fieldId(ID.mysten1, 1)])
+    expect(new Set(objects.gets.keys())).toEqual(
+      new Set([ID.mysten1, KeyServer.fieldId(ID.mysten1, 2), KeyServer.fieldId(ID.mysten1, 1)])
+    )
+    for (const n of objects.gets.values()) expect(n).toBe(1)
   })
 
   test("an unknown id is ObjectNotFound", async () => {
@@ -467,6 +470,38 @@ describe("KeyServers.layerVerified", () => {
       }).pipe(Effect.provide(layer))
     )
     expect(calls.get(ID.suiftly)).toBe(2)
+  })
+
+  test("SEAL-6: a failed proof request carries its kind; a transient one is retryable", async () => {
+    const { layer } = servicesLayer([{ objectId: ID.suiftly }], { verified: true })
+    const e = failure(await Effect.runPromiseExit(get(ID.suiftly).pipe(Effect.provide(layer))))
+    expect(e._tag).toBe("InvalidKeyServer")
+    expect(e.kind).toBe("Unavailable")
+    expect(e.retryable).toBe(true)
+    const bad = servicesLayer([Config.testnet.mysten1], {
+      verified: true,
+      services: { [ID.mysten1]: { url: "https://x.test", status: 404, body: "no such route" } }
+    })
+    const r = failure(await Effect.runPromiseExit(get(ID.mysten1).pipe(Effect.provide(bad.layer))))
+    expect(r.kind).toBe("Rejected")
+    expect(r.retryable).toBe(false)
+    // A proof that does not verify has no kind and is not retryable.
+    const nk = new KeyServer.InvalidKeyServer({ objectId: ID.mysten1, reason: "proof of possession does not verify" })
+    expect(nk.retryable).toBe(false)
+  })
+
+  test("SEAL-6: a verified (object, public key) is not asked again after the TTL or a refresh", async () => {
+    const { calls, gets, layer } = servicesLayer([Config.testnet.mysten1], { verified: true, ttl: "1 minute" })
+    await Effect.runPromise(
+      Effect.gen(function*() {
+        yield* get(ID.mysten1)
+        yield* TestClock.adjust("2 minutes")
+        yield* get(ID.mysten1)
+        yield* Effect.flatMap(Effect.service(KeyServer.KeyServers), (s) => s.refresh(ID.mysten1))
+      }).pipe(Effect.provide(layer), Effect.provide(TestClock.layer()))
+    )
+    expect(gets.get(ID.mysten1)).toBe(3) // reloaded twice (URLs may change)
+    expect(calls.get(ID.mysten1)).toBe(1) // proved once
   })
 
   test("committee and unconfigured servers are not asked", async () => {
