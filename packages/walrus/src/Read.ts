@@ -141,13 +141,23 @@ export const metadata = (
   blobId: BlobId,
   options: Pick<ReadOptions, "certifiedEpoch" | "retry"> = {}
 ): Effect.Effect<Messages.VerifiedMetadata, ReadError, Committees | StorageNodes> =>
+  Effect.map(locate(blobId, options), (located) => located.metadata)
+
+/**
+ * The read committee (C6) and the metadata verified from it: what a partial
+ * read (`QuiltRead`) needs to fetch and check single slivers itself.
+ */
+export const locate = (
+  blobId: BlobId,
+  options: Pick<ReadOptions, "certifiedEpoch" | "retry"> = {}
+): Effect.Effect<{ readonly committee: Committee; readonly metadata: Messages.VerifiedMetadata }, ReadError, Committees | StorageNodes> =>
   Effect.gen(function*() {
     const nodes = yield* Effect.service(StorageNodes)
     const retry = options.retry ?? defaultRetry()
     return yield* withCommitteeRetry((active) =>
       Effect.flatMap(
         chooseCommittee(nodes, blobId, active, options.certifiedEpoch, retry),
-        (committee) => fetchMetadata(nodes, committee, blobId, retry)
+        (committee) => Effect.map(fetchMetadata(nodes, committee, blobId, retry), (metadata) => ({ committee, metadata }))
       )
     )
   })
