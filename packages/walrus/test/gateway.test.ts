@@ -352,5 +352,9 @@ describe("Walrus.layer", () => {
     expect(await check(Walrus.layer({ network: "mainnet", nodes: { requestTimeout: "5 seconds" } }))).toEqual(Config.mainnet)
     const custom = { systemObjectId: Address.normalize("0x1"), stakingObjectId: Address.normalize("0x2") }
     expect(await check(Walrus.layer({ config: custom }))).toEqual(custom)
+    // An untyped caller with neither network nor config (or an unknown network) gets a defect, not testnet.
+    for (const bad of [{}, { network: "devnet" }]) {
+      await expect(check(Walrus.layer(bad as Walrus.WalrusOptions))).rejects.toThrow("Walrus.layer: pass network")
+    }
   })
 })

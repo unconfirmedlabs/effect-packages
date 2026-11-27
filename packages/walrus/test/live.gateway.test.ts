@@ -17,7 +17,7 @@ import * as BlobId from "../src/BlobId.ts"
 import * as Committee from "../src/Committee.ts"
 import * as Read from "../src/Read.ts"
 import * as Walrus from "../src/Walrus.ts"
-import { live, recentCertified, suiLayer } from "./support.ts"
+import { describeReadFailure, live, readableCandidates, suiLayer } from "./support.ts"
 
 const suite = live ? describe : describe.skip
 const MAX_CANDIDATE = 1_000_000
@@ -34,16 +34,27 @@ suite("live testnet gateways (SUI_LIVE=1)", () => {
     const result = await runLive(
       Effect.gen(function*() {
         const { current } = yield* (yield* Effect.service(Committee.Committees)).get
-        const candidates = (yield* recentCertified(50).pipe(Effect.provide(suiLayer)))
-          .filter((c) => !c.isExtension && c.endEpoch >= current.epoch + 2)
-        for (const candidate of candidates) {
+        const candidates = yield* readableCandidates(current.epoch).pipe(Effect.provide(suiLayer))
+        const skipped: Array<string> = []
+        for (const candidate of candidates.slice(0, 20)) {
           const metadata = yield* Effect.result(Read.metadata(candidate.blobId))
-          if (Result.isFailure(metadata) || metadata.success.unencodedLength >= MAX_CANDIDATE) continue
-          const viaNodes = yield* Read.blob(candidate.blobId)
+          if (Result.isFailure(metadata)) {
+            skipped.push(`${candidate.blobId} metadata: ${describeReadFailure(metadata.failure)}`)
+            continue
+          }
+          if (metadata.success.unencodedLength >= MAX_CANDIDATE) continue
+          const viaNodes = yield* Effect.result(Read.blob(candidate.blobId))
+          if (Result.isFailure(viaNodes)) {
+            // A failed read of a candidate is logged and the next one is tried; only a wrong answer fails.
+            expect(viaNodes.failure._tag).not.toBe("InconsistentBlob")
+            skipped.push(`${candidate.blobId} read: ${describeReadFailure(viaNodes.failure)}`)
+            continue
+          }
+          if (skipped.length > 0) console.warn(`skipped candidates:\n  ${skipped.join("\n  ")}`)
           const viaAggregator = yield* Effect.result(Aggregator.verified(candidate.blobId))
-          return { candidate, viaNodes, viaAggregator }
+          return { candidate, viaNodes: viaNodes.success, viaAggregator }
         }
-        return yield* Effect.die(new Error(`no readable candidate among ${candidates.length}`))
+        return yield* Effect.die(new Error(`no readable candidate among ${candidates.length}:\n  ${skipped.join("\n  ")}`))
       })
     )
     if (Result.isFailure(result.viaAggregator)) {

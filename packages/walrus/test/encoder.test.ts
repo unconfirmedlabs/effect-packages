@@ -202,6 +202,25 @@ describe("sliverRoots", () => {
     await encoderError(encoder.sliverRoots(n, "primary", symbolSize, [e.primary[0]!.slice(1)]), "sliverRoots", /sliver 0/)
     await encoderError(encoder.sliverRoots(0, "primary", symbolSize, []), "sliverRoots", /nShards/)
   })
+
+  test("an allocation too large for the crafted blob is an EncoderError, not a defect", async () => {
+    // n = 1000 and symbol size 20,000: the crafted blob would be 334 × 667 × 20,000 = 4.46 GB.
+    const big = 1000
+    const symbolSize = 20_000
+    const len = Encoding.sourceSymbols(big).secondary * symbolSize
+    const uleb: Array<number> = []
+    for (let v = len; ; v = Math.floor(v / 128)) {
+      if (v < 128) {
+        uleb.push(v)
+        break
+      }
+      uleb.push((v & 0x7f) | 0x80)
+    }
+    const sliver = new Uint8Array(uleb.length + len + 4)
+    sliver.set(uleb, 0)
+    new DataView(sliver.buffer).setUint16(uleb.length + len, symbolSize, true)
+    await encoderError(encoder.sliverRoots(big, "primary", symbolSize, [sliver]), "sliverRoots", /./)
+  })
 })
 
 describe("BLS", () => {

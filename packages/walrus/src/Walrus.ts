@@ -17,7 +17,9 @@
  */
 import type * as Objects from "@unconfirmed/sui/Objects"
 import type * as Packages from "@unconfirmed/sui/Packages"
+import * as Cause from "effect/Cause"
 import type * as Duration from "effect/Duration"
+import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import type * as HttpClient from "effect/http/HttpClient"
 import * as Committee from "./Committee.ts"
@@ -48,7 +50,14 @@ export const DEFAULT_REQUEST_TIMEOUT: Duration.Input = "15 seconds"
 export const layer = (
   options: WalrusOptions
 ): Layer.Layer<WalrusServices, EncoderError, HttpClient.HttpClient | Objects.Objects | Packages.Packages> => {
-  const config = options.config ?? (options.network === "mainnet" ? Config.mainnet : Config.testnet)
+  const config = options.config ??
+    (options.network === "mainnet" ? Config.mainnet : options.network === "testnet" ? Config.testnet : undefined)
+  // Only an untyped caller gets here: a defect naming the problem rather than a silent default network.
+  if (config === undefined) {
+    return Layer.effectDiscard(Effect.die(
+      new Cause.IllegalArgumentError(`Walrus.layer: pass network ("testnet" or "mainnet") or config, got network ${String(options.network)}`)
+    )) as never
+  }
   return Layer.mergeAll(
     System.layer,
     Committee.layer(options.committees),
