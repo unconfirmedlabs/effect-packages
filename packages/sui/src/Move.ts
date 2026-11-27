@@ -250,23 +250,7 @@ const ACCUMULATOR_ROOT = /* @__PURE__ */ Address.normalize("0xacc")
 
 /** A shared object whose initial shared version is known, deduplicated by id like `Ptb.object`. */
 export const shared = (objectId: string, initialSharedVersion: bigint, mutable: boolean): Arg =>
-  Effect.map(Effect.service(Ptb.PtbBuilder), (d): Argument => {
-    const id = Address.normalize(objectId)
-    const existing = d.objectIndex.get(id)
-    if (existing !== undefined) {
-      const input = d.inputs[existing]!
-      if (mutable && input._tag === "Object" && input.value._tag === "SharedObject") {
-        d.inputs[existing] = { _tag: "Object", value: { ...input.value, mutability: { _tag: "Mutable" } } }
-      }
-      return { _tag: "Input", value: existing }
-    }
-    d.inputs.push({
-      _tag: "Object",
-      value: { _tag: "SharedObject", objectId: id, initialSharedVersion, mutability: { _tag: mutable ? "Mutable" : "Immutable" } }
-    })
-    d.objectIndex.set(id, d.inputs.length - 1)
-    return { _tag: "Input", value: d.inputs.length - 1 }
-  })
+  Ptb.sharedObject(objectId, initialSharedVersion, mutable)
 
 /** `&Clock` (0x6): shared, initial version 1, immutable. */
 export const clock = (input?: ObjectInput): Arg => input === undefined ? shared(CLOCK, 1n, false) : obj(input)

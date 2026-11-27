@@ -255,7 +255,7 @@ export const sendBalance = (balance: T.Argument, recipient: T.Argument, type: st
   moveCall({ target: "0x2::balance::send_funds", typeArguments: [type], arguments: [balance, recipient] })
 
 /** A shared-object input by id, deduplicated like `object`; a repeat use can only widen it to mutable. */
-const sharedObject = (objectId: string, initialSharedVersion: bigint, mutable: boolean) =>
+export const sharedObject = (objectId: string, initialSharedVersion: bigint, mutable: boolean) =>
   Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
     const id = Address.normalize(objectId)
     const existing = d.objectIndex.get(id)
