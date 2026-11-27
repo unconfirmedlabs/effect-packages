@@ -239,13 +239,19 @@ describe("Passkey verification rejects tampering", () => {
       // Sui decodes the challenge as unpadded base64url and parses CollectedClientData (origin required); Mysten is laxer.
       ["padded base64", cd({ type: "webauthn.get", challenge: Buffer.from(digest).toString("base64"), origin: "x" }), false],
       ["no origin", cd({ type: "webauthn.get", challenge }), false],
-      ["not JSON", forge(provider.secretKey, provider.publicKey, good.authenticatorData, "{oops"), true]
+      ["not JSON", forge(provider.secretKey, provider.publicKey, good.authenticatorData, "{oops"), true],
+      // serde_json refuses what JSON.parse takes: a number out of f64 range, and nesting at its recursion limit (128).
+      ["number out of range", forge(provider.secretKey, provider.publicKey, good.authenticatorData, `{"type":"webauthn.get","challenge":"${challenge}","origin":"x","extra":1e999}`), false],
+      ["nested 128 deep", forge(provider.secretKey, provider.publicKey, good.authenticatorData, `{"type":"webauthn.get","challenge":"${challenge}","origin":"x","extra":${"[".repeat(127)}${"]".repeat(127)}}`), false]
     ]
     for (const [why, sig, mystenRejects] of cases) {
       const err = await ourError(msg, sig)
       expect(err._tag, why).toBe("InvalidSignature")
       if (mystenRejects) expect(await mystenAcceptsMessage(msg, sig), why).toBe(false)
     }
+    // Just under the limit still verifies.
+    const deep = forge(provider.secretKey, provider.publicKey, good.authenticatorData, `{"type":"webauthn.get","challenge":"${challenge}","origin":"x","extra":${"[".repeat(126)}${"]".repeat(126)},"n":1e308}`)
+    await verifyOurs(Verify.personalMessage(msg, deep, { address: ours.address }))
   })
 
   test("malformed bodies are InvalidSignature, never a defect", async () => {
@@ -310,7 +316,10 @@ describe("Passkey signer", () => {
     for (const pk of [new Uint8Array(32), new Uint8Array(33).fill(5)]) {
       expect((await run(Effect.flip(Passkey.fromPublicKey(p, pk))))._tag).toBe("InvalidKey")
     }
-    const spki = Passkey.spkiFromPublicKey(p.publicKey)
+    const spki = await run(Passkey.spkiFromPublicKey(p.publicKey))
+    for (const pk of [new Uint8Array(33), new Uint8Array(32), new Uint8Array(33).fill(5)]) {
+      expect((await run(Effect.flip(Passkey.spkiFromPublicKey(pk))))._tag).toBe("InvalidKey")
+    }
     expect(await run(Passkey.publicKeyFromSpki(spki))).toEqual(p.publicKey)
     const otherCurve = spki.slice()
     otherCurve[20] = otherCurve[20]! ^ 1
@@ -392,6 +401,37 @@ describe("BrowserProvider", () => {
     }
     expect(ourCalls[0]!.options.publicKey.user.id.length).toBe(10)
     expect(ourCalls[0]!.options.publicKey.pubKeyCredParams).toEqual([{ alg: -7, type: "public-key" }])
+  })
+
+  test("one prompt at a time: concurrent requests through one provider are serialised", async () => {
+    const soft = await run(Passkey.softwareProvider())
+    let pending = 0
+    let maxPending = 0
+    ;(globalThis as any).PublicKeyCredential ??= class {}
+    Object.defineProperty(nav, "credentials", {
+      configurable: true,
+      value: {
+        get: async (options: any) => {
+          pending++
+          maxPending = Math.max(maxPending, pending)
+          try {
+            // WebAuthn refuses a second pending request.
+            if (pending > 1) throw new DOMException("A request is already pending.", "NotAllowedError")
+            await new Promise((r) => setTimeout(r, 5))
+            const a = await run(soft.get(new Uint8Array(options.publicKey.challenge)))
+            return {
+              rawId: a.credentialId.buffer,
+              response: { authenticatorData: a.authenticatorData.buffer, clientDataJSON: a.clientDataJSON.buffer, signature: a.signature.buffer }
+            }
+          } finally {
+            pending--
+          }
+        }
+      }
+    })
+    const provider = Passkey.browserProvider("Test")
+    await run(Effect.all([provider.get(new Uint8Array(32)), provider.get(new Uint8Array(32).fill(1))], { concurrency: "unbounded" }))
+    expect(maxPending).toBe(1)
   })
 
   test("an explicit rp id is passed on assertions", async () => {

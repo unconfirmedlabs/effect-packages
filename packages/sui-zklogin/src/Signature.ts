@@ -9,7 +9,8 @@
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
-import { InvalidZkLoginInput } from "./Errors.ts"
+import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"
+import * as Parse from "./internal/parse.ts"
 import { FLAG } from "./PublicIdentifier.ts"
 
 export const ZkLoginSignatureInputs = Bcs.struct({
@@ -31,7 +32,12 @@ export const ZkLoginSignature = Bcs.struct({
 })
 export type ZkLoginSignature = typeof ZkLoginSignature.Type
 
-/** Sui refuses zkLogin signatures over this size. */
+/**
+ * The largest serialized body we produce: `@mysten/sui`'s BCS serializer caps
+ * a zkLogin signature at 2048 bytes (`{ maxSize: 2048 }`), so we refuse larger
+ * ones the same way. This is a serializer limit; no validator limit of this
+ * size is confirmed.
+ */
 export const MAX_SIZE = 2048
 
 const encodeBody = Bcs.encode(ZkLoginSignature)
@@ -49,9 +55,9 @@ export const serialize = (input: SerializeInput): Effect.Effect<Uint8Array, Inva
   Effect.suspend(() => {
     let maxEpoch: bigint
     try {
-      maxEpoch = BigInt(input.maxEpoch)
-    } catch {
-      return Effect.fail(new InvalidZkLoginInput({ reason: `invalid maxEpoch ${String(input.maxEpoch)}` }))
+      maxEpoch = Parse.epoch(input.maxEpoch)
+    } catch (e) {
+      return Effect.fail(new InvalidZkLoginInput({ reason: reasonOf(e) }))
     }
     return Result.match(encodeBody({ inputs: input.inputs, maxEpoch, userSignature: input.userSignature }), {
       onFailure: (e) => Effect.fail(new InvalidZkLoginInput({ reason: e.message })),

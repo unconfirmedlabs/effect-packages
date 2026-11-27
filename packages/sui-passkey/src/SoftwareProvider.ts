@@ -46,8 +46,14 @@ export const softwareProvider = (options?: SoftwareProviderOptions): Effect.Effe
     let publicKey: Uint8Array
     try {
       publicKey = p256.getPublicKey(secretKey, true)
-    } catch (e) {
-      return Effect.fail(new Signer.InvalidKey({ scheme: "Passkey", reason: String(e) }))
+    } catch {
+      // A fixed reason: the curve library's message is not ours to vouch for (it must never carry key bytes).
+      return Effect.fail(
+        new Signer.InvalidKey({
+          scheme: "Passkey",
+          reason: "invalid secret key (expected 32 bytes, a non-zero scalar below the curve order)"
+        })
+      )
     }
     const credentialId = options?.credentialId?.slice() ?? crypto.getRandomValues(new Uint8Array(16))
     const rpId = options?.rpId ?? "localhost"
@@ -62,7 +68,9 @@ export const softwareProvider = (options?: SoftwareProviderOptions): Effect.Effe
       secretKey,
       credentialId,
       publicKey,
-      create: () => Effect.succeed({ id: credentialId.slice(), publicKey: Passkey.spkiFromPublicKey(publicKey) }),
+      // `publicKey` came from the curve, so it always encodes.
+      create: () =>
+        Effect.map(Effect.orDie(Passkey.spkiFromPublicKey(publicKey)), (spki) => ({ id: credentialId.slice(), publicKey: spki })),
       get: (challenge, allowed) =>
         Effect.suspend(() => {
           if (allowed !== undefined && !sameId(allowed)) {

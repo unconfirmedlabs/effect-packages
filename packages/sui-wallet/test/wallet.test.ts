@@ -157,6 +157,73 @@ describe("discovery and connection", () => {
     })))
 })
 
+describe("multi-chain wallets and malformed answers", () => {
+  const evm = {
+    address: "0x52908400098527886E0F7030069857D2E4169EE7",
+    publicKey: new Uint8Array(33).fill(2),
+    chains: ["eip155:1"],
+    features: []
+  }
+
+  test("non-Sui accounts are skipped; the default account is a Sui one on the requested chain", () =>
+    run(Effect.gen(function*() {
+      const { wallet } = yield* connected({ name: "Multi Chain", otherAccounts: [evm as never] })
+      const ours = A(keypair.toSuiAddress())
+      expect(Wallet.accounts(wallet).map((a) => a.address)).toEqual([ours])
+      expect((yield* Wallet.signer(wallet, { chain: "sui:testnet" })).address).toBe(ours)
+      const signed = yield* Wallet.signPersonalMessage(wallet, {}, new Uint8Array([1]))
+      const v = yield* Verify.personalMessage(new Uint8Array([1]), signed.signature).pipe(Effect.provide(schemes))
+      expect(v.address).toBe(ours)
+    })))
+
+  test("a short (padded) address is not a Sui account", () =>
+    run(Effect.gen(function*() {
+      const short = { ...evm, address: "0x2", chains: ["sui:devnet"] }
+      const { wallet } = yield* connected({ name: "Short Address", otherAccounts: [short as never] })
+      expect(Wallet.accounts(wallet).map((a) => a.address)).toEqual([A(keypair.toSuiAddress())])
+    })))
+
+  test("the first Sui account that lists the chain is the default", () =>
+    run(Effect.gen(function*() {
+      const other = Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(8))
+      const mainnetOnly = {
+        address: other.toSuiAddress(),
+        publicKey: other.getPublicKey().toRawBytes(),
+        chains: ["sui:mainnet"],
+        features: []
+      }
+      const { wallet } = yield* connected({ name: "Two Sui Accounts", otherAccounts: [mainnetOnly as never] })
+      expect((yield* Wallet.account(wallet, { chain: "sui:mainnet" })).address).toBe(A(other.toSuiAddress()))
+      expect((yield* Wallet.account(wallet, { chain })).address).toBe(A(keypair.toSuiAddress()))
+    })))
+
+  test("a connect answer without accounts is ConnectionError(failed); a wallet without accounts lists none", () =>
+    run(Effect.gen(function*() {
+      for (const answer of [undefined, {}, { accounts: "nope" }]) {
+        const wallet = {
+          ...make({ name: "Bad Connect" }).wallet,
+          features: { "standard:connect": { version: "1.0.0", connect: async () => answer } }
+        } as unknown as Wallet.Wallet
+        expect(yield* Effect.flip(Wallet.connect(wallet))).toMatchObject({ _tag: "ConnectionError", reason: "failed" })
+        expect(Wallet.accounts({ ...wallet, accounts: undefined } as unknown as Wallet.Wallet)).toEqual([])
+      }
+      const circular: Record<string, unknown> = {}
+      circular.self = circular
+      const throwing = {
+        ...make({ name: "Throws Circular" }).wallet,
+        features: {
+          "standard:connect": {
+            version: "1.0.0",
+            connect: async () => {
+              throw circular
+            }
+          }
+        }
+      } as unknown as Wallet.Wallet
+      expect(yield* Effect.flip(Wallet.connect(throwing))).toMatchObject({ _tag: "ConnectionError", reason: "failed" })
+    })))
+})
+
 describe("the wallet as a TransactionSigner", () => {
   test("Tx.execute: the wallet signs our resolved bytes (via Transaction.from) and we execute them", async () => {
     const rec = recorder()
@@ -344,17 +411,94 @@ describe("signAndExecute and personal messages", () => {
   })
 
   test("only a user's refusal reads as rejected; validator and RPC failures don't", () => {
-    for (const m of ["User rejected the request.", "Rejected by user", "Request cancelled", "The user denied the signature"]) {
-      expect(Wallet.isRejection(new Error(m))).toBe(true)
+    for (
+      const m of [
+        "User rejected the request.",
+        "Rejected by user",
+        "rejected by the user",
+        "The user denied the signature",
+        "MetaMask Tx Signature: User denied transaction signature.",
+        "User closed the modal"
+      ]
+    ) {
+      expect(Wallet.isRejection(new Error(m)), m).toBe(true)
     }
     expect(Wallet.isRejection({ code: 4001, message: "nope" })).toBe(true)
+    expect(Wallet.isRejection({ context: { __code: 4001000 }, message: "nope" })).toBe(true)
+    expect(Wallet.isRejection(Object.assign(new Error("nope"), { name: "UserRejectedRequestError" }))).toBe(true)
     for (
       const m of [
         "Transaction is rejected as invalid by more than 1/3 of validators by stake (non-retriable)",
         "Transaction execution cancelled due to shared object congestion",
-        "RPC error: 403 Access denied"
+        "RPC error: 403 Access denied",
+        // A refusal word at the start, or a user who isn't the one refusing (review SIGN-4).
+        "Transaction rejected by validators",
+        "Transaction rejected: insufficient gas",
+        "Transaction cancelled due to shared object congestion",
+        "Rejected: object 0x2 is locked by another transaction",
+        "Request denied: rate limit exceeded",
+        "Request cancelled",
+        "The user's gas coin was rejected by the validator"
       ]
-    ) expect(Wallet.isRejection(new Error(m))).toBe(false)
+    ) expect(Wallet.isRejection(new Error(m)), m).toBe(false)
+    expect(Wallet.isRejection(Object.assign(new Error("boom"), { name: "TransactionRejectedError" }))).toBe(false)
+  })
+
+  test("a rejected signAndExecuteTransaction promise is ExecutionUnconfirmed unless a coded refusal", async () => {
+    let n = 0
+    const attempt = (failWith: () => unknown) =>
+      run(Effect.gen(function*() {
+        const { wallet } = yield* connected({ name: `Fails ${n++}`, failWith })
+        const signer = yield* Wallet.signer(wallet, { chain })
+        return yield* Effect.flip(signer.signAndExecuteTransaction(yield* resolvedFor(signer.address)))
+      }))
+    // The wallet may have submitted before it timed out waiting for effects: not "nothing was signed".
+    const timeout = await attempt(() => new Error("Request timed out waiting for transaction effects"))
+    expect(timeout).toMatchObject({ _tag: "ExecutionUnconfirmed" })
+    expect(timeout).not.toHaveProperty("digest")
+    expect(timeout.message).toContain("timed out")
+    // A refusal in words only is not proof that nothing was submitted.
+    expect(await attempt(() => new Error("User rejected the request"))).toMatchObject({ _tag: "ExecutionUnconfirmed" })
+    // A coded refusal is.
+    const coded = await attempt(() => Object.assign(new Error("User rejected the request"), { context: { __code: 4001000 } }))
+    expect(coded).toMatchObject({ _tag: "SigningError", reason: "rejected" })
+    expect(await attempt(() => ({ code: 4001, message: "denied" }))).toMatchObject({ _tag: "SigningError", reason: "rejected" })
+  })
+
+  test("rejection values that can't be stringified are typed failures, not defects", async () => {
+    const circular: Record<string, unknown> = { reason: "loop" }
+    circular.self = circular
+    const crossRealm = { name: "Error", message: "from another realm" } // error-like, not instanceof Error
+    let n = 0
+    for (const failWith of [() => circular, () => ({ amount: 10n }), () => crossRealm, () => undefined, () => Symbol("x")]) {
+      const out = await run(Effect.gen(function*() {
+        const { wallet } = yield* connected({ name: `Odd ${n++}`, failWith })
+        const signer = yield* Wallet.signer(wallet, { chain })
+        const data = yield* resolvedFor(signer.address)
+        return {
+          sign: yield* Effect.flip(signer.signTransaction(data)),
+          message: yield* Effect.flip(signer.signPersonalMessage(new Uint8Array([1]))),
+          execute: yield* Effect.flip(signer.signAndExecuteTransaction(data))
+        }
+      }))
+      expect(out.sign).toMatchObject({ _tag: "SigningError", reason: "failed" })
+      expect(out.message).toMatchObject({ _tag: "SigningError", reason: "failed" })
+      expect(out.execute).toMatchObject({ _tag: "ExecutionUnconfirmed" })
+    }
+    const realm = await run(Effect.gen(function*() {
+      const { wallet } = yield* connected({ name: "Realm", failWith: () => crossRealm })
+      return yield* Effect.flip(Wallet.signPersonalMessage(wallet, {}, new Uint8Array([1])))
+    }))
+    expect(realm.message).toContain("from another realm")
+  })
+
+  test("a wallet that signs a different message than requested is refused", async () => {
+    const e = await run(Effect.gen(function*() {
+      const { wallet } = yield* connected({ name: "Swaps Messages", alterMessage: (m) => new Uint8Array([...m, 0]) })
+      return yield* Effect.flip(Wallet.signPersonalMessage(wallet, {}, new Uint8Array([1, 2, 3])))
+    }))
+    expect(e).toMatchObject({ _tag: "SigningError", reason: "failed" })
+    expect(e.message).toContain("signed a different message")
   })
 
   test("signPersonalMessage verifies with our registry and with @mysten/sui", async () => {

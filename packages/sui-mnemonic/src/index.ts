@@ -171,9 +171,17 @@ const deriveBip32 = (rule: Rule, source: Source, path: Path | undefined): Derive
     Effect.flatMap(seedOf(source), (seed) =>
       Effect.sync(() => {
         // A child that is not a valid key has probability ~2^-127; a defect, as in @scure/bip32.
-        const key = HDKey.fromMasterSeed(seed).derive(path).privateKey
-        if (!key) throw new Error(`no private key at ${path}`)
-        return key.slice()
+        const master = HDKey.fromMasterSeed(seed)
+        const child = master.derive(path)
+        try {
+          if (!child.privateKey) throw new Error(`no private key at ${path}`)
+          return child.privateKey.slice()
+        } finally {
+          // Zero the nodes' keys and chain codes, as the SLIP-0010 path zeroes its intermediates.
+          // (`derive` makes the nodes in between internally; they are out of reach.)
+          child.wipePrivateData()
+          master.wipePrivateData()
+        }
       })))
 
 /** The Ed25519 secret key at a path (default `m/44'/784'/0'/0'/0'`). */

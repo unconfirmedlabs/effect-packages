@@ -110,11 +110,20 @@ export const publicKeyFromSpki = (der: Uint8Array): Effect.Effect<Uint8Array, Si
 }
 
 /** A compressed P-256 public key as a DER SubjectPublicKeyInfo. */
-export const spkiFromPublicKey = (publicKey: Uint8Array): Uint8Array => {
+export const spkiFromPublicKey = (publicKey: Uint8Array): Effect.Effect<Uint8Array, Signer.InvalidKey> => {
+  if (publicKey.length !== PUBLIC_KEY_SIZE) {
+    return Effect.fail(invalidKey(`expected a ${PUBLIC_KEY_SIZE}-byte compressed P-256 key, got ${publicKey.length} bytes`))
+  }
+  let point: Uint8Array
+  try {
+    point = p256.Point.fromBytes(publicKey).toBytes(false)
+  } catch {
+    return Effect.fail(invalidKey("public key is not on P-256"))
+  }
   const out = new Uint8Array(SPKI_HEADER.length + 65)
   out.set(SPKI_HEADER)
-  out.set(p256.Point.fromBytes(publicKey).toBytes(false), SPKI_HEADER.length)
-  return out
+  out.set(point, SPKI_HEADER.length)
+  return Effect.succeed(out)
 }
 
 /** `blake2b256(0x06 || publicKey)`. */
@@ -141,6 +150,28 @@ const concat = (a: Uint8Array, b: Uint8Array) => {
 const signedMessage = (authenticatorData: Uint8Array, clientDataJSON: Uint8Array) =>
   concat(authenticatorData, sha256(clientDataJSON))
 
+/** `serde_json`'s recursion limit: a container nested this deep (the outer object is 1) is refused. */
+const SERDE_MAX_DEPTH = 128
+
+/**
+ * What `JSON.parse` accepts but `serde_json` (which validators parse
+ * `clientDataJSON` with) refuses, in any key, known or not: a number out of
+ * `f64` range (`1e999`, which parses to `Infinity`) and nesting at its
+ * recursion limit. Duplicate keys and lone surrogates remain accepted gaps.
+ */
+const serdeRefuses = (value: unknown): string | undefined => {
+  const stack: Array<[unknown, number]> = [[value, 1]]
+  while (stack.length > 0) {
+    const [v, depth] = stack.pop()!
+    if (typeof v === "number" && !Number.isFinite(v)) return "has a number out of range"
+    if (typeof v === "object" && v !== null) {
+      if (depth >= SERDE_MAX_DEPTH) return `nests ${SERDE_MAX_DEPTH} levels deep or more`
+      for (const child of Object.values(v)) stack.push([child, depth + 1])
+    }
+  }
+  return undefined
+}
+
 /**
  * The `clientDataJSON` checks validators make: it parses as WebAuthn
  * `CollectedClientData` (so `type` and `origin` are present), `type` is
@@ -154,6 +185,8 @@ const checkClientData = (clientDataJson: string, intentMessage: Uint8Array): Sig
   } catch {
     return invalid("clientDataJSON is not JSON")
   }
+  const serdeError = serdeRefuses(parsed)
+  if (serdeError) return invalid(`clientDataJSON ${serdeError}`)
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return invalid("clientDataJSON is not an object")
   const { type, challenge, origin, crossOrigin } = parsed as Record<string, unknown>
   if (type !== "webauthn.get") return invalid(`clientDataJSON type is ${JSON.stringify(type)}, expected "webauthn.get"`)
@@ -189,7 +222,10 @@ const verifyBody = (body: Uint8Array, intentMessage: Uint8Array): Effect.Effect<
   let ok = false
   try {
     // prehash: sha256 of the message; lowS: high-S signatures are refused, as validators do.
-    ok = p256.verify(signature, signedMessage(authenticatorData, utf8.encode(clientDataJson)), publicKey)
+    ok = p256.verify(signature, signedMessage(authenticatorData, utf8.encode(clientDataJson)), publicKey, {
+      lowS: true,
+      prehash: true
+    })
   } catch {
     ok = false
   }

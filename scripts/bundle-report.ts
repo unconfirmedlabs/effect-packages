@@ -8,6 +8,7 @@
  *   bun scripts/bundle-report.ts            namespace imports (the recommended style)
  *   bun scripts/bundle-report.ts --named    named imports from barrels, for comparison
  *   add --detail for per-package attribution (Rolldown)
+ *   add --only <text> to measure only the programs whose name contains it
  */
 import * as esbuild from "esbuild"
 import { gzipSync } from "node:zlib"
@@ -125,6 +126,19 @@ const programs: Record<string, string> = {
       const approval = yield* Approval.fromRecipe(Approval.call({ target: packageId + "::account_based::seal_approve", id }))
       return yield* Seal.decrypt({ data: encryptedObject, session, approval })
     }).pipe(Effect.provide(layer))).then(console.log)`,
+  "zklogin: Nonce.generate": `
+    ${E("Effect")}
+    ${I("@unconfirmed/sui-zklogin", "Nonce")}
+    Effect.runPromise(Nonce.generate({ flag: 0, bytes: new Uint8Array(32) }, 10, 1n)).then(console.log)`,
+  "zklogin: ZkLoginAddress.fromJwt": `
+    ${E("Effect")}
+    ${I("@unconfirmed/sui-zklogin", "ZkLoginAddress")}
+    Effect.runPromise(ZkLoginAddress.fromJwt(process.argv[2], 1n)).then(console.log)`,
+  "zklogin: ZkLogin.signer (no Poseidon)": `
+    ${E("Effect")}
+    ${I("@unconfirmed/sui", "Ed25519")}
+    ${I("@unconfirmed/sui-zklogin", "ZkLogin")}
+    Effect.runPromise(Effect.flatMap(Ed25519.generate, (ephemeral) => ZkLogin.signer({ ephemeral, inputs: JSON.parse(process.argv[2]), maxEpoch: 10 }))).then(console.log)`,
   "mysten: verify a signature": `
     import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
     verifyPersonalMessageSignature(new Uint8Array([1]), "AA==", { offline: true }).then(console.log)`,
@@ -217,7 +231,10 @@ const detail = process.argv.includes("--detail")
 
 console.log(`import style: ${style}\n`)
 console.log(`${"program".padEnd(44)} ${"bun".padStart(14)} ${"esbuild".padStart(14)} ${"rolldown".padStart(14)}`)
+const only = process.argv.indexOf("--only")
+const filter = only === -1 ? undefined : process.argv[only + 1]
 for (const [name, source] of Object.entries(programs)) {
+  if (filter !== undefined && !name.includes(filter)) continue
   const entry = `${dir}/entry.ts`
   await Bun.write(entry, source)
 

@@ -220,6 +220,28 @@ describe("EnokiHttp errors", () => {
     const e = await failure("network-error")
     expect({ status: e.status, code: e.code }).toEqual({ status: 0, code: "request_failed" })
   })
+
+  test("retryable: no response, 429 and 5xx; cause kept without the request's credentials", async () => {
+    const transport = await failure("network-error")
+    expect(transport.retryable).toBe(true)
+    expect(transport.cause).toBeInstanceOf(Error)
+    expect((transport.cause as Error).message).toContain("connection refused")
+    // The request (Authorization: Bearer <key>, zklogin-jwt) is not reachable from the error.
+    const seen = new Set<unknown>()
+    const reachable = (v: unknown): boolean => {
+      if (typeof v === "string") return v.includes(API_KEY) || v.includes(JWT)
+      if (typeof v !== "object" || v === null || seen.has(v)) return false
+      seen.add(v)
+      return Object.values(v).some(reachable) || reachable((v as { cause?: unknown }).cause)
+    }
+    expect(reachable(transport)).toBe(false)
+    expect((await failure({ status: 429, body: "" })).retryable).toBe(true)
+    expect((await failure({ status: 503, body: "" })).retryable).toBe(true)
+    expect((await failure({ status: 400, body: { errors: [{ code: "invalid_jwt" }] } })).retryable).toBe(false)
+    const invalid = await failure(data({ address: 1 }))
+    expect(invalid.retryable).toBe(false)
+    expect(invalid.cause).toBeDefined()
+  })
 })
 
 describe("EnokiHttp tracing", () => {
