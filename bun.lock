@@ -13,6 +13,7 @@
         "@mysten/walrus-wasm": "0.3.1",
         "@types/bun": "^1.4.0",
         "@unconfirmed/bcs": "workspace:*",
+        "@unconfirmed/quorum": "workspace:*",
         "@unconfirmed/sui": "workspace:*",
         "@unconfirmed/sui-codegen": "workspace:*",
         "@unconfirmed/sui-enoki": "workspace:*",
@@ -37,6 +38,13 @@
       "version": "0.0.0",
       "dependencies": {
         "@scure/base": "^2.3.0",
+        "effect": "4.1.6",
+      },
+    },
+    "packages/quorum": {
+      "name": "@unconfirmed/quorum",
+      "version": "0.0.0",
+      "dependencies": {
         "effect": "4.1.6",
       },
     },
@@ -331,6 +339,8 @@
     "@typescript/old": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
     "@unconfirmed/bcs": ["@unconfirmed/bcs@workspace:packages/bcs"],
+
+    "@unconfirmed/quorum": ["@unconfirmed/quorum@workspace:packages/quorum"],
 
     "@unconfirmed/sui": ["@unconfirmed/sui@workspace:packages/sui"],
 

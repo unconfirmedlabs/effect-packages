@@ -1,6 +1,6 @@
 # `@unconfirmed/quorum` — design
 
-Status: design, 2026-11-27. Implementers: read this whole file, then `EXPLORATION.md` §7.
+Status: implemented (Q1 and Q2), 2026-11-27; open questions decided as recommended (§9). Differences from the original draft are listed in §10. Implementers: read this whole file, then `EXPLORATION.md` §7.
 
 A generic weighted first-threshold-of-n combinator. It depends only on `effect` 4.1.6 and knows nothing about Sui, Walrus or Seal. Two entry points share one engine:
 
@@ -18,7 +18,7 @@ packages/quorum/
   tsconfig.json     { "extends": "../../tsconfig.base.json", "include": ["src", "test"] }
   src/Quorum.ts     everything public
   src/index.ts      export * as Quorum from "./Quorum.ts"
-  test/run.test.ts, test/agree.test.ts, test/order.test.ts
+  test/run.test.ts, test/agree.test.ts, test/order.test.ts, test/world.ts (scripted members)
 ```
 
 Library code uses namespace subpath imports only (`import * as Effect from "effect/Effect"`). No `Schema` import anywhere in this package (see §4).
@@ -197,9 +197,12 @@ Terms: `total` is the sum of all member weights. At any moment `reached` is the 
 | Fractional weights | Allowed; integers are recommended, because sums of floats are compared with `>=`. |
 | `threshold` (or `quorum`) is `NaN` or infinite; `concurrency` is `< 1`, `NaN` or not an integer | **Defect**. |
 | `threshold <= 0` | **Success at once** with no successes; nothing is started. (Seal: every share was cached.) For `agree`: the same rule is a defect, because there is no winner to return. |
-| `threshold > total`, which includes an empty member list with `threshold > 0` | **Typed failure** `reason: "insufficientWeight"`; nothing is started; every member is listed in `unsettled` with `started: false`. This is data-dependent (a small committee, a misconfigured Seal threshold), so it is not a defect. |
+| `threshold > total` (for `agree`: `max(threshold, quorum) > total`), which includes an empty member list with `threshold > 0` | **Typed failure** `reason: "insufficientWeight"`; nothing is started; every member is listed in `unsettled` with `started: false`. This is data-dependent (a small committee, a misconfigured Seal threshold), so it is not a defect. |
 | Duplicate members | Not detected. Each element of the input is its own member, identified by `index`; equal values each run and each count. Callers that need distinct members deduplicate first. (Seal lists a server once per unit of weight, `seal/dist/client.mjs:152`; with this package it passes each server once with its weight.) |
 | `weight` or `key` throws | **Defect**. |
+| `linger` returns `NaN` or a non-positive duration | No window. |
+
+Defects from validation are `Cause.IllegalArgumentError`s whose message starts with `Quorum:`.
 
 `weight` is called exactly once per member, up front.
 
@@ -210,6 +213,8 @@ Terms: `total` is the sum of all member weights. At any moment `reached` is the 
 - **Success** is checked on every member success: `reached >= threshold`. The check happens on the success that crosses the line, not on the next one (the off-by-one in `walrus/dist/client.mjs:286-291` and `:337-346`).
 - **Fail fast** is checked on every final failure: `reached + remaining < threshold`. All outstanding attempts are interrupted and `QuorumFailed` (`reason: "unreachable"`) is returned at once, without waiting for members that cannot change the answer.
 - The success check runs before the failure check, so a run in which the last member to settle reaches the threshold succeeds (the bug in `walrus/dist/client.mjs:355-358`).
+- `while` only matters together with `schedule`; without a schedule every member gets one attempt.
+- Result lists: `successes` and `failures` are in completion order, `unsettled` in input (`index`) order.
 - When the run ends, every attempt still in flight is interrupted, and `run` returns only after those interruptions have completed (their finalizers have run). No fiber outlives the call.
 
 ### 3.3 Order
@@ -316,6 +321,8 @@ Type tests (in `run.test.ts`, compile-time only): the error channel is `QuorumFa
 
 Bundle: add a program to `scripts/bundle-report.ts` (`Quorum.run` over three `Effect.succeed` members) and record Bun / esbuild / Rolldown sizes next to the "Effect baseline" row. Expectation: under 3 KB minified on top of `Effect`, and no `Schema` in the output.
 
+Measured (KB minified / gzip): Bun 59.0 / 20.1, esbuild 57.9 / 20.2, Rolldown 57.9 / 19.2; no `Schema`. A bare `Effect.runPromise(Effect.succeed(1))` is 26 KB with esbuild. `Quorum.ts` itself (both entry points, `effect` external) is 6.0 / 2.4 KB; the rest of the difference is Effect modules it uses (`Schedule` via `Effect.retry`, the tracer via `withSpan`, `Queue`, `Scope`, `Duration`, `timeoutOption`), most of which an app with `HttpClient` already ships. So the 3 KB expectation holds gzipped for the package's own code, not for the Effect modules it pulls in.
+
 ## 8. Work packages
 
 | # | Scope | Depends on | Files | Acceptance |
@@ -331,3 +338,13 @@ Q1 and Q2 are sequential and small; one agent can take both. Walrus work package
 2. **`Data.TaggedError` for the two errors.** It departs from the repo's "errors are `Schema.TaggedError`" convention, for the reasons in §4. *Recommendation: accept the exception for this one generic package*, and keep the rule for every domain package.
 3. **A retrying member keeps its concurrency slot.** Releasing the slot while it sleeps would let other members progress but makes "at most N requests in flight" harder to reason about. *Recommendation: keep the slot*, as the Rust client does (`backoff::retry` inside the future, `crates/walrus-sdk/src/node_client/communication/node.rs`).
 4. **Zero-weight members are dropped silently.** The alternative is a defect. *Recommendation: drop*; a storage node with no shards or a key server with weight 0 is legitimate input and running it is wasted work.
+
+## 10. As built
+
+Differences from the draft above (the sections have been updated to match):
+
+- **Bundle expectation.** The package's own code is ~6 KB minified / 2.4 KB gzip, not under 3 KB minified, and a quorum-only program pulls in ~32 KB of Effect modules beyond a bare `Effect.runPromise` (§7). `Effect.forEach` was avoided in the engine to save ~2 KB.
+- **`agree` insufficient weight** is `max(threshold, quorum) > total` (§3.1), since a quorum above the total weight can never be met.
+- **Fail-fast checks run after every settlement**, success or failure. For `run` this is equivalent to checking only on failures (a success never lowers `reached + remaining`); for `agree` it is required (§3.5). If every member has settled and neither condition fired, the call fails as `unreachable` (defensive; not reachable with the conditions above).
+- **Linger keeps starting queued members** during the window (as §3.4 says), including the ones whose slots freed up before the threshold was reached.
+- **Tests** record events in plain arrays rather than `Ref`s (they run in one fiber per member under `TestClock`, so order is deterministic); helpers live in `test/world.ts`.
