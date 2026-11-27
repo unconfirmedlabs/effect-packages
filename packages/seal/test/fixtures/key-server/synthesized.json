@@ -1,0 +1,50 @@
+{
+  "source": "Answers that cannot be provoked on demand from a public testnet server: a rate limit, an internal failure (fullnode error or staleness), a permissioned server refusing a package. Seal bodies are built from crates/key-server/src/errors.rs at MystenLabs/seal 024b523e (InternalError::as_str, From<InternalError> for ErrorResponse, IntoResponse statuses). The 429 bodies follow the gateway in front of Mysten's servers, whose recorded 401 ('No API key found in request', request_id) is Kong's key-auth wording; 'API rate limit exceeded' is the matching rate-limiting wording. A 429 counts as RateLimited whatever its body (H11), so one 429 has an empty body and one a Seal-shaped body.",
+  "responses": {
+    "rate-limited": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 429,
+      "contentType": "application/json; charset=utf-8",
+      "keyServerVersion": null,
+      "body": "{\n  \"message\":\"API rate limit exceeded\",\n  \"request_id\":\"00000000000000000000000000000000\"\n}"
+    },
+    "rate-limited-empty": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 429,
+      "contentType": null,
+      "keyServerVersion": null,
+      "body": ""
+    },
+    "rate-limited-seal-body": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 429,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"NoAccess\",\"message\":\"Access denied: too many requests\"}"
+    },
+    "failure": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 503,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"Failure\",\"message\":\"Internal server error, please try again later\"}"
+    },
+    "unsupported-package-id": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 400,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"UnsupportedPackageId\",\"message\":\"Unsupported package ID\"}"
+    }
+  }
+}

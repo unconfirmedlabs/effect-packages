@@ -1,0 +1,240 @@
+{
+  "source": "Recorded by packages/seal/scripts/record-key-server.ts with fresh in-memory Ed25519 keys (no wallet, no funds). Servers: https://seal-key-server-testnet-1.mystenlabs.com, https://seal-aggregator-testnet.mystenlabs.com, https://seal-testnet-open.suiftly.io, https://seal-aggregator-mainnet.mystenlabs.com.",
+  "recordedAt": "2026-11-27T09:06:55.186Z",
+  "responses": {
+    "service": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "GET",
+      "path": "/v1/service?service_id=0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75",
+      "status": 200,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"service_id\":\"0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75\",\"pop\":\"lyXUNwyEKphh6rJ28WRgnCC1LjT0AX9j7lbqoQjlKZWUXijHEnMTwmvgLlE8WUcc\"}"
+    },
+    "service-unknown-id": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "GET",
+      "path": "/v1/service?service_id=0x0000000000000000000000000000000000000000000000000000000000000001",
+      "note": "an id the server does not hold",
+      "status": 400,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidServiceId\",\"message\":\"Invalid service ID\"}"
+    },
+    "aggregator-service": {
+      "server": "https://seal-aggregator-testnet.mystenlabs.com",
+      "method": "GET",
+      "path": "/v1/service?service_id=0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98",
+      "status": 400,
+      "contentType": "text/plain; charset=utf-8",
+      "keyServerVersion": "0.6.16",
+      "body": "Unsupported"
+    },
+    "load-balancer-503": {
+      "server": "https://seal-testnet-open.suiftly.io",
+      "method": "GET",
+      "path": "/v1/service?service_id=0x6a0726a1ea3d62ba2f2ae51104f2c3633c003fb75621d06fde47f04dc930ba06",
+      "note": "a server that was down behind its load balancer",
+      "status": 503,
+      "contentType": "text/html",
+      "keyServerVersion": null,
+      "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n"
+    },
+    "fetch-key": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "account_based::seal_approve with id = bcs(user)",
+      "status": 200,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"decryption_keys\":[{\"id\":[88,220,229,217,18,120,188,235,101,212,70,102,255,162,37,171,57,127,195,174,157,131,152,200,199,121,197,83,11,217,120,194,218,249,186,100,16,171,85,55,9,18,14,60,154,40,10,55,142,49,255,239,42,192,150,202,190,6,68,63,144,220,220,112],\"encrypted_key\":[\"rFDhugGRTuarCafyVD5fqGsz2nffdTxQzuM3rUDPDbhj8iydO+XjYBCHpRF4z0h1\",\"sbP5+OWs1cRzT7diB5lyecCl/b+mk8LoI+sS0wCwCLxbpzFr/1MznTyrRjChi+M0\"]}]}"
+    },
+    "aggregator-fetch-key": {
+      "server": "https://seal-aggregator-testnet.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "account_based, committee",
+      "status": 200,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"decryption_keys\":[{\"id\":[88,220,229,217,18,120,188,235,101,212,70,102,255,162,37,171,57,127,195,174,157,131,152,200,199,121,197,83,11,217,120,194,34,147,166,96,138,76,241,224,209,209,54,244,24,54,215,158,214,29,158,230,17,233,93,5,65,166,54,98,22,173,112,244],\"encrypted_key\":[\"h8JCSFkq1SZB+MRWxOgMUOxQAeSbrSg1+BSsPh2bUN0qdn7AXpHXcwcwIFSgGbI5\",\"i7L4JxPYvodc/oXM57quNwK5roN6GCZ3A0yyqSWM31GaXvhdYw9v8btIudISlPoS\"]}]}"
+    },
+    "no-access": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "account_based with another address's id",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"NoAccess\",\"message\":\"Access denied: MoveAbort(MoveLocation { module: ModuleId { address: 58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2, name: Identifier(\\\"account_based\\\") }, function: 1, instruction: 6, function_name: Some(\\\"seal_approve\\\") }, 1) in command 1\"}"
+    },
+    "aggregator-no-access": {
+      "server": "https://seal-aggregator-testnet.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "the same request, committee",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"NoAccess\",\"message\":\"Access denied: MoveAbort(MoveLocation { module: ModuleId { address: 58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2, name: Identifier(\\\"account_based\\\") }, function: 1, instruction: 6, function_name: Some(\\\"seal_approve\\\") }, 1) in command 1\"}"
+    },
+    "invalid-ptb-function": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "0x2::coin::seal_approve (open mode: passes the package check, fails in the dry run, H9)",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidPTB\",\"message\":\"Invalid PTB: The seal_approve function was not found on the module\"}"
+    },
+    "invalid-ptb-format": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "a function name without the seal_approve prefix (P1)",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidPTB\",\"message\":\"Invalid PTB: Invalid function or package id\"}"
+    },
+    "invalid-package": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "a package that does not exist",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidPackage\",\"message\":\"Invalid package ID\"}"
+    },
+    "invalid-certificate": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "creation_time 60 s ahead of the server (R2)",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidCertificate\",\"message\":\"Invalid certificate time or ttl\"}"
+    },
+    "invalid-certificate-ttl": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "ttl_min 31 (R2)",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidCertificate\",\"message\":\"Invalid certificate time or ttl\"}"
+    },
+    "invalid-signature": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "the personal message names another package (R1)",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidSignature\",\"message\":\"Invalid user signature\"}"
+    },
+    "invalid-session-signature": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "a request signature with one bit flipped (R4)",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidSessionSignature\",\"message\":\"Invalid session key signature\"}"
+    },
+    "invalid-mvr-name": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "an MVR name that resolves to nothing",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidMVRName\",\"message\":\"Invalid MVR name\"}"
+    },
+    "invalid-parameter": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "whitelist::seal_approve with a shared object that does not exist",
+      "status": 403,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidParameter\",\"message\":\"Invalid parameter to PTB: Object 0xa94b872863f4f0a00ae7c6e1d8730bc2865198cd3c1a5743c7a047ed0ebc2fc4 not found\"}"
+    },
+    "missing-required-header": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 400,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"MissingRequiredHeader\",\"message\":\"Missing required header: Client-Sdk-Version\"}"
+    },
+    "invalid-sdk-version": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 400,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidSDKVersion\",\"message\":\"Invalid SDK version\"}"
+    },
+    "deprecated-sdk-version": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 426,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"DeprecatedSDKVersion\",\"message\":\"Deprecated SDK version\"}"
+    },
+    "aggregator-invalid-sdk-type": {
+      "server": "https://seal-aggregator-testnet.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "status": 400,
+      "contentType": "application/json",
+      "keyServerVersion": "0.6.16",
+      "body": "{\"error\":\"InvalidSDKType\",\"message\":\"Invalid SDK type\"}"
+    },
+    "invalid-json": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "a truncated JSON body (axum's extractor)",
+      "status": 400,
+      "contentType": "text/plain; charset=utf-8",
+      "keyServerVersion": "0.6.16",
+      "body": "Failed to parse the request body as JSON: ptb: EOF while parsing a value at line 1 column 7"
+    },
+    "invalid-body": {
+      "server": "https://seal-key-server-testnet-1.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "an enc_key that is not a G1 point (axum's extractor)",
+      "status": 422,
+      "contentType": "text/plain; charset=utf-8",
+      "keyServerVersion": "0.6.16",
+      "body": "Failed to deserialize the JSON body into the target type: enc_key: Invalid buffer length 3, expecting 48 at line 1 column 162"
+    },
+    "mainnet-aggregator-401": {
+      "server": "https://seal-aggregator-mainnet.mystenlabs.com",
+      "method": "POST",
+      "path": "/v1/fetch_key",
+      "note": "no API key: the gateway's body, not Seal's",
+      "status": 401,
+      "contentType": "application/json; charset=utf-8",
+      "keyServerVersion": null,
+      "body": "{\n  \"message\":\"No API key found in request\",\n  \"request_id\":\"138d331e52f7214846d8a505a70dff1a\"\n}"
+    }
+  }
+}
