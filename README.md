@@ -7,7 +7,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | Package | What | Extra deps |
 |---|---|---|
 | `@unconfirmed/bcs` | BCS declared as Effect Schemas | `@scure/base` |
-| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `Signer`, the signature-scheme registry, Ed25519. Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
+| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519. Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
 | `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence, journal (memory / KeyValueStore), sender lock | — |
@@ -16,6 +16,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-multisig` | Multisig scheme, `signer`, `combine` | — |
 | `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite` |
 | `@unconfirmed/sui-enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
+| `@unconfirmed/sui-wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app` (+ types from `@wallet-standard/base`) |
 
 Next: passkey, mnemonics/keystore, Move codegen, ML-DSA-65, then `quorum`, Seal and Walrus.
 
@@ -47,7 +48,9 @@ SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, MultiSig.scheme)
 - A scheme that needs services (zkLogin needs chain state) passes those requirements on to the layer. The program doesn't compile until they're provided (see `schemes.test.ts`).
 - Multisig verifies each member through the registry, so it supports exactly the member schemes you installed.
 
-**3. Signers are values.** `Signer = { address, publicKey, sign(intentMessage) }`. An in-memory key, a hardware wallet, a KMS, a browser wallet and `MultiSig.signer(pk, [a, b])` are all the same type, and anything that takes a `Signer` (`Tx.run`, `Signer.signPersonalMessage`) works with all of them.
+**3. Signers are values.** `Signer = { address, publicKey, sign(intentMessage) }`. An in-memory key, a hardware wallet, a KMS and `MultiSig.signer(pk, [a, b])` are all the same type, and anything that takes a `Signer` (`Tx.run`, `Signer.signPersonalMessage`) works with all of them.
+
+A browser wallet never signs raw intent messages: it signs a whole transaction and may change it first (re-resolving gas). That is a `TransactionSigner = { address, signTransaction(data) => { bytes, signature } }`. `Tx.execute` and `Tx.run` take either kind, and submit exactly the bytes the wallet signed. With several signers, wallets sign first; key signers then sign the final bytes.
 
 **4. Transactions are Effects; resolution is a pipeline of steps.**
 
@@ -86,6 +89,38 @@ yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), typ
 - The transaction's own withdrawals are counted against the address balance before choosing how to pay gas.
 - Coin reservation refs match `@mysten/sui`'s encoding and are proven on devnet.
 - `Resolve.unchecked` (empty payment, no balance check) is for simulation and for bytes whose payer is funded later.
+
+**Transaction JSON interop with `@mysten/sui`.** `TransactionJson` reads and writes the v2 JSON that `Transaction.toJSON()` / `Transaction.from(json)` use, unresolved or resolved:
+
+```ts
+import * as TransactionJson from "@unconfirmed/sui/TransactionJson"
+
+const { draft } = yield* Ptb.build(recipe)
+const json = yield* TransactionJson.encode({ sender, draft })   // Ptb.coin / Ptb.balance become CoinWithBalance intents
+const json2 = yield* TransactionJson.encode(data)                // resolved TransactionData (with its digest)
+// Transaction.from(json) in @mysten/sui builds the same bytes our resolver does.
+
+const tx = yield* TransactionJson.decode(await mystenTx.toJSON({ supportedIntents: ["CoinWithBalance"] }))
+const data = yield* TransactionJson.resolve(tx)                  // the default pipeline, keeping the JSON's gas fields
+const offline = yield* TransactionJson.toTransactionData(tx)     // already fully resolved: no network
+```
+
+An intent other than `CoinWithBalance`, an `UnresolvedPure` that needs a Move signature, or an unknown command or input kind is a typed `UnsupportedTransactionJson`, never dropped.
+
+**Wallets.** `@unconfirmed/sui-wallet` makes wallet-standard Sui wallets signers:
+
+```ts
+import * as Wallet from "@unconfirmed/sui-wallet/Wallet"
+
+const wallet = yield* Wallet.find("Slush")                       // or Wallet.wallets / Wallet.changes (a Stream)
+const accounts = yield* Wallet.connect(wallet)                   // ConnectionError("rejected") if the user refuses
+const signer = yield* Wallet.signer(wallet, { chain: "sui:testnet" })
+yield* Tx.run(recipe, { signer })                                // we resolve, the wallet signs, we execute its bytes
+yield* signer.signAndExecuteTransaction({ draft })               // or: the wallet resolves and submits
+yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
+```
+
+A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`.
 
 **5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
 
@@ -127,7 +162,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
 bun install
 bun run typecheck
 bun run test          # offline: parity with @mysten/sui (BCS, built tx bytes, signatures, multisig)
-bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multisig executions
+bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multisig / wallet-standard executions
 bun run codegen       # protoc -> descriptor chunks + types from packages/sui/proto/src (sui-apis)
 ```
 

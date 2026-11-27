@@ -16,6 +16,7 @@
         "@unconfirmed/sui-multisig": "workspace:*",
         "@unconfirmed/sui-secp256k1": "workspace:*",
         "@unconfirmed/sui-secp256r1": "workspace:*",
+        "@unconfirmed/sui-wallet": "workspace:*",
         "@unconfirmed/sui-zklogin": "workspace:*",
         "effect": "4.1.6",
         "esbuild": "0.28.2",
@@ -99,6 +100,17 @@
         "@noble/curves": "^2.3.0",
         "@noble/hashes": "^2.3.0",
         "@unconfirmed/sui": "workspace:*",
+        "effect": "4.1.6",
+      },
+    },
+    "packages/sui-wallet": {
+      "name": "@unconfirmed/sui-wallet",
+      "version": "0.0.0",
+      "dependencies": {
+        "@scure/base": "^2.3.0",
+        "@unconfirmed/sui": "workspace:*",
+        "@wallet-standard/app": "^1.1.1",
+        "@wallet-standard/base": "^1.1.1",
         "effect": "4.1.6",
       },
     },
@@ -267,6 +279,8 @@
     "@unconfirmed/sui-secp256k1": ["@unconfirmed/sui-secp256k1@workspace:packages/sui-secp256k1"],
 
     "@unconfirmed/sui-secp256r1": ["@unconfirmed/sui-secp256r1@workspace:packages/sui-secp256r1"],
+
+    "@unconfirmed/sui-wallet": ["@unconfirmed/sui-wallet@workspace:packages/sui-wallet"],
 
     "@unconfirmed/sui-zklogin": ["@unconfirmed/sui-zklogin@workspace:packages/sui-zklogin"],
 

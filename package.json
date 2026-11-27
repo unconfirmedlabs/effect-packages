@@ -28,6 +28,7 @@
     "@unconfirmed/sui-zklogin": "workspace:*",
     "@unconfirmed/sui-enoki": "workspace:*",
     "@unconfirmed/sui-graphql": "workspace:*",
+    "@unconfirmed/sui-wallet": "workspace:*",
     "@mysten/enoki": "2.0.1"
   }
 }

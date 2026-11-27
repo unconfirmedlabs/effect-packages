@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema"
 import type { Address } from "./Address.ts"
 import * as Ptb from "./Ptb.ts"
 import * as Resolve from "./Resolve.ts"
-import { type Signer, signTransaction } from "./Signer.ts"
+import { isTransactionSigner, type Signer, SigningError, signTransaction, type TransactionSigner } from "./Signer.ts"
 import * as T from "./TransactionData.ts"
 import { type Effects, Transactions } from "./Transactions.ts"
 
@@ -66,14 +66,63 @@ export class ExecutionFailed extends Schema.TaggedError<ExecutionFailed>()("Exec
   abortCode: Schema.optionalKey(Schema.BigInt)
 }) {}
 
-/** Sign and submit; a `Failure` status becomes `ExecutionFailed`. */
-export const execute = Effect.fn("Tx.execute")(function*(data: T.TransactionData, signers: Signer | ReadonlyArray<Signer>) {
-  const bytes = T.encode(data)
-  const signatures = yield* Effect.forEach(
-    Array.isArray(signers) ? signers : [signers as Signer],
-    (s) => Effect.map(signTransaction(s, bytes), (x) => x.signature),
-    { concurrency: "unbounded" }
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
+
+/**
+ * Collect every signature, in the order the signers were given.
+ *
+ * `TransactionSigner`s (wallets) sign first, one at a time: one may change the
+ * transaction (its returned bytes win), but not after another has signed it.
+ * Intent-message `Signer`s then sign the final bytes concurrently.
+ */
+const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
+  let current = data
+  let bytes = T.encode(data)
+  const signatures: Array<Uint8Array | undefined> = signers.map(() => undefined)
+  let signedByTransactionSigner = false
+  for (const [i, s] of signers.entries()) {
+    if (!isTransactionSigner(s)) continue
+    const signed = yield* s.signTransaction(current)
+    if (!sameBytes(signed.bytes, bytes)) {
+      if (signedByTransactionSigner) {
+        return yield* new SigningError({
+          reason: "failed",
+          message: "a transaction signer changed a transaction that another signer had already signed"
+        })
+      }
+      const decoded = T.decode(signed.bytes)
+      if (decoded._tag === "Failure") {
+        return yield* new SigningError({ reason: "failed", message: `the signer returned bytes that are not TransactionData: ${decoded.failure.message}` })
+      }
+      current = decoded.success
+      bytes = signed.bytes
+    }
+    signedByTransactionSigner = true
+    signatures[i] = signed.signature
+  }
+  const final = bytes
+  yield* Effect.forEach(
+    signers.entries(),
+    ([i, s]) =>
+      isTransactionSigner(s) ? Effect.void : Effect.map(signTransaction(s, final), (x) => {
+        signatures[i] = x.signature
+      }),
+    { concurrency: "unbounded", discard: true }
   )
+  return { bytes: final, signatures: signatures as Array<Uint8Array> }
+})
+
+/**
+ * Sign and submit; a `Failure` status becomes `ExecutionFailed`.
+ *
+ * Takes `Signer`s and `TransactionSigner`s (wallets). A wallet may change the
+ * transaction; what is submitted is exactly the bytes it signed.
+ */
+export const execute = Effect.fn("Tx.execute")(function*(
+  data: T.TransactionData,
+  signers: Signer | TransactionSigner | ReadonlyArray<Signer | TransactionSigner>
+) {
+  const { bytes, signatures } = yield* sign(data, Array.isArray(signers) ? signers : [signers as Signer | TransactionSigner])
   const effects = yield* Effect.flatMap(Effect.service(Transactions), (t) => t.execute(bytes, signatures))
   if (effects.status._tag === "Failure") {
     return yield* new ExecutionFailed({
@@ -86,10 +135,10 @@ export const execute = Effect.fn("Tx.execute")(function*(data: T.TransactionData
   return effects
 })
 
-/** Build, resolve, sign with `signer` (also the sender unless given), execute. */
+/** Build, resolve, sign with `signer` (a `Signer` or a wallet's `TransactionSigner`; also the sender unless given), execute. */
 export const run = <A, E1, R1, E2 = never, R2 = never>(
   recipe: Effect.Effect<A, E1, R1>,
-  options: Omit<ResolveOptions<E2, R2>, "sender"> & { readonly signer: Signer; readonly sender?: Address }
+  options: Omit<ResolveOptions<E2, R2>, "sender"> & { readonly signer: Signer | TransactionSigner; readonly sender?: Address }
 ): Effect.Effect<
   Effects,
   Effect.Error<ReturnType<typeof build<A, E1, R1, E2, R2>>> | Effect.Error<ReturnType<typeof execute>>,
