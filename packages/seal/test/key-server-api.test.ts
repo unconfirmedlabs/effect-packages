@@ -15,8 +15,10 @@ import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
+import * as Tracer from "effect/Tracer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
 import * as HttpClient from "effect/http/HttpClient"
+import * as Entropy from "../src/Entropy.ts"
 import { TestClock } from "effect/testing"
 import * as Ibe from "../src/Ibe.ts"
 import * as KeyServerApi from "../src/KeyServerApi.ts"
@@ -430,6 +432,110 @@ describe("error mapping", () => {
     const w = failure(wrong)
     expect(w.kind).toBe("Unauthorized")
     expect(w.message).toBe("No API key found in request")
+  })
+
+  test("SEAL-7: the body's error name is scrubbed too, before it is cut; messages are bounded", () => {
+    const key = "SECRET-KEY-123"
+    const endpoint = { ...ENDPOINT, apiKey: { name: "X-Key", value: Redacted.make(key) } }
+    const e = KeyServerApi.fromResponse(endpoint, 401, JSON.stringify({ error: `invalid key ${key}`, message: `key ${key} rejected` }))
+    expect(e.error).toBe("invalid key <redacted>")
+    expect(e.message).toBe("key <redacted> rejected")
+    expect(JSON.stringify(e)).not.toContain(key)
+    // A key straddling a cut is scrubbed whole, not half.
+    const straddle = KeyServerApi.fromResponse(endpoint, 403, JSON.stringify({ error: "x".repeat(95) + key, message: "m" }))
+    expect(straddle.error).toBe("x".repeat(95) + "<reda")
+    const text = KeyServerApi.fromResponse(endpoint, 502, "y".repeat(495) + key)
+    expect(text.message).not.toContain("SECRET")
+    expect(text.message).toHaveLength(500)
+    // A 2 MB message is kept to 2000 characters.
+    expect(KeyServerApi.fromResponse(ENDPOINT, 403, JSON.stringify({ error: "NoAccess", message: "x".repeat(2_000_000) })).message)
+      .toHaveLength(2000)
+  })
+
+  test("SEAL-7: a tracer that records request headers records the API key as <redacted>, whatever its name", async () => {
+    const key = "sk-header-999"
+    const spans: Array<Tracer.Span> = []
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = Tracer.nativeTracer.span(options)
+        spans.push(span)
+        return span
+      }
+    })
+    const { exit } = await withServer(
+      { apiKey: { name: "x-seal-key", value: key } },
+      (api, endpoint) =>
+        service(api, endpoint).pipe(
+          Effect.provideService(HttpClient.TracerHeaderFilter, () => true),
+          Effect.provideService(Tracer.Tracer, tracer)
+        )
+    )
+    value(exit)
+    const attributes = spans.flatMap((s) => Array.from((s as Tracer.NativeSpan).attributes))
+    const header = attributes.find(([k]) => k.includes("x-seal-key"))
+    expect(JSON.stringify(header?.[1])).toContain("<redacted>")
+    expect(JSON.stringify(attributes)).not.toContain(key)
+  })
+
+  test("SEAL-15: Retry-After on a 429 or 503 is kept as retryAfter (ms)", async () => {
+    const { exit } = await withServer(
+      answering({ status: 429, body: "slow down", headers: { "retry-after": "7" } }),
+      service
+    )
+    expect(failure(exit).retryAfter).toBe(7000)
+    expect(KeyServerApi.parseRetryAfter(undefined, 0)).toBeUndefined()
+    expect(KeyServerApi.parseRetryAfter("soon", 0)).toBeUndefined()
+    expect(KeyServerApi.parseRetryAfter(" 2 ", 0)).toBe(2000)
+    expect(KeyServerApi.parseRetryAfter(new Date(T0 + 5000).toUTCString(), T0)).toBe(5000)
+    expect(KeyServerApi.parseRetryAfter(new Date(T0 - 5000).toUTCString(), T0)).toBe(0)
+    expect(KeyServerApi.parseRetryAfter("999999", 0)).toBe(3_600_000)
+  })
+})
+
+describe("SEAL-1, SEAL-4: limits and request ids", () => {
+  test("a 2xx body above maxResponseBytes is Malformed without being parsed", async () => {
+    const big = { status: 200, body: { decryption_keys: [], pad: "x".repeat(5000) }, contentType: "application/json" }
+    const { exit } = await withServer(answering(big), fetchKey(), { maxResponseBytes: 4096 })
+    const e = failure(exit)
+    expect(e.kind).toBe("Malformed")
+    expect(e.message).toContain("exceeds 4096")
+  })
+
+  test("the Request-Id is drawn when the effect runs, from Entropy: running one effect twice sends two ids", async () => {
+    const world = fakeKeyServers([{}])
+    let calls = 0
+    await Effect.runPromise(
+      Effect.gen(function*() {
+        const api = yield* Effect.service(KeyServerApi.KeyServerApi)
+        const once = api.service(world.servers[0]!.endpoint)
+        yield* once
+        yield* once
+      }).pipe(
+        Effect.provideService(Entropy.Entropy, (n: number) => new Uint8Array(n).fill(++calls)),
+        Effect.provide(world.api())
+      )
+    )
+    const ids = world.requests.map((r) => r.headers["request-id"])
+    expect(ids).toEqual(["01010101-0101-4101-8101-010101010101", "02020202-0202-4202-8202-020202020202"])
+  })
+
+  test("no random source at all is a typed KeyServerError, not a defect", async () => {
+    const world = fakeKeyServers([{}])
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function*() {
+        const api = yield* Effect.service(KeyServerApi.KeyServerApi)
+        return yield* api.service(world.servers[0]!.endpoint)
+      }).pipe(
+        Effect.provideService(Entropy.Entropy, () => {
+          throw new TypeError("crypto.getRandomValues is not a function")
+        }),
+        Effect.provide(world.api())
+      )
+    )
+    const e = failure(exit)
+    expect(e._tag).toBe("KeyServerError")
+    expect(e.message).toContain("no random source")
+    expect(world.requests).toHaveLength(0)
   })
 })
 

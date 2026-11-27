@@ -166,6 +166,15 @@ describe("SessionKey.make", () => {
       .toBe("InvalidSessionKey")
   })
 
+  test("SEAL-11: a skew that leaves the session expired on creation is refused", async () => {
+    const e = failure(await runExit(SessionKey.make({ packageId: PKG, signer: keySigner, ttl: "1 minute", clockSkew: "50 seconds" })))
+    expect(e._tag).toBe("InvalidSessionKey")
+    expect((e as { reason: string }).reason).toContain("shorter than ttl")
+    // 49 s of skew leaves one second.
+    const s = await run(SessionKey.make({ packageId: PKG, signer: keySigner, ttl: "1 minute", clockSkew: "49 seconds" }))
+    expect(s.expiresAt - SessionKey.EXPIRY_MARGIN_MS - T0).toBe(1000)
+  })
+
   test("the session key comes from Entropy", async () => {
     const a = await run(SessionKey.make({ packageId: PKG, signer: keySigner }), "x")
     const b = await run(SessionKey.make({ packageId: PKG, signer: keySigner }), "x")

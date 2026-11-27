@@ -19,10 +19,20 @@ import type * as Config from "../src/Config.ts"
 import * as EncryptedObject from "../src/EncryptedObject.ts"
 import * as Ibe from "../src/Ibe.ts"
 import * as Kdf from "../src/Kdf.ts"
+import type * as KeyServer from "../src/KeyServer.ts"
 import * as Seal from "../src/Seal.ts"
 import type * as SessionKey from "../src/SessionKey.ts"
 import { keyServerObjects, objectsLayer, packageObject } from "./fixtures.ts"
-import { accountBased, approvalPtb, fakeKeyServers, type FakeKeyServer, type FakeKeyServerOptions, unhex, utf8 } from "./support.ts"
+import {
+  accountBased,
+  approvalPtb,
+  fakeKeyServers,
+  type FakeKeyServer,
+  type FakeKeyServerOptions,
+  keyServerErrors,
+  unhex,
+  utf8
+} from "./support.ts"
 
 const PKG = "0x" + "a1".repeat(32)
 const PKG_V2 = "0x" + "a2".repeat(32)
@@ -60,7 +70,8 @@ const countingSigner = (key = user) => {
 const world = (
   options: ReadonlyArray<FakeKeyServerOptions>,
   configure: (servers: ReadonlyArray<FakeKeyServer>) => ReadonlyArray<Config.ServerInput> = (servers) =>
-    servers.map((s) => ({ objectId: s.objectId }))
+    servers.map((s) => ({ objectId: s.objectId })),
+  extra: { readonly verifyKeyServers?: boolean } = {}
 ) => {
   const w = fakeKeyServers(options.map((o) => ({ policy: accountBased, ...o })))
   const objects = objectsLayer([], [
@@ -69,7 +80,7 @@ const world = (
     packageObject(PKG_V2, 2n),
     packageObject(OTHER_PKG)
   ])
-  const layer = Seal.layer({ servers: configure(w.servers) }).pipe(Layer.provideMerge(Layer.merge(objects.layer, w.layer)))
+  const layer = Seal.layer({ servers: configure(w.servers), ...extra }).pipe(Layer.provideMerge(Layer.merge(objects.layer, w.layer)))
   const fetches = () => w.requests.filter((r) => r.path === "/v1/fetch_key")
   const to = (i: number) => fetches().filter((r) => r.origin === new URL(w.servers[i]!.url).origin).length
   const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof layer>>) =>
@@ -267,6 +278,54 @@ describe("Seal.encrypt / decrypt", () => {
     expect(w.to(0)).toBe(1)
     expect(w.to(1) + w.to(2)).toBe(0)
     expect(failure(r.short)).toMatchObject({ _tag: "ThresholdNotMet", reason: "insufficientWeight", weight: 1, totalWeight: 1 })
+  })
+})
+
+describe("review fixes", () => {
+  test("SEAL-10: a hand-built object with a non-integer threshold is InvalidCiphertext, not a defect", async () => {
+    const w = world([{}, {}])
+    const e = failure(await w.run(Effect.gen(function*() {
+      const enc = yield* Seal.encrypt({ packageId: PKG, id: ID, data, threshold: 1 })
+      const object = Result.getOrThrow(EncryptedObject.parse(enc.encryptedObject))
+      const session = yield* Seal.session({ packageId: PKG, signer: user })
+      return yield* Seal.decrypt({ data: { ...object, threshold: 1.5 }, session, approval: approvalFor([ID]) })
+    })))
+    expect(e._tag).toBe("InvalidCiphertext")
+  })
+
+  test("SEAL-6: with verifyKeyServers, a transient proof failure is retryable, retried by decrypt, and a proof is asked once", async () => {
+    let failService = true
+    const flaky = {
+      intercept: (req: { readonly path: string }) => {
+        if (!req.path.startsWith("/v1/service") || !failService) return undefined
+        failService = false
+        return { status: 503, body: keyServerErrors.failure(), contentType: "application/json" }
+      }
+    }
+    const w = world([flaky, {}], undefined, { verifyKeyServers: true })
+    const services = (i: number) =>
+      w.requests.filter((r) => r.path.startsWith("/v1/service") && r.origin === new URL(w.servers[i]!.url).origin).length
+    // encrypt needs every server: the transient failure surfaces, typed and retryable.
+    const first = failure(await w.run(Seal.encrypt({ packageId: PKG, id: ID, data, threshold: 2 })))
+    expect(first._tag).toBe("InvalidKeyServer")
+    expect((first as KeyServer.InvalidKeyServer).kind).toBe("Unavailable")
+    expect((first as KeyServer.InvalidKeyServer).retryable).toBe(true)
+    // In one layer: encrypt, then decrypt: each server proves once.
+    const before = [services(0), services(1)]
+    const enc = value(await w.run(Effect.gen(function*() {
+      const e = yield* Seal.encrypt({ packageId: PKG, id: ID, data, threshold: 2 })
+      const session = yield* Seal.session({ packageId: PKG, signer: user })
+      yield* Seal.decrypt({ data: e.encryptedObject, session, approval: approvalFor([ID]) })
+      return e
+    })))
+    expect([services(0) - before[0]!, services(1) - before[1]!]).toEqual([1, 1])
+    // A fresh layer whose first proof request fails: decrypt retries the server and succeeds.
+    failService = true
+    const plain = value(await w.run(Effect.gen(function*() {
+      const session = yield* Seal.session({ packageId: PKG, signer: user })
+      return yield* Seal.decrypt({ data: enc.encryptedObject, session, approval: approvalFor([ID]) })
+    })))
+    expect(plain).toEqual(data)
   })
 })
 

@@ -140,13 +140,16 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 import * as Approval from "@unconfirmed/seal/Approval"
 import * as Config from "@unconfirmed/seal/Config"
 import * as Seal from "@unconfirmed/seal/Seal"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
+import * as SealGrpc from "@unconfirmed/seal/SealGrpc"
 
-// Configuration, key servers read from chain, and the key server HTTP client; needs an HttpClient and a Sui client.
-const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(
-  Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })),
-  Layer.provideMerge(FetchHttpClient.layer)
-)
+// Configuration, key servers read from chain, the key server HTTP client, and the two chain reads Seal needs
+// (Objects, Packages) over gRPC-web; needs an HttpClient.
+const layer = SealGrpc.layer({
+  servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee],
+  grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" }
+}).pipe(Layer.provideMerge(FetchHttpClient.layer))
+// A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), ...).
+// SuiGrpc.layer ships every RPC (about 100 KB more than Seal needs).
 
 const id = Bcs.encodeSync(Bcs.Address)(signer.address)                       // account_based: the id is the user's address
 const { encryptedObject } = yield* Seal.encrypt({ packageId, id, data, threshold: 2 })   // or dem: "Hmac256Ctr", aad
@@ -157,7 +160,7 @@ const plaintext = yield* Seal.decrypt({ data: encryptedObject, session, approval
 ```
 
 - **Weights come from the ciphertext.** `decrypt` asks the servers the object names that are also configured, each counting for its number of shares in the object. `@mysten/seal` requires the client's configured weights to equal the object's. Servers the object names but the configuration lacks are never contacted: their URLs come from objects anyone can create, and a request tells the server who is asking for what. Their public keys are still read from chain when `checkShareConsistency: true`.
-- **Strict ids.** Package, server and user ids are `0x` + 64 hex digits. A short or unprefixed id is refused up front; `@mysten/seal` signs it as given and every server then rejects the session. `decrypt` checks that the object, the session and the approval belong together (`ApprovalMismatch`) before sending anything. `Seal.session` checks that the package is a first version, which `SessionKey.make` doesn't.
+- **Strict ids.** Package and user ids are `0x` + 64 hex digits; key server ids are exactly 64 hex digits, `0x` optional. A short or unprefixed package or user id is refused up front; `@mysten/seal` signs it as given and every server then rejects the session. `decrypt` checks that the object, the session and the approval belong together (`ApprovalMismatch`) before sending anything. `Seal.session` checks that the package is a first version, which `SessionKey.make` doesn't.
 - **One wallet prompt per session.** Concurrent callers share the prompt; a rejected prompt isn't remembered. `@mysten/seal` prompts once per concurrent call.
 - **The derived-key cache belongs to the session** and is checked after the session's expiry. `@mysten/seal` keeps one unbounded cache per client and returns from it before looking at the session, so an expired session, or another user's session on the same client, decrypts from it. `Seal.fetchKeys({ objects, session, approval })` fetches keys for many objects in one round; after that, `decrypt` sends nothing. Every key is verified against the server's on-chain public key before it is cached or used.
 - **`ThresholdNotMet` lists every server's failure**, each a typed `KeyServerError` (`NoAccess` with the Move abort, `InvalidPtb`, `Timeout`, `RateLimited`, ...), plus `reason: "denied" | "unreachable" | "insufficientWeight"`. `@mysten/seal` throws one "majority" error, or `undefined` when servers answer with unusable keys. Transient failures are retried per server.
@@ -429,14 +432,14 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | Walrus: write a blob through the relay | 458 / 137 | 452 / 137 | 460 / 132 | — |
 | Seal: parse an encrypted object | 91 / 31 | 90 / 31 | 97 / 31 | — |
 | Seal: encrypt with pinned keys (`Envelope.seal`) | 177 / 63 | 175 / 63 | 183 / 62 | — |
-| Seal: encrypt + decrypt (the layer, gRPC, `FetchHttpClient`) | 487 / 150 | 481 / 150 | 490 / 145 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
+| Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 389 / 135 | 384 / 135 | 390 / 130 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
 | zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 98 / 41 | — |
 | zkLogin: `ZkLoginAddress.fromJwt` | 155 / 74 | 154 / 74 | 160 / 76 | — |
 | zkLogin: `ZkLogin.signer` | 138 / 49 | 136 / 49 | 143 / 49 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
-- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program is 20 KB larger than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (9 KB gzip, Rolldown).
+- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 80 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (6 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 100 KB, every RPC's codec.
 - **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.

@@ -57,27 +57,7 @@ export class NotEnoughKeys extends /* @__PURE__ */ Schema.TaggedError<NotEnoughK
 }) {}
 
 // -----------------------------------------------------------------------------
-// Configuration and key servers
-// -----------------------------------------------------------------------------
-
-export class InvalidConfig extends /* @__PURE__ */ Schema.TaggedError<InvalidConfig>()("InvalidConfig", {
-  reason: Schema.String
-}) {}
-
-/** A key server object that cannot be used: wrong type, unsupported version or key type, bad public key, configuration mismatch, bad proof of possession. */
-export class InvalidKeyServer extends /* @__PURE__ */ Schema.TaggedError<InvalidKeyServer>()("InvalidKeyServer", {
-  objectId: Schema.String,
-  reason: Schema.String
-}) {}
-
-/** A policy package id that is not the package's first version (I1). */
-export class NotFirstVersion extends /* @__PURE__ */ Schema.TaggedError<NotFirstVersion>()("NotFirstVersion", {
-  packageId: Schema.String,
-  version: Schema.BigInt
-}) {}
-
-// -----------------------------------------------------------------------------
-// Key server HTTP
+// Key server error kinds (used by key server loading and HTTP)
 // -----------------------------------------------------------------------------
 
 /** What went wrong with one key server (§4.4). Re-exported by `KeyServerApi.ts`. */
@@ -131,6 +111,40 @@ export const isRetryableKind = (kind: KeyServerErrorKind): boolean => RETRYABLE.
 /** @internal */
 export const isDefinitiveKind = (kind: KeyServerErrorKind): boolean => DEFINITIVE.has(kind)
 
+// -----------------------------------------------------------------------------
+// Configuration and key servers
+// -----------------------------------------------------------------------------
+
+export class InvalidConfig extends /* @__PURE__ */ Schema.TaggedError<InvalidConfig>()("InvalidConfig", {
+  reason: Schema.String
+}) {}
+
+/**
+ * A key server object that cannot be used: wrong type, unsupported version or key type, bad public key, configuration
+ * mismatch, bad proof of possession. `kind` is set when the proof of possession could not be fetched
+ * (`KeyServer.layerVerified`): the `KeyServerError` kind of that request.
+ */
+export class InvalidKeyServer extends /* @__PURE__ */ Schema.TaggedError<InvalidKeyServer>()("InvalidKeyServer", {
+  objectId: Schema.String,
+  reason: Schema.String,
+  kind: /* @__PURE__ */ Schema.optionalKey(KeyServerErrorKind)
+}) {
+  /** Asking again may help: the proof of possession request failed with a retryable kind (`Unavailable`, `RateLimited`, ...). */
+  get retryable(): boolean {
+    return this.kind !== undefined && RETRYABLE.has(this.kind)
+  }
+}
+
+/** A policy package id that is not the package's first version (I1). */
+export class NotFirstVersion extends /* @__PURE__ */ Schema.TaggedError<NotFirstVersion>()("NotFirstVersion", {
+  packageId: Schema.String,
+  version: Schema.BigInt
+}) {}
+
+// -----------------------------------------------------------------------------
+// Key server HTTP
+// -----------------------------------------------------------------------------
+
 /** One key server's failure. `status` is absent when no HTTP answer arrived. */
 export class KeyServerError extends /* @__PURE__ */ Schema.TaggedError<KeyServerError>()("KeyServerError", {
   /** The key server's object id. */
@@ -141,7 +155,9 @@ export class KeyServerError extends /* @__PURE__ */ Schema.TaggedError<KeyServer
   /** The server's error name, verbatim. */
   error: /* @__PURE__ */ Schema.optionalKey(Schema.String),
   requestId: /* @__PURE__ */ Schema.optionalKey(Schema.String),
-  /** The server's message (H7), or ours; never contains an API key. */
+  /** `Retry-After` of a `429` or `503`, in ms (capped at an hour), when the server sent one. */
+  retryAfter: /* @__PURE__ */ Schema.optionalKey(Schema.Number),
+  /** The server's message (H7), or ours; never contains an API key. Bounded in length. */
   message: Schema.String
 }) {
   /** Asking again may help: `Unavailable | RateLimited | InvalidParameter`. */

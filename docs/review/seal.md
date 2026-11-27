@@ -35,6 +35,8 @@ medium · security · CONFIRMED · `packages/seal/src/Keys.ts:307-317`, `package
 
 **Effort.** S.
 
+**Resolution.** Fixed. `Keys.verify` refuses an answer with more entries than the approval has commands (`Malformed`, before decoding anything), lets the first entry per id decide and skips later copies undecoded, checks one server's keys with one batched pairing (SEAL-9), and yields between keys. `KeyServerApi` gained `maxResponseBytes` (default 1 MiB; `Content-Length` and the body read). So verification is bounded by the request (≤ 100 distinct ids), whatever the server sends. Regression tests in `keys.test.ts`: 1,000 copies of a valid entry fail as `Malformed` at once (was ~14 s), a garbage duplicate within the command count is skipped, a wrong key among several is caught; `key-server-api.test.ts`: oversized body.
+
 ### SEAL-2: the Seal bundle row and README example ship every Sui RPC
 medium · bundle · CONFIRMED · `scripts/bundle-report.ts:112-127`, `README.md:146-149`, `README.md:397`, `README.md:400`, `docs/design/seal.md` §6.5
 
@@ -55,7 +57,9 @@ The two-layer program type-checks with the same requirements as the original (`t
 
 **Effort.** S.
 
-**Resolution (bundle):** descriptor pruning alone takes the `SuiGrpc.layer` Seal program from 486.0 to 435.5 KB (Bun, comments stripped); `SuiGrpc.layerCore` exists, but Seal needs DynamicFields too, so use the two-layer composition or `DynamicFieldsGrpc.layer` on `layerCore`.
+**Resolution.** Fixed. New `SealGrpc` module: `SealGrpc.layer({ ...SealOptions, grpc: { baseUrl } })` = `Seal.layer` + `ObjectsGrpc.layer` + `PackagesGrpc.layer` over `GrpcWeb` (`SealGrpc.chain` for the two alone). The bundle-report program and the README example use it; `packages/sui` is untouched. Re-measured (KB min / gzip; Bun, esbuild, Rolldown): 388.9/134.8, 383.6/134.6, 389.6/129.8 vs `@mysten/seal` + `SuiGrpcClient` 471.0/141.1, 468.7/141.2, 470.2/135.5, i.e. 80–85 KB (6–7 KB gzip) smaller. README rows and sentence, design §4.8 and §6.5 updated. (About 4 KB above the reviewer's two-layer probe: the spans, `Retry-After` and size checks added below.)
+
+**Resolution (core bundle):** separately, core descriptor pruning took the `SuiGrpc.layer` Seal program from 486.0 to 435.5 KB (Bun, comments stripped); with `SealGrpc.layer` the program uses only the Objects and Packages services.
 
 ### SEAL-3: `ThresholdNotMet.reason` is `unreachable` instead of `denied` when some keys are cached
 low · correctness · CONFIRMED · `packages/seal/src/Keys.ts:135-143`, `packages/seal/src/Keys.ts:277`
@@ -67,6 +71,8 @@ low · correctness · CONFIRMED · `packages/seal/src/Keys.ts:135-143`, `package
 **Fix.** Pass `totalWeight - cachedWeight`, or simplify the test to `denied >= threshold || totalWeight - denied < threshold`. Add the case to the reason table in `keys.test.ts`.
 
 **Effort.** S.
+
+**Resolution.** Fixed as suggested: `denied` when `d ≥ threshold || totalWeight − d < threshold` (cached weight counted once). Test: cached A, denying B, healthy C at 3 of 3 is now `denied`.
 
 ### SEAL-4: `Request-Id` is drawn eagerly from `crypto.randomUUID()`
 low · correctness · CONFIRMED · `packages/seal/src/KeyServerApi.ts:303`, `packages/seal/src/Keys.ts:247-249`
@@ -82,6 +88,8 @@ low · correctness · CONFIRMED · `packages/seal/src/KeyServerApi.ts:303`, `pac
 **Fix.** Wrap `call` in `Effect.suspend`, and build the UUID from 16 bytes of `Entropy` (which also makes it deterministic in tests). Do not map defects to a retryable kind.
 
 **Effort.** S.
+
+**Resolution.** Fixed. The `Request-Id` is a v4 UUID built from 16 bytes of `Entropy` inside the effect: no `crypto.randomUUID` needed, deterministic in tests, a new id for each run of the same effect. A runtime with no random source at all gets a typed `KeyServerError` ("no random source"), not a defect. Defects inside a `Keys` member are still reported as `Unavailable` (so they cannot sink the quorum) but are no longer retried. Tests: fetch without `crypto.randomUUID`, Request-Id per run, throwing `Entropy`, a defect not retried.
 
 ### SEAL-5: one pairing and one G2 decode per share, not per server
 low · performance · CONFIRMED · `packages/seal/src/Ibe.ts:51`, `:64-65`, `:81`, `packages/seal/src/Envelope.ts:105`, `:193`, `:218`
@@ -107,6 +115,8 @@ Unweighted objects are unchanged.
 
 **Effort.** S.
 
+**Resolution.** Fixed. `Envelope` decodes each distinct public key once; `Ibe.encryptShares` / `decryptAllShares` pair each distinct point once; `open` does `Ibe.decap` once per server and `Ibe.unmask` per share, with `gid` once. Bytes unchanged: all parity tests pass. Measured on bun (before → after): 3 × weight 5, t = 10: `seal` 127 → 31 ms, `open` 89 → 19 ms, `open` + consistency 230 → 49 ms; 2 × weight 2 + 1, t = 3: 40 → 30, 26 → 18, 66 → 52 ms; unweighted unchanged. `Ibe.decap` / `unmask` exported and tested against `decryptShare`.
+
 ### SEAL-6: `layerVerified` turns a transient `/v1/service` failure into a permanent one
 low · correctness · CONFIRMED · `packages/seal/src/KeyServer.ts:294-312`, `:342-345`, `:371-380`, `packages/seal/src/Keys.ts:230-236`
 
@@ -122,6 +132,8 @@ low · correctness · CONFIRMED · `packages/seal/src/KeyServer.ts:294-312`, `:3
 
 **Effort.** S–M.
 
+**Resolution.** Fixed. `layerVerified` remembers each verified `(object id, public key)` for the layer's life (TTL reloads and `refresh` re-read the chain but do not re-ask `/v1/service`). A failed proof request is `InvalidKeyServer` with the request's `kind` and a `retryable` getter; `Keys.fetch` maps a retryable one to a `KeyServerError` of that kind and retries it. `Seal.encrypt` still fails on it (the layer promises verified keys), now with a typed, retryable error. Tests in `key-server.test.ts` and `seal.test.ts` (decrypt retries past a transient 503).
+
 ### SEAL-7: an API key can still reach an error or a span
 low · security · CONFIRMED (first item), PLAUSIBLE (second) · `packages/seal/src/KeyServerApi.ts:201-210`, `:315-322`
 
@@ -136,6 +148,8 @@ Also, `message` from a JSON body is unbounded (a 2 MB message is kept whole); on
 
 **Effort.** S.
 
+**Resolution.** Fixed. `error` is scrubbed like `message`, and both are scrubbed before they are cut (`error` 100, JSON `message` 2000, other bodies 500 characters), so a cut cannot leave half a key. Requests run with `Headers.CurrentRedactedNames` extended by the API key's header name. Tests: echoed key in `error`, a key straddling the cut, a 2 MB message, and a tracer with `TracerHeaderFilter` recording `<redacted>` for a custom header name.
+
 ### SEAL-8: cold paths make sequential round trips that could be one batch
 low · performance · CONFIRMED (from code) · `packages/seal/src/KeyServer.ts:228-239`, `packages/seal/src/Seal.ts:173-176`
 
@@ -144,6 +158,8 @@ low · performance · CONFIRMED (from code) · `packages/seal/src/KeyServer.ts:2
 **Fix.** In `read`, request the object and both candidate fields together (one batch through the batched `Objects.get`; a missing field is just absent), then choose. In `encrypt`, run the package check and the server loads concurrently. That makes the cold path one round trip instead of three.
 
 **Effort.** M.
+
+**Resolution.** Fixed. `KeyServer.read` requests the object and both candidate fields in one batch and then chooses; `Seal.encrypt` runs the package check and the server loads concurrently, so a cold `encrypt` is one round trip. (The read test now expects the three ids, each read once.)
 
 ### SEAL-9: key verification costs about 14 ms per (server, id)
 low · performance · CONFIRMED (measured) · `packages/seal/src/Keys.ts:296-322`, `packages/seal/src/Ibe.ts:86-88`
@@ -163,6 +179,8 @@ low · performance · CONFIRMED (measured) · `packages/seal/src/Keys.ts:296-322
 
 **Effort.** S for the first two, M for the batch.
 
+**Resolution.** Improved, and the doc's budget corrected. `gid` is computed once per full id per fetch, the decoded G2 key is kept with the cached `KeyServer` value, and one server's keys are checked with the randomised batch `e(Σ ρᵢ·uskᵢ, G2) = e(Σ ρᵢ·gidᵢ, pk)` (128-bit `ρᵢ` from `Entropy`; `Ibe.verifyDerivedKeys`, tested against per-key checks). Measured per (server, id), stubbed API, fixed per-fetch costs included: 3 servers × 1 id 19 → 15 ms, 1 × 10 ids 14 → 7.2 ms, 3 × 10 ids 13 → 5.9 ms. A single key alone still costs ~10–11 ms (one pairing check is 8–9 ms here, plus `ElGamal.decrypt`), so §1.8/§4.7's 6.4 ms was unreachable for one key; the design now says ~10 ms for one key and `9 + 3k` ms for `k` keys of one server.
+
 ### SEAL-10: a hand-built object with a non-integer threshold is a defect in `Seal.decrypt`
 nit · correctness · CONFIRMED · `packages/seal/src/EncryptedObject.ts:94`
 
@@ -171,6 +189,8 @@ nit · correctness · CONFIRMED · `packages/seal/src/EncryptedObject.ts:94`
 **Fix.** Add `Number.isInteger(object.threshold)` to `validate`.
 
 **Effort.** S.
+
+**Resolution.** Fixed: `EncryptedObject.validate` requires `Number.isInteger(threshold)`; `Seal.decrypt` of such an object is `InvalidCiphertext`. Tests in `encrypted-object.test.ts` and `seal.test.ts`.
 
 ### SEAL-11: configuration and session inputs that are accepted but cannot work
 nit · api · CONFIRMED · `packages/seal/src/Config.ts:64-73`, `:106-113`, `packages/seal/src/SessionKey.ts:293-298`
@@ -184,6 +204,8 @@ nit · api · CONFIRMED · `packages/seal/src/Config.ts:64-73`, `:106-113`, `pac
 
 **Effort.** S.
 
+**Resolution.** Fixed. `Config.make` refuses an aggregator URL with `?` or `#`, an API key value that is not a valid header value (CR, LF, NUL, edge whitespace), and an API key name the protocol sets itself (`Content-Type`, `Content-Length`, `Request-Id`, `Client-Sdk-Type`, `Client-Sdk-Version`, `Host`, `Connection`, `Transfer-Encoding`; any case). `SessionKey.make` refuses `clockSkew + 10 s ≥ ttl`. Tests in `config.test.ts` and `session-key.test.ts`.
+
 ### SEAL-12: `Envelope.Randomness` does not say it must never be reused
 nit · docs · CONFIRMED (from code) · `packages/seal/src/Envelope.ts:42-49`, `:58`
 
@@ -192,6 +214,8 @@ nit · docs · CONFIRMED (from code) · `packages/seal/src/Envelope.ts:42-49`, `
 **Fix.** One sentence on `Randomness` and `seal`: draw a fresh value with `Envelope.randomness` for every call.
 
 **Effort.** S.
+
+**Resolution.** Fixed: `Randomness` and `seal` say a randomness must never be reused and to draw a fresh one with `Envelope.randomness` per call.
 
 ### SEAL-13: duplicated id validation with different strictness, duplicated helpers, a dead check
 nit · simplification · CONFIRMED
@@ -204,6 +228,8 @@ nit · simplification · CONFIRMED
 
 **Effort.** S.
 
+**Resolution.** Fixed. Internal `ids.ts` (`strictId`, `normalizeObjectId`, `isCanonical`) and `bytes.ts` (`concat`, `xor`, `utf8`) replace the six patterns and the duplicated helpers; `hexOf` is gone (`bytesToHex`). The rule is now one per kind of id: package and user ids strict (`0x` required, they are signed), key server ids lenient (`0x` optional) everywhere, which changes only `Seal.encrypt({ servers })` (it now accepts what `Config` accepts). README "Strict ids" updated. The dead owner check and `CacheState`'s owner fields are removed.
+
 ### SEAL-14: only `KeyServerApi` has spans; no `Effect.fn`
 nit · api · CONFIRMED · `packages/seal/src/Seal.ts`, `Keys.ts`, `KeyServer.ts`
 
@@ -213,6 +239,8 @@ nit · api · CONFIRMED · `packages/seal/src/Seal.ts`, `Keys.ts`, `KeyServer.ts
 
 **Effort.** S.
 
+**Resolution.** Fixed with `Effect.withSpan` (not `Effect.fn`, to avoid bundle weight): `Seal.encrypt`, `Seal.decrypt`, `Seal.fetchKeys`, `Seal.derivedKeys`, `Keys.fetch`, `KeyServer.read`. Attributes are counts and thresholds only.
+
 ### SEAL-15: smaller robustness gaps in key requests
 nit · correctness · PLAUSIBLE · `packages/seal/src/KeyServerApi.ts:313-349`, `packages/seal/src/Keys.ts:230-245`
 
@@ -221,6 +249,8 @@ nit · correctness · PLAUSIBLE · `packages/seal/src/KeyServerApi.ts:313-349`, 
 - When an independent server's URL changes on chain (K3), requests fail as `Unavailable` until the 10-minute TTL ends. `Keys.ask` could call `KeyServers.refresh` once after a transport failure with no HTTP answer.
 
 **Effort.** S each.
+
+**Resolution.** Fixed. Body size: `maxResponseBytes` (SEAL-1). `Retry-After` on a `429`/`503` is parsed (seconds or HTTP date, capped at an hour) into `KeyServerError.retryAfter`, and `Keys.defaultRetry` waits at least that long (capped at 10 s, `Keys.MAX_RETRY_AFTER`). A transport failure with no HTTP answer makes `Keys` reload the server once per fetch (`KeyServers.refresh`) and, if its URL changed, ask the new URL at once. Tests for each in `keys.test.ts` and `key-server-api.test.ts`.
 
 ## Test gaps
 

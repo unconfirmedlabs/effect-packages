@@ -13,6 +13,7 @@ import * as Redacted from "effect/Redacted"
 import * as Result from "effect/Result"
 import type { Address } from "@unconfirmed/sui/Address"
 import { InvalidConfig } from "./Errors.ts"
+import { normalizeObjectId } from "./ids.ts"
 
 export { InvalidConfig }
 
@@ -48,17 +49,28 @@ export interface ServerInput {
 /** The largest total weight: share indices are `u8`, `1..=n` (I5). */
 export const MAX_TOTAL_WEIGHT = 255
 
-const OBJECT_ID = /^(0x)?[0-9a-fA-F]{64}$/
 /** An RFC 9110 field name (`token`). */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+/** An RFC 9110 field value: visible ASCII and obs-text, inner spaces and tabs; no CR, LF or NUL, no edge whitespace. */
+const HEADER_VALUE = /^[\x21-\x7e\x80-\xff](?:[\x20-\x7e\x80-\xff\t]*[\x21-\x7e\x80-\xff])?$/
+/** Headers the key server protocol (H3) or the transport sets: an API key must not replace one. */
+const RESERVED_HEADERS: ReadonlySet<string> = /* @__PURE__ */ new Set([
+  "content-type",
+  "content-length",
+  "request-id",
+  "client-sdk-type",
+  "client-sdk-version",
+  "host",
+  "connection",
+  "transfer-encoding"
+])
 
 /**
- * Strict object id normalisation: exactly 64 hex digits, `0x` optional, any
- * case; returns `0x` + 64 lower-case digits. A truncated paste (`0x2`) is
- * refused rather than padded.
+ * Object id normalisation for key server ids: exactly 64 hex digits, `0x`
+ * optional, any case; returns `0x` + 64 lower-case digits. A truncated paste
+ * (`0x2`) is refused rather than padded.
  */
-export const normalizeObjectId = (s: string): Address | undefined =>
-  OBJECT_ID.test(s) ? (("0x" + s.replace(/^0x/, "").toLowerCase()) as Address) : undefined
+export { normalizeObjectId }
 
 /** An absolute `http:` or `https:` URL with a host, no credentials. */
 export const isHttpUrl = (s: string): boolean => {
@@ -72,15 +84,19 @@ export const isHttpUrl = (s: string): boolean => {
     url.password === ""
 }
 
+/** `isHttpUrl`, and something a path can be appended to: no query, no fragment. */
+const isBaseUrl = (s: string): boolean => isHttpUrl(s) && !s.includes("?") && !s.includes("#")
+
 const fail = (reason: string) => Result.fail(new InvalidConfig({ reason }))
 
 /**
  * Validate and normalise a server list. Refuses: an empty list, an object id
  * that is not 64 hex digits, a duplicate (after normalisation), a weight that
  * is not a positive integer, a total weight above 255, half an API key (or an
- * empty value, or a name that is not an HTTP header name), and an aggregator
- * URL that is not http(s). Messages name the server by position, never the
- * API key.
+ * empty value, a value that is not a valid header value such as one with CR
+ * or LF, a name that is not an HTTP header name, or the name of a header the
+ * protocol sets itself), and an aggregator URL that is not http(s) or has a
+ * query or fragment. Messages name the server by position, never the API key.
  */
 export const make = (servers: ReadonlyArray<ServerInput>): Result.Result<SealConfigService, InvalidConfig> => {
   if (servers.length === 0) return fail("no key servers configured")
@@ -104,12 +120,19 @@ export const make = (servers: ReadonlyArray<ServerInput>): Result.Result<SealCon
     let apiKey: ServerConfig["apiKey"]
     if (s.apiKeyName !== undefined && s.apiKey !== undefined) {
       if (!HEADER_NAME.test(s.apiKeyName)) return fail(`${at}: apiKeyName is not an HTTP header name`)
+      if (RESERVED_HEADERS.has(s.apiKeyName.toLowerCase())) {
+        return fail(`${at}: apiKeyName ${s.apiKeyName} is a header the key server protocol sets itself`)
+      }
       const value = Redacted.isRedacted(s.apiKey) ? s.apiKey : Redacted.make(s.apiKey)
-      if (Redacted.value(value) === "") return fail(`${at}: apiKey is empty`)
+      const text = Redacted.value(value)
+      if (text === "") return fail(`${at}: apiKey is empty`)
+      if (!HEADER_VALUE.test(text)) {
+        return fail(`${at}: apiKey is not a valid HTTP header value (control characters or surrounding whitespace)`)
+      }
       apiKey = { name: s.apiKeyName, value }
     }
-    if (s.aggregatorUrl !== undefined && !isHttpUrl(s.aggregatorUrl)) {
-      return fail(`${at}: aggregatorUrl is not an http(s) URL`)
+    if (s.aggregatorUrl !== undefined && !isBaseUrl(s.aggregatorUrl)) {
+      return fail(`${at}: aggregatorUrl is not an http(s) URL without query or fragment`)
     }
     out.push({
       objectId,

@@ -10,8 +10,7 @@ import { sha3_256 } from "@noble/hashes/sha3.js"
 import { hexToBytes } from "@noble/hashes/utils.js"
 import type { Address } from "@unconfirmed/sui/Address"
 import * as Bls from "./Bls.ts"
-
-const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s)
+import { concat, utf8 } from "./bytes.ts"
 
 /** `H1(id)` (C1). */
 export const DST_ID: Uint8Array = /* @__PURE__ */ utf8("SUI-SEAL-IBE-BLS12381-00")
@@ -26,15 +25,7 @@ export const DST_POP: Uint8Array = /* @__PURE__ */ utf8("SUI-SEAL-IBE-BLS12381-P
 export const addressBytes = (address: Address): Uint8Array => hexToBytes(address.slice(2))
 
 /** @internal */
-export const concat = (parts: ReadonlyArray<Uint8Array>): Uint8Array => {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
-  let offset = 0
-  for (const p of parts) {
-    out.set(p, offset)
-    offset += p.length
-  }
-  return out
-}
+export { concat }
 
 /** `package id (32 bytes) ‖ inner id` (I1). `packageId` must be the policy package's first version. */
 export const fullId = (packageId: Address, id: Uint8Array): Uint8Array => concat([addressBytes(packageId), id])

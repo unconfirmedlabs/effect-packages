@@ -18,6 +18,7 @@ import { sha3_256 } from "@noble/hashes/sha3.js"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
+import { concat, utf8 } from "./bytes.ts"
 import { CryptoUnavailable, DecryptionFailed } from "./Errors.ts"
 
 export { CryptoUnavailable, DecryptionFailed }
@@ -58,7 +59,6 @@ const checkKey = (key: Uint8Array): Effect.Effect<void> =>
 // HMAC-SHA3-256 CTR (C13)
 // -----------------------------------------------------------------------------
 
-const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s)
 const ENC_TAG = /* @__PURE__ */ utf8("HMAC-CTR-ENC")
 const MAC_TAG = /* @__PURE__ */ utf8("HMAC-CTR-MAC")
 const BLOCK = 32
@@ -66,16 +66,6 @@ const BLOCK = 32
 const u64le = (n: number): Uint8Array => {
   const out = new Uint8Array(8)
   new DataView(out.buffer).setBigUint64(0, BigInt(n), true)
-  return out
-}
-
-const concat = (parts: ReadonlyArray<Uint8Array>): Uint8Array => {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
-  let offset = 0
-  for (const p of parts) {
-    out.set(p, offset)
-    offset += p.length
-  }
   return out
 }
 

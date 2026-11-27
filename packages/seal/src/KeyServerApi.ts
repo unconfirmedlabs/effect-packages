@@ -12,17 +12,22 @@
  *
  * `KeyServerError` is defined in `Errors.ts` (a leaf module) and re-exported here.
  */
+import { bytesToHex } from "@noble/hashes/utils.js"
 import type { Address } from "@unconfirmed/sui/Address"
 import { base64 } from "@scure/base"
+import * as Clock from "effect/Clock"
 import * as Context from "effect/Context"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
+import * as Headers from "effect/http/Headers"
 import * as HttpClient from "effect/http/HttpClient"
 import * as HttpClientRequest from "effect/http/HttpClientRequest"
 import type * as HttpClientResponse from "effect/http/HttpClientResponse"
+import * as Entropy from "./Entropy.ts"
 import { isDefinitiveKind, isRetryableKind, KeyServerError, KeyServerErrorKind } from "./Errors.ts"
+import { isCanonical } from "./ids.ts"
 
 export { KeyServerError, KeyServerErrorKind }
 
@@ -85,6 +90,11 @@ export interface KeyServerApiOptions {
   readonly minServerVersion?: string
   /** Default false: gateways allow only the headers of H3 for CORS. */
   readonly tracerPropagation?: boolean
+  /**
+   * Default 1 MiB. A 2xx body larger than this is `Malformed` without being parsed (a full answer for the protocol's 100
+   * ids is a few tens of KB). Checked against `Content-Length` before reading, and against the body read.
+   */
+  readonly maxResponseBytes?: number
 }
 
 export interface ServiceInfo {
@@ -154,9 +164,14 @@ const BY_NAME: Readonly<Record<string, KeyServerErrorKind>> = {
 
 const isRecord = (u: unknown): u is Record<string, unknown> => typeof u === "object" && u !== null && !Array.isArray(u)
 
+/** The start of a body that is not Seal's JSON, kept as `message`. */
 const MAX_TEXT = 500
+/** A JSON `message` (a Move abort is about 350 characters). */
+const MAX_MESSAGE = 2000
+/** A JSON `error` name kept verbatim. */
+const MAX_ERROR = 100
 
-/** Whatever of `{ error, message }` a body has, read leniently. */
+/** Whatever of `{ error, message }` a body has, read leniently; not scrubbed nor truncated. */
 const parseErrorBody = (body: string): { readonly error?: string; readonly message?: string } => {
   let json: unknown
   try {
@@ -166,15 +181,29 @@ const parseErrorBody = (body: string): { readonly error?: string; readonly messa
   }
   if (!isRecord(json)) return {}
   return {
-    ...(typeof json.error === "string" && { error: json.error.slice(0, 100) }),
+    ...(typeof json.error === "string" && { error: json.error }),
     ...(typeof json.message === "string" && { message: json.message })
   }
 }
 
-/** Never let an API key reach an error, even if a gateway echoes it. */
+/**
+ * Never let an API key reach an error, even if a gateway echoes it. Applied to whole texts, before any truncation, so
+ * that a cut cannot leave part of a key behind.
+ */
 const scrub = (server: Endpoint, text: string): string => {
   const key = server.apiKey && Redacted.value(server.apiKey.value)
   return key ? text.split(key).join("<redacted>") : text
+}
+
+/** The longest `Retry-After` honoured, in ms. */
+const MAX_RETRY_AFTER = 3_600_000
+
+/** `Retry-After` (H11) as ms from `now`: delay-seconds or an HTTP date; `undefined` when absent or unreadable. */
+export const parseRetryAfter = (value: string | undefined, now: number): number | undefined => {
+  if (value === undefined) return undefined
+  const v = value.trim()
+  const ms = /^\d+$/.test(v) ? Number(v) * 1000 : Date.parse(v) - now
+  return Number.isFinite(ms) ? Math.min(Math.max(0, ms), MAX_RETRY_AFTER) : undefined
 }
 
 const baseUrl = (server: Endpoint) => server.url.replace(/\/+$/, "")
@@ -185,9 +214,17 @@ const baseUrl = (server: Endpoint) => server.url.replace(/\/+$/, "")
  * Seal's names (H7) → that name's kind (`Failure` → `Unavailable`, the four SDK
  * header complaints → `SdkRejected`); otherwise `401`/`403` → `Unauthorized`,
  * `5xx` → `Unavailable`, anything else → `Rejected`. `message` is the server's
- * `message`, else the start of the body, else `HTTP <status>`.
+ * `message` (first 2000 characters), else the start of the body (500), else
+ * `HTTP <status>`; `error` is kept to 100 characters. Both are scrubbed of the
+ * API key before they are cut. `retryAfter` (ms) is the parsed `Retry-After`.
  */
-export const fromResponse = (server: Endpoint, status: number, body: string, requestId?: string): KeyServerError => {
+export const fromResponse = (
+  server: Endpoint,
+  status: number,
+  body: string,
+  requestId?: string,
+  retryAfter?: number
+): KeyServerError => {
   const parsed = parseErrorBody(body)
   const kind: KeyServerErrorKind = status === 429
     ? "RateLimited"
@@ -198,15 +235,18 @@ export const fromResponse = (server: Endpoint, status: number, body: string, req
     : status >= 500 && status <= 599
     ? "Unavailable"
     : "Rejected"
-  const message = parsed.message ?? (body.trim().slice(0, MAX_TEXT) || `HTTP ${status}`)
+  const message = parsed.message !== undefined
+    ? scrub(server, parsed.message).slice(0, MAX_MESSAGE)
+    : scrub(server, body.trim()).slice(0, MAX_TEXT) || `HTTP ${status}`
   return new KeyServerError({
     server: server.objectId,
     url: baseUrl(server),
     kind,
     status,
-    ...(parsed.error !== undefined && { error: parsed.error }),
+    ...(parsed.error !== undefined && { error: scrub(server, parsed.error).slice(0, MAX_ERROR) }),
     ...(requestId !== undefined && { requestId }),
-    message: scrub(server, message)
+    ...(retryAfter !== undefined && { retryAfter }),
+    message
   })
 }
 
@@ -243,13 +283,11 @@ export const decodeFetchKeyResponse = (json: unknown): ReadonlyArray<EncryptedKe
   return out
 }
 
-const isAddress = (u: unknown): u is Address => typeof u === "string" && /^0x[0-9a-f]{64}$/.test(u)
-
 /** `{ service_id, pop }` (H10), or the reason it is not. */
 export const decodeServiceResponse = (json: unknown): { readonly serviceId: Address; readonly pop: Uint8Array } | string => {
   if (!isRecord(json)) return "expected { service_id, pop }"
   const id = typeof json.service_id === "string" ? json.service_id.toLowerCase() : undefined
-  if (!isAddress(id)) return "service_id is not an object id"
+  if (!isCanonical(id)) return "service_id is not an object id"
   const pop = decodeB64(json.pop)
   if (!pop || pop.length !== 48) return "pop is not 48 bytes of base64"
   return { serviceId: id, pop }
@@ -279,6 +317,16 @@ export const DEFAULT_MIN_SERVER_VERSION = "0.4.1"
 
 type Operation = "fetchKey" | "service"
 
+/** A version 4 UUID from 16 bytes of `Entropy` (works where `crypto.randomUUID` does not: insecure contexts). */
+const requestIdFrom = (b: Uint8Array): string => {
+  b[6] = (b[6]! & 0x0f) | 0x40
+  b[8] = (b[8]! & 0x3f) | 0x80
+  const h = bytesToHex(b)
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+export const DEFAULT_MAX_RESPONSE_BYTES = 1 << 20
+
 export const layer = (options: KeyServerApiOptions = {}): Layer.Layer<KeyServerApi, never, HttpClient.HttpClient> =>
   Layer.effect(
     KeyServerApi,
@@ -291,16 +339,47 @@ export const layer = (options: KeyServerApiOptions = {}): Layer.Layer<KeyServerA
       const minVersion = parseVersion(minVersionText)
       if (!minVersion) return yield* Effect.die(new Error(`KeyServerApi: minServerVersion is not a version: ${minVersionText}`))
       const tracerPropagation = options.tracerPropagation ?? false
+      const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+      if (!(Number.isSafeInteger(maxBytes) && maxBytes > 0)) {
+        return yield* Effect.die(new Error(`KeyServerApi: maxResponseBytes must be a positive integer, got ${maxBytes}`))
+      }
+      const redactedNames = (server: Endpoint) => (names: ReadonlyArray<string | RegExp>) =>
+        server.apiKey ? [...names, server.apiKey.name.toLowerCase()] : names
 
-      /** One request; a 2xx JSON body through `decode` (a string is why it does not decode) and the server version, or a `KeyServerError`. */
+      /**
+       * One request; a 2xx JSON body through `decode` (a string is why it does not decode) and the server version, or a
+       * `KeyServerError`. Everything, the `Request-Id` included, is drawn when the effect runs: retrying the returned
+       * effect sends a new id.
+       */
       const call = <A>(
         operation: Operation,
         server: Endpoint,
         request: HttpClientRequest.HttpClientRequest,
         decode: (json: unknown) => A | string
+      ): Effect.Effect<{ readonly value: A; readonly version: string | undefined }, KeyServerError> =>
+        Entropy.bytes(16).pipe(
+          // A runtime without a random source (no `crypto.getRandomValues`) is a typed failure, not a defect.
+          Effect.catchDefect((defect) =>
+            Effect.fail(
+              new KeyServerError({
+                server: server.objectId,
+                url: baseUrl(server),
+                kind: "Unavailable",
+                message: `${operation}: no random source for the Request-Id: ${String(defect)}`
+              })
+            )
+          ),
+          Effect.flatMap((bytes) => send(operation, server, request, decode, requestIdFrom(bytes)))
+        )
+
+      const send = <A>(
+        operation: Operation,
+        server: Endpoint,
+        request: HttpClientRequest.HttpClientRequest,
+        decode: (json: unknown) => A | string,
+        requestId: string
       ): Effect.Effect<{ readonly value: A; readonly version: string | undefined }, KeyServerError> => {
         const url = baseUrl(server)
-        const requestId = crypto.randomUUID()
         const fail = (kind: KeyServerErrorKind, message: string, status?: number) =>
           new KeyServerError({
             server: server.objectId,
@@ -319,14 +398,23 @@ export const layer = (options: KeyServerApiOptions = {}): Layer.Layer<KeyServerA
           "Client-Sdk-Version": sdkVersion,
           ...(server.apiKey && { [server.apiKey.name]: Redacted.value(server.apiKey.value) })
         }
-        return http.execute(HttpClientRequest.setHeaders(HttpClientRequest.prependUrl(request, url), headers)).pipe(
+        const execute = http.execute(HttpClientRequest.setHeaders(HttpClientRequest.prependUrl(request, url), headers)).pipe(
+          // A tracer that records request headers must not record the API key, whatever its header is called.
+          Effect.updateService(Headers.CurrentRedactedNames, redactedNames(server))
+        )
+        return execute.pipe(
           Effect.mapError((e) => fail("Unavailable", e.message)),
           Effect.flatMap((res) => {
             if (res.status < 200 || res.status > 299) {
-              return text(res).pipe(
-                Effect.orElseSucceed(() => ""),
-                Effect.flatMap((body) => Effect.fail(fromResponse(server, res.status, body, requestId)))
-              )
+              return Effect.flatMap(Clock.currentTimeMillis, (now) => {
+                const retryAfter = res.status === 429 || res.status === 503
+                  ? parseRetryAfter(res.headers["retry-after"], now)
+                  : undefined
+                return text(res).pipe(
+                  Effect.orElseSucceed(() => ""),
+                  Effect.flatMap((body) => Effect.fail(fromResponse(server, res.status, body, requestId, retryAfter)))
+                )
+              })
             }
             const version = res.headers["x-keyserver-version"]
             if (version !== undefined) {
@@ -337,7 +425,14 @@ export const layer = (options: KeyServerApiOptions = {}): Layer.Layer<KeyServerA
                 )
               }
             }
+            const declared = Number(res.headers["content-length"])
+            if (Number.isFinite(declared) && declared > maxBytes) {
+              return Effect.fail(fail("Malformed", `response of ${declared} bytes exceeds ${maxBytes}`, res.status))
+            }
             return Effect.flatMap(text(res), (body) => {
+              if (body.length > maxBytes) {
+                return Effect.fail(fail("Malformed", `response exceeds ${maxBytes} bytes`, res.status))
+              }
               let json: unknown
               try {
                 json = JSON.parse(body)

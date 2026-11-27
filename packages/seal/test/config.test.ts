@@ -55,6 +55,25 @@ describe("Config.make", () => {
     }
   })
 
+  test("SEAL-11: inputs that are accepted but cannot work are refused", () => {
+    // A query or fragment would end up before the route: https://agg/base?token=abc/v1/fetch_key.
+    for (const aggregatorUrl of ["https://agg.example/base?token=abc", "https://agg.example/#frag", "https://agg.example/?"]) {
+      expect(reason([{ objectId: A, aggregatorUrl }])).toContain("without query or fragment")
+    }
+    expect(Result.isSuccess(Config.make([{ objectId: A, aggregatorUrl: "https://agg.example/base/" }]))).toBe(true)
+    // A header value with CR, LF or NUL (fetch would throw on every request) or edge whitespace.
+    for (const apiKey of ["abc\r\nX-Injected: 1", "abc\n", "a\u0000b", " abc", "abc\t"]) {
+      const r = reason([{ objectId: A, apiKeyName: "X-Key", apiKey }])
+      expect(r).toContain("not a valid HTTP header value")
+      expect(r).not.toContain("abc")
+    }
+    expect(Result.isSuccess(Config.make([{ objectId: A, apiKeyName: "X-Key", apiKey: "a b\tc" }]))).toBe(true)
+    // A protocol header must not be replaced by the API key.
+    for (const apiKeyName of ["Content-Type", "client-sdk-version", "Client-Sdk-Type", "Request-Id", "content-length"]) {
+      expect(reason([{ objectId: A, apiKeyName, apiKey: "v" }])).toContain("sets itself")
+    }
+  })
+
   test("255 in total is allowed", () => {
     expect(Result.isSuccess(Config.make([{ objectId: A, weight: 200 }, { objectId: B, weight: 55 }]))).toBe(true)
   })

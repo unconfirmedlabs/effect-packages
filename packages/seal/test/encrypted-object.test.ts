@@ -122,6 +122,14 @@ describe("the rules of I4", () => {
     expect(failure(raw(sample({ services: [], threshold: 1 })))).toContain("threshold 1")
   })
 
+  test("SEAL-10: a hand-built object with a non-integer threshold is InvalidCiphertext", () => {
+    const object = ok(EncryptedObject.parse(raw(sample())))
+    for (const threshold of [1.5, NaN, Infinity]) {
+      const r = EncryptedObject.validate({ ...object, threshold })
+      expect(Result.isFailure(r) && r.failure.reason).toContain("threshold")
+    }
+  })
+
   test("one encrypted share per service", () => {
     const value = sample()
     const fewer = { ...value.encryptedShares, encryptedShares: value.encryptedShares.encryptedShares.slice(0, 2) }
