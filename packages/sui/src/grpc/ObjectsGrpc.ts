@@ -9,7 +9,7 @@ import type { Address } from "../Address.ts"
 import { ObjectNotFound, Objects, type SuiObject } from "../Objects.ts"
 import { RpcError } from "../RpcError.ts"
 import { OBJECT_MASK, object } from "./convert.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
 const MAX_BATCH = 50

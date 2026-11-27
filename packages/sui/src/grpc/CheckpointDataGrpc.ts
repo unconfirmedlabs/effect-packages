@@ -4,7 +4,7 @@ import * as Stream from "effect/Stream"
 import { CheckpointData, CheckpointNotFound } from "../CheckpointData.ts"
 import { checkpoint, CHECKPOINT_PATHS } from "./convert.ts"
 import type * as P from "./generated/proto.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 import { CHECKPOINT_LIMIT, checkpointBounds, convert, pinned, resumable } from "./scan.ts"
 

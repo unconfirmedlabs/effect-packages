@@ -180,9 +180,13 @@ A test provides only those services. A transport can implement a subset, and the
 
 ```ts
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
-SuiGrpc.layer({ baseUrl })                                  // everything
+SuiGrpc.layerCore({ baseUrl })                              // Chain, Objects, Coins, Packages, Transactions: all Tx.run needs
+DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl })))  // core + one more (layerCore also provides GrpcWeb)
 ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))  // just Objects
+SuiGrpc.layer({ baseUrl })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
 ```
+
+Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 27 KB of checkpoint, event and dynamic-field code that a transaction never calls.
 
 **2. Signature schemes are plugins.** The core dispatches on the flag byte but knows only the schemes you install:
 
@@ -277,7 +281,7 @@ yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
 
 A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`. For `signAndExecuteTransaction`, only a coded refusal (wallet-standard `4001000`, EIP-1193 `4001`) is a rejection: any other failure (a timeout waiting for effects, an RPC error) or a bad answer is `ExecutionUnconfirmed`, with the digest when the wallet reported one. Only accounts on a `sui:` chain are used, so a multi-chain wallet's EVM account is never picked.
 
-**5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
+**5. The transport ships only the RPCs you call, and only the fields it reads.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. The capability services use pruned handles (`generated/lean.ts`, generated from `packages/sui/scripts/grpc-lean.ts`) whose descriptors carry just the fields in their read masks; the rest of a response is skipped as unknown fields. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover, with full descriptors.
 
 ## Keys
 
@@ -377,16 +381,17 @@ The barrels (`import { Address } from "@unconfirmed/sui"`) exist for convenience
 
 ## What ships (`bun scripts/bundle-report.ts`)
 
-KB minified / minified+gzip, browser target, the app using namespace imports. Add `--named` to compare barrel imports, or `--detail` for a per-package breakdown.
+KB minified / minified+gzip, browser target, the app using namespace imports, comments stripped under every bundler (Rolldown otherwise keeps each `@__PURE__` annotation). Add `--named` to compare barrel imports, or `--detail` for a per-package breakdown.
 
 | Program | Bun | esbuild | Rolldown | `@mysten/*` (Rolldown) |
 |---|---|---|---|---|
-| Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 127 / 41 | — |
-| `Quorum.run`, three members (no Schema) | 60 / 20 | 59 / 21 | 59 / 20 | — |
-| Verify, Ed25519 only | 146 / 52 | 144 / 52 | 149 / 50 | 131 / 44 (ships every scheme) |
-| Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 177 / 64 | 179 / 61 | — |
-| Read one object | 206 / 67 | 205 / 68 | 210 / 66 | 294 / 77 (ships all 30 RPCs) |
-| Build + resolve + sign + execute | 389 / 112 | 384 / 112 | 392 / 109 | 383 / 106 |
+| Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 122 / 40 | — |
+| `Quorum.run`, three members (no Schema) | 60 / 20 | 59 / 21 | 56 / 19 | — |
+| Verify, Ed25519 only | 146 / 52 | 144 / 51 | 144 / 50 | 129 / 44 (ships every scheme) |
+| Verify, Ed25519 + k1 + r1 + multisig | 178 / 63 | 176 / 63 | 173 / 60 | — |
+| Read one object | 199 / 66 | 197 / 67 | 195 / 64 | 289 / 76 (ships all 30 RPCs) |
+| Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 311 / 101 | 306 / 101 | 302 / 97 | 373 / 105 |
+| The same with `SuiGrpc.layer` (all nine services) | 338 / 106 | 333 / 106 | 329 / 101 | — |
 | Walrus: read via the aggregator | 144 / 49 | 144 / 49 | 145 / 47 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
 | Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |
