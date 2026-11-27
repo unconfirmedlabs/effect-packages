@@ -25,9 +25,22 @@
  * the system object, so the budget is about 0.12 SUI; most is not charged).
  * Balance after run 4: 1,146,580,225 MIST, 936,093,052 FROST.
  *
- * Until the read path (W5) lands, the read-back uses the nodes directly: a
- * quorum of `n − 2f` primary slivers, decoded, compared with the bytes; and
- * `f + 1` shards' worth of nodes reporting the blob certified.
+ * Case 1 reads back with `Read.blob` and checks `Read.status` (retried until
+ * the nodes have seen the certification).
+ *
+ * Case 4 (W9) writes a three-entry quilt (`Quilt.encode` at n = 1000 gives a
+ * 445,556-byte blob, still 63 storage units) with `Quilt.ATTRIBUTE`, reads one
+ * patch by id from verified secondary slivers and one by identifier, then
+ * burns it. The address is shared with other live runs, so a balance change
+ * can include their transactions.
+ *
+ * | Run | Case | SUI (MIST) | WAL (FROST) | Digests (register, certify, burn) |
+ * |---|---|---|---|---|
+ * | 5 | 4 quilt | 6,001,475 | 891,135 | 5neYUEPk…, CkUUakBw…, Eef8ntaN… |
+ * | 6 | 1 direct (`Read`) | 4,017,875 | 891,135 | 9Bm8TECa…, 2yLdjgdt…, HzL7YfZF… |
+ * | 7 | 4 quilt | 3,011,874 | 891,135 | 5FuvqCJu…, CrrhbW9R…, CsCAaxgR… |
+ *
+ * Balance after run 7: 1,120,522,307 MIST, 928,963,972 FROST.
  */
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
@@ -35,7 +48,6 @@ import * as Layer from "effect/Layer"
 import * as Schedule from "effect/Schedule"
 import * as Stream from "effect/Stream"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import * as Quorum from "@unconfirmed/quorum/Quorum"
 import * as Address from "@unconfirmed/sui/Address"
 import * as Coins from "@unconfirmed/sui/Coins"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
@@ -47,12 +59,13 @@ import * as Tx from "@unconfirmed/sui/Tx"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
-import * as Bft from "../src/Bft.ts"
 import * as BlobId from "../src/BlobId.ts"
 import * as Committee from "../src/Committee.ts"
 import * as Config from "../src/Config.ts"
 import * as Encoder from "../src/Encoder.ts"
-import * as Encoding from "../src/Encoding.ts"
+import * as Quilt from "../src/Quilt.ts"
+import * as QuiltRead from "../src/QuiltRead.ts"
+import * as Read from "../src/Read.ts"
 import * as Recipes from "../src/Recipes.ts"
 import * as Status from "../src/Status.ts"
 import * as StorageNode from "../src/StorageNode.ts"
@@ -116,41 +129,12 @@ const gasOf = (e: Transactions.Effects) => e.gasUsed.computationCost + e.gasUsed
 const burn = (signer: Signer.Signer, blobObjectId: Address.Address) =>
   Tx.run(Recipes.burnBlob(blobObjectId), { signer })
 
-/** Read the blob back from the nodes: `n − 2f` primary slivers, decoded. */
-const readBack = (blobId: BlobId.BlobId, length: number) =>
-  Effect.gen(function*() {
-    const { current } = yield* Effect.flatMap(Effect.service(Committee.Committees), (c) => c.get)
-    const nodes = yield* Effect.service(StorageNode.StorageNodes)
-    const n = current.nShards
-    const shards = Array.from({ length: n }, (_, i) => i)
-    const { successes } = yield* Quorum.run(shards, {
-      weight: () => 1,
-      threshold: n - 2 * Bft.maxFaulty(n),
-      concurrency: 200,
-      order: "shuffle",
-      run: (shard) => nodes.sliver(current.nodeOfShard(shard), blobId, Encoding.pairOfShard(shard, blobId, n), "primary")
-    })
-    return yield* (yield* Effect.service(Encoder.Encoder)).decode(n, length, successes.map((s) => s.value))
-  })
-
-/** `f + 1` shards' worth of nodes report the blob certified (they may need a moment to see the event). */
-const certifiedByNodes = (blobId: BlobId.BlobId) =>
-  Effect.gen(function*() {
-    const { current } = yield* Effect.flatMap(Effect.service(Committee.Committees), (c) => c.get)
-    const nodes = yield* Effect.service(StorageNode.StorageNodes)
-    const { successes } = yield* Quorum.run(current.nodes, {
-      weight: (node) => node.shards.length,
-      threshold: Bft.validity(current.nShards),
-      run: (node) =>
-        Effect.flatMap(nodes.status(node, blobId), (s) =>
-          Status.certifiedEpoch(s) === undefined
-            ? Effect.fail(new StorageNode.NodeError({ node: node.url, kind: "Unavailable", message: `not certified yet: ${s._tag}` }))
-            : Effect.succeed(s)),
-      schedule: Schedule.spaced("1 second"),
-      while: (e) => e.message.startsWith("not certified yet") || StorageNode.retryable(e)
-    }).pipe(Effect.timeout("60 seconds"))
-    return successes.map((s) => s.value)
-  })
+/** `Read.status` until it reports the blob certified (nodes may need a moment to see the event). */
+const certifiedStatus = (blobId: BlobId.BlobId) =>
+  Read.status(blobId).pipe(
+    Effect.filterOrFail((s) => Status.certifiedEpoch(s) !== undefined, (s) => new Error(`not certified yet: ${s._tag}`)),
+    Effect.retry({ schedule: Schedule.spaced("1 second"), times: 30 })
+  )
 
 const ownedBlobs = (owner: Address.Address, blobId: BlobId.BlobId) =>
   Effect.gen(function*() {
@@ -212,10 +196,10 @@ suite("live writes (testnet, spends funds)", () => {
       expect(uploaded.certificate.epoch).toBe(certified.certifiedEpoch)
       expect(certified.endEpoch).toBe(certified.certifiedEpoch + 1)
 
-      const read = await runLive(readBack(certified.blobId, bytes.length))
+      const read = await runLive(Read.blob(certified.blobId))
       expect(read).toEqual(bytes)
-      const statuses = await runLive(certifiedByNodes(certified.blobId))
-      expect(statuses.length).toBeGreaterThan(0)
+      const status = await runLive(certifiedStatus(certified.blobId))
+      expect(Status.certifiedEpoch(status)).toBe(certified.certifiedEpoch)
     } finally {
       if (blobObjectId !== undefined) digests.burn = (await runLive(burn(signer, blobObjectId))).digest
       report("case 1", digests, before, await runLive(balances(signer.address)))
@@ -257,6 +241,52 @@ suite("live writes (testnet, spends funds)", () => {
     } finally {
       for (const id of toBurn) digests[`burn ${id.slice(0, 10)}`] = (await runLive(burn(signer, id))).digest
       report("case 2", digests, before, await runLive(balances(signer.address)))
+    }
+  }, TIMEOUT)
+
+  test("4. quilt: three entries; one patch by id from verified slivers, one by identifier; burn", async () => {
+    const signer = await loadSigner()
+    const before = await runLive(balances(signer.address))
+    if (before.sui < 300_000_000n || before.wal < 10_000_000n) {
+      console.warn(`[live.write] skipped: balance ${before.sui} MIST / ${before.wal} FROST is below 0.3 SUI / 0.01 WAL`)
+      return
+    }
+    const entries: ReadonlyArray<Quilt.QuiltEntry> = [
+      { identifier: "hello.txt", contents: new TextEncoder().encode("hello, quilt"), tags: { "content-type": "text/plain" } },
+      { identifier: "random.bin", contents: randomBlob() },
+      { identifier: "note.json", contents: new TextEncoder().encode(JSON.stringify({ at: Date.now() })) }
+    ]
+    const digests: Record<string, string> = {}
+    let blobObjectId: Address.Address | undefined
+    try {
+      const { nShards } = await runLive(Effect.flatMap(Effect.service(System.System), (s) => s.state))
+      const encoded = Quilt.encode(entries, nShards)
+      if (encoded._tag === "Failure") throw new Error(encoded.failure.reason)
+      const { quilt, patches } = encoded.success
+      const certified = await runLive(Write.run(quilt, {
+        epochs: 1,
+        deletable: true,
+        attributes: Quilt.ATTRIBUTE,
+        executor: Write.viaTx(signer),
+        onStep: (s) =>
+          Effect.sync(() => {
+            if (s._tag === "Registered") {
+              blobObjectId = s.blobObjectId
+              if (s.digest) digests.register = s.digest
+            }
+          })
+      }))
+      if (certified.digest) digests.certify = certified.digest
+
+      const random = patches.find((p) => p.identifier === "random.bin")!
+      const byId = await runLive(QuiltRead.patch(Quilt.patchId(certified.blobId, random)))
+      expect(byId).toEqual({ identifier: "random.bin", tags: {}, contents: entries[1]!.contents })
+      const byName = await runLive(QuiltRead.byIdentifier(certified.blobId, "hello.txt"))
+      expect(byName).toEqual({ identifier: "hello.txt", tags: { "content-type": "text/plain" }, contents: entries[0]!.contents })
+      console.log(`[live.write] case 4: quilt ${certified.blobId}, ${quilt.length} bytes, patches ${patches.map((p) => `${p.identifier} [${p.startIndex}, ${p.endIndex})`).join(", ")}`)
+    } finally {
+      if (blobObjectId !== undefined) digests.burn = (await runLive(burn(signer, blobObjectId))).digest
+      report("case 4", digests, before, await runLive(balances(signer.address)))
     }
   }, TIMEOUT)
 })

@@ -5,6 +5,7 @@
  * Certificate, Cost, Status, Errors.
  * Chain state: Config, System, Committee. Transactions: Recipes.
  * Services: Encoder (WASM), StorageNode (HTTP). Flows: Read, Write.
+ * Quilts: Quilt (pure layout), QuiltRead.
  */
 export * as BlobId from "./BlobId.ts"
 export * as Bft from "./Bft.ts"
@@ -17,6 +18,8 @@ export * as Encoding from "./Encoding.ts"
 export * as Errors from "./Errors.ts"
 export * as Merkle from "./Merkle.ts"
 export * as Messages from "./Messages.ts"
+export * as Quilt from "./Quilt.ts"
+export * as QuiltRead from "./QuiltRead.ts"
 export * as Read from "./Read.ts"
 export * as Recipes from "./Recipes.ts"
 export * as Status from "./Status.ts"
