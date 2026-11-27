@@ -21,8 +21,8 @@ import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import { type Address, normalize } from "./Address.ts"
-import { Chain } from "./Chain.ts"
-import { Coins } from "./Coins.ts"
+import { Chain, type ChainInfo } from "./Chain.ts"
+import { type Balance, type Coin, Coins } from "./Coins.ts"
 import type { ObjectNotFound } from "./Objects.ts"
 import { Objects, type SuiObject } from "./Objects.ts"
 import type { MoveFunction } from "./Packages.ts"
@@ -31,7 +31,7 @@ import * as CoinReservation from "./CoinReservation.ts"
 import type { AllowanceIntent, BalanceIntent, Command, Draft, Input } from "./Ptb.ts"
 import type { RpcError } from "./RpcError.ts"
 import * as T from "./TransactionData.ts"
-import { Transactions } from "./Transactions.ts"
+import { type Status, Transactions } from "./Transactions.ts"
 import * as TypeTag from "./TypeTag.ts"
 
 export interface Plan {
@@ -42,40 +42,67 @@ export interface Plan {
   readonly gasBudget?: bigint
   readonly gasPayment?: ReadonlyArray<T.ObjectRef>
   readonly expiration?: T.TransactionExpiration
+  /** Reads made up front by `Resolve.prefetch`; later steps use them instead of asking again. */
+  readonly prefetched?: Prefetched
 }
 
-export class Incomplete extends Schema.TaggedError<Incomplete>()("Incomplete", {
+/** What `Resolve.prefetch` read, all at once, before the steps that need it. */
+export interface Prefetched {
+  /** Absent when nothing in the plan needed it (budget and expiration given, custom payment). */
+  readonly chain?: ChainInfo
+  /** Whose SUI `gasBalance` and `gasCoins` are (a step ignores them for anyone else). */
+  readonly owner: Address
+  readonly gasBalance?: Balance
+  /** The owner's SUI coins in listing order: every one when fewer than a page, else the first page. */
+  readonly gasCoins?: ReadonlyArray<Coin>
+}
+
+export class Incomplete extends /* @__PURE__ */ Schema.TaggedError<Incomplete>()("Incomplete", {
   missing: Schema.String
 }) {}
 
-export class GasEstimationFailed extends Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", {
-  description: Schema.String
+/** The plan can't become valid transaction data (an invalid address, too many inputs, a reference to a later result, ...). */
+export class InvalidTransaction extends /* @__PURE__ */ Schema.TaggedError<InvalidTransaction>()("InvalidTransaction", {
+  reason: Schema.String
 }) {}
 
-export class InsufficientGas extends Schema.TaggedError<InsufficientGas>()("InsufficientGas", {
+/** The budget dry run failed: the transaction would fail on chain as it stands. */
+export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", {
+  description: Schema.String,
+  command: Schema.optionalKey(Schema.Number),
+  abortCode: Schema.optionalKey(Schema.BigInt),
+  /** The aborting module, `0x…::module` (and `::function` when known). */
+  location: Schema.optionalKey(Schema.String)
+}) {}
+
+/**
+ * The gas owner's SUI can't pay. `required` is the budget, plus, when commands
+ * spend from the gas coin, the amounts they split off it.
+ */
+export class InsufficientGas extends /* @__PURE__ */ Schema.TaggedError<InsufficientGas>()("InsufficientGas", {
   owner: Schema.String,
   required: Schema.BigInt,
   available: Schema.BigInt
 }) {}
 
-export class InsufficientBalance extends Schema.TaggedError<InsufficientBalance>()("InsufficientBalance", {
+export class InsufficientBalance extends /* @__PURE__ */ Schema.TaggedError<InsufficientBalance>()("InsufficientBalance", {
   owner: Schema.String,
   coinType: Schema.String,
   required: Schema.BigInt,
   available: Schema.BigInt
 }) {}
 
-export class InvalidBalanceIntent extends Schema.TaggedError<InvalidBalanceIntent>()("InvalidBalanceIntent", {
+export class InvalidBalanceIntent extends /* @__PURE__ */ Schema.TaggedError<InvalidBalanceIntent>()("InvalidBalanceIntent", {
   reason: Schema.String
 }) {}
 
 /** No object with the allowance's id. */
-export class AllowanceNotFound extends Schema.TaggedError<AllowanceNotFound>()("AllowanceNotFound", {
+export class AllowanceNotFound extends /* @__PURE__ */ Schema.TaggedError<AllowanceNotFound>()("AllowanceNotFound", {
   allowance: Schema.String
 }) {}
 
 /** The object isn't a shared `Allowance<Balance<T>>` for the intent's coin type, or its funder isn't the one the caller named. */
-export class InvalidAllowance extends Schema.TaggedError<InvalidAllowance>()("InvalidAllowance", {
+export class InvalidAllowance extends /* @__PURE__ */ Schema.TaggedError<InvalidAllowance>()("InvalidAllowance", {
   allowance: Schema.String,
   reason: Schema.String
 }) {}
@@ -85,35 +112,35 @@ export class InvalidAllowance extends Schema.TaggedError<InvalidAllowance>()("In
  * `SpendPermit`, a permit for another app, or a permit for an allowance that
  * isn't app-bound. `null` means "no app".
  */
-export class AllowanceAppMismatch extends Schema.TaggedError<AllowanceAppMismatch>()("AllowanceAppMismatch", {
+export class AllowanceAppMismatch extends /* @__PURE__ */ Schema.TaggedError<AllowanceAppMismatch>()("AllowanceAppMismatch", {
   allowance: Schema.String,
   allowanceApp: Schema.NullOr(Schema.String),
   permitApp: Schema.NullOr(Schema.String)
 }) {}
 
 /** The sender isn't the allowance's spender (`null`: the allowance has none, so nobody can spend). */
-export class AllowanceSpenderMismatch extends Schema.TaggedError<AllowanceSpenderMismatch>()("AllowanceSpenderMismatch", {
+export class AllowanceSpenderMismatch extends /* @__PURE__ */ Schema.TaggedError<AllowanceSpenderMismatch>()("AllowanceSpenderMismatch", {
   allowance: Schema.String,
   spender: Schema.NullOr(Schema.String),
   sender: Schema.String
 }) {}
 
 /** The allowance's start time (inclusive) is after the chain clock. */
-export class AllowanceNotStarted extends Schema.TaggedError<AllowanceNotStarted>()("AllowanceNotStarted", {
+export class AllowanceNotStarted extends /* @__PURE__ */ Schema.TaggedError<AllowanceNotStarted>()("AllowanceNotStarted", {
   allowance: Schema.String,
   startTimestampMs: Schema.BigInt,
   nowMs: Schema.BigInt
 }) {}
 
 /** The allowance's expiration (exclusive) has passed on the chain clock. */
-export class AllowanceExpired extends Schema.TaggedError<AllowanceExpired>()("AllowanceExpired", {
+export class AllowanceExpired extends /* @__PURE__ */ Schema.TaggedError<AllowanceExpired>()("AllowanceExpired", {
   allowance: Schema.String,
   expirationTimestampMs: Schema.BigInt,
   nowMs: Schema.BigInt
 }) {}
 
 /** The transaction's spends would exceed the allowance's lifetime cap or its current rate-limit window. */
-export class InsufficientAllowance extends Schema.TaggedError<InsufficientAllowance>()("InsufficientAllowance", {
+export class InsufficientAllowance extends /* @__PURE__ */ Schema.TaggedError<InsufficientAllowance>()("InsufficientAllowance", {
   allowance: Schema.String,
   coinType: Schema.String,
   limit: Schema.Literals(["lifetime", "rate"]),
@@ -181,7 +208,10 @@ const usages = (draft: Draft, functions: ReadonlyMap<number, MoveFunction>) => {
   return out
 }
 
-const objectArg = (o: SuiObject, usage: Usage | undefined, forced: boolean | undefined): T.ObjectArg => {
+const objectArg = (o: SuiObject, usage: Usage | undefined, forced: boolean | undefined): T.ObjectArg | InvalidTransaction => {
+  if (o.owner._tag === "Unknown") {
+    return new InvalidTransaction({ reason: `object ${o.objectId} has an owner kind (${o.owner.kind}) this SDK can't use as an input` })
+  }
   if (o.owner._tag === "Shared" || o.owner._tag === "ConsensusAddressOwner") {
     const mutable = forced ?? usage?.mutable ?? true
     return {
@@ -201,10 +231,11 @@ const allowanceInputs = (draft: Draft) =>
 
 /**
  * Resolve object inputs. All lookups run at once; the `Objects` and
- * `Packages` implementations batch and cache them. Allowance objects are left
- * for `Resolve.balances`, which reads their contents anyway.
+ * `Packages` implementations batch and cache them. Signatures are read only
+ * for Move calls that take an unresolved object, once per target. Allowance
+ * objects are left for `Resolve.balances`, which reads their contents anyway.
  */
-export const inputs = (plan: Plan): Effect.Effect<Plan, ObjectNotFound | RpcError, Objects | Packages> =>
+export const inputs = (plan: Plan): Effect.Effect<Plan, ObjectNotFound | RpcError | InvalidTransaction, Objects | Packages> =>
   Effect.gen(function*() {
     const skip = allowanceInputs(plan.draft)
     const unresolved = plan.draft.inputs.flatMap((input, index) =>
@@ -213,20 +244,24 @@ export const inputs = (plan: Plan): Effect.Effect<Plan, ObjectNotFound | RpcErro
     if (unresolved.length === 0) return plan
     const objects = yield* Objects
     const packages = yield* Packages
-    const calls = plan.draft.commands.flatMap((c, index) => (c._tag === "MoveCall" ? [{ c, index }] : []))
-    const [resolved, functions] = yield* Effect.all([
+    const pending = new Set(unresolved.map(({ index }) => index))
+    const targetOf = (c: Extract<Command, { _tag: "MoveCall" }>) => `${c.package}::${c.module}::${c.function}`
+    const calls = plan.draft.commands.flatMap((c, index) =>
+      c._tag === "MoveCall" && c.arguments.some((a) => a._tag === "Input" && pending.has(a.value)) ? [{ c, index }] : []
+    )
+    const targets = new Map(calls.map(({ c }) => [targetOf(c), c] as const))
+    const [resolved, signatures] = yield* Effect.all([
       Effect.forEach(unresolved, ({ input }) => objects.get(input.objectId), { concurrency: "unbounded" }),
-      Effect.forEach(
-        calls,
-        ({ c, index }) => Effect.map(packages.getFunction(c), (f) => [index, f] as const),
-        { concurrency: "unbounded" }
-      )
+      Effect.forEach(targets, ([key, c]) => Effect.map(packages.getFunction(c), (f) => [key, f] as const), { concurrency: "unbounded" })
     ], { concurrency: "unbounded" })
-    const use = usages(plan.draft, new Map(functions))
+    const byTarget = new Map(signatures)
+    const use = usages(plan.draft, new Map(calls.map(({ c, index }) => [index, byTarget.get(targetOf(c))!] as const)))
     const next = [...plan.draft.inputs]
-    unresolved.forEach(({ input, index }, i) => {
-      next[index] = { _tag: "Object", value: objectArg(resolved[i]!, use.get(index), input.mutable) }
-    })
+    for (const [i, { input, index }] of unresolved.entries()) {
+      const arg = objectArg(resolved[i]!, use.get(index), input.mutable)
+      if (arg instanceof InvalidTransaction) return yield* arg
+      next[index] = { _tag: "Object", value: arg }
+    }
     return { ...plan, draft: { ...plan.draft, inputs: next } }
   })
 
@@ -279,8 +314,8 @@ function mapArguments(c: Command, f: (a: T.Argument) => T.Argument): Command {
   }
 }
 
-const encodeU64 = Bcs.encodeSync(Bcs.u64)
-const encodeAddress = Bcs.encodeSync(Bcs.Address)
+const encodeU64 = /* @__PURE__ */ Bcs.encodeSync(Bcs.u64)
+const encodeAddress = /* @__PURE__ */ Bcs.encodeSync(Bcs.Address)
 const GAS = "gas"
 
 const moveCall = (
@@ -303,23 +338,47 @@ const moveCall = (
 const movedTo = (at: number) => (n: number | undefined): T.Argument =>
   n === undefined ? { _tag: "Result", value: at } : { _tag: "NestedResult", value: [at, n] }
 
+/** A draft the intent rewrite can't map; thrown inside the rewrite and turned into `InvalidBalanceIntent`. */
+class RewriteError {
+  constructor(readonly reason: string) {}
+}
+
 /** An intent's single result, which is all a `Result` or `NestedResult(_, 0)` of it can mean. */
 const singleResult = (index: number, r: T.Argument) => (n: number | undefined): T.Argument => {
   if (n === undefined || n === 0) return r
-  throw new Error(`a coin/balance intent has a single result; NestedResult(${index}, ${n}) is invalid`)
+  throw new RewriteError(`a coin/balance intent has a single result; NestedResult(${index}, ${n}) is invalid`)
 }
+
+/** Map a result reference through the rewrite so far; a reference to a command not yet seen is invalid. */
+const remapWith = (results: ReadonlyMap<number, (nested: number | undefined) => T.Argument>) => (a: T.Argument): T.Argument => {
+  if (a._tag !== "Result" && a._tag !== "NestedResult") return a
+  const index = a._tag === "Result" ? a.value : a.value[0]
+  const to = results.get(index)
+  if (to === undefined) throw new RewriteError(`command result ${index} is used before (or by) the command that makes it`)
+  return to(a._tag === "Result" ? undefined : a.value[1])
+}
+
+/** Run a rewrite; its `RewriteError` becomes `InvalidBalanceIntent`. */
+const rewrite = <A>(f: () => A): Effect.Effect<A, InvalidBalanceIntent> =>
+  Effect.try({
+    try: f,
+    catch: (e) => {
+      if (e instanceof RewriteError) return new InvalidBalanceIntent({ reason: e.reason })
+      throw e
+    }
+  })
 
 // -----------------------------------------------------------------------------
 // allowances (coin / balance intents under an allowance)
 // -----------------------------------------------------------------------------
 
-const Window = Bcs.enum({ PeriodicMs: Bcs.u64, CalendarMonths: Bcs.u8 })
-const RateLimit = Bcs.enum({
+const Window = /* @__PURE__ */ Bcs.enum({ PeriodicMs: Bcs.u64, CalendarMonths: Bcs.u8 })
+const RateLimit = /* @__PURE__ */ Bcs.enum({
   Windowed: Bcs.struct({ limit: Bcs.u256, spent: Bcs.u256, anchorMs: Bcs.option(Bcs.u64), index: Bcs.u64, window: Window })
 })
 
 /** `0x2::allowance::Allowance<T>`: settings plus cumulative spend. */
-const AllowanceObject = Bcs.struct({
+const AllowanceObject = /* @__PURE__ */ Bcs.struct({
   id: Bcs.Address,
   settings: Bcs.struct({
     funder: Bcs.Address,
@@ -336,8 +395,8 @@ const AllowanceObject = Bcs.struct({
 })
 type AllowanceObject = typeof AllowanceObject.Type
 
-const decodeAllowance = Bcs.decode(AllowanceObject)
-const decodeClock = Bcs.decode(Bcs.struct({ id: Bcs.Address, timestampMs: Bcs.u64 }))
+const decodeAllowance = /* @__PURE__ */ Bcs.decode(AllowanceObject)
+const decodeClock = /* @__PURE__ */ Bcs.decode(Bcs.struct({ id: Bcs.Address, timestampMs: Bcs.u64 }))
 
 const normalizeType = (s: string) => {
   try {
@@ -378,7 +437,7 @@ const rateAvailable = (rate: Extract<AllowanceObject["settings"]["rateLimit"], {
  */
 export const allowances = (
   plan: Plan
-): Effect.Effect<Plan, AllowanceError | InsufficientBalance | RpcError, Objects | Coins> =>
+): Effect.Effect<Plan, AllowanceError | InsufficientBalance | InvalidBalanceIntent | RpcError, Objects | Coins> =>
   Effect.gen(function*() {
     const intents = plan.draft.commands.filter((c): c is AllowanceIntent => c._tag === "AllowanceIntent")
     if (intents.length === 0) return plan
@@ -494,11 +553,8 @@ export const allowances = (
     }
     const out: Array<Command> = []
     const results = new Map<number, (nested: number | undefined) => T.Argument>()
-    const remap = (a: T.Argument): T.Argument => {
-      if (a._tag === "Result") return results.get(a.value)!(undefined)
-      if (a._tag === "NestedResult") return results.get(a.value[0])!(a.value[1])
-      return a
-    }
+    const remap = remapWith(results)
+    yield* rewrite(() => {
     for (const [index, c] of plan.draft.commands.entries()) {
       if (c._tag !== "AllowanceIntent") {
         out.push(mapArguments(c, remap))
@@ -523,6 +579,7 @@ export const allowances = (
       if (c.output === "coin") out.push(moveCall("0x2::coin::from_balance", c.coinType, [{ _tag: "Result", value: out.length - 1 }]))
       results.set(index, singleResult(index, { _tag: "NestedResult", value: [out.length - 1, 0] }))
     }
+    })
     return { ...plan, draft: { inputs, commands: out } }
   })
 
@@ -597,20 +654,22 @@ const coinIntents = (
     const used = new Set(plan.draft.inputs.flatMap((i) => (i._tag === "Object" ? [i.value.objectId] : [])))
     yield* Effect.forEach([...types], ([key, t]) =>
       Effect.gen(function*() {
-        const balance = yield* coinsService.getBalance(plan.sender, t.coinType)
+        const balance = yield* balanceOf(plan, coinsService, plan.sender, t.coinType)
         const reserved = reservedBy(plan, plan.sender, t.coinType)
         const ab = balance.addressBalance - reserved
         if (ab < 0n) {
           return yield* new InsufficientBalance({ owner: plan.sender, coinType: t.coinType, required: reserved, available: balance.addressBalance })
         }
         t.addressBalance = ab
-        if (key === GAS || ab >= t.total) return
+        // The gas coin holds the sender's coins and (through a reservation) its
+        // address balance, so the gas path needs the same total as the others.
         if (balance.total - reserved < t.total) {
           return yield* new InsufficientBalance({ owner: plan.sender, coinType: t.coinType, required: t.total, available: balance.total - reserved })
         }
+        if (key === GAS || ab >= t.total) return
         // Owned coins, topped up from the address balance.
         const needFromCoins = t.total - ab
-        const picked = yield* coinsService.list(plan.sender, t.coinType).pipe(
+        const picked = yield* coinsOf(plan, coinsService, plan.sender, t.coinType).pipe(
           Stream.filter((coin) => !used.has(coin.ref.objectId)),
           Stream.scan((): { total: bigint; refs: Array<T.ObjectRef> } => ({ total: 0n, refs: [] }), (acc, coin) => ({
             total: acc.total + coin.balance,
@@ -635,13 +694,10 @@ const coinIntents = (
     }
     const out: Array<Command> = []
     const results = new Map<number, (nested: number | undefined) => T.Argument>()
-    const remap = (a: T.Argument): T.Argument => {
-      if (a._tag === "Result") return results.get(a.value)!(undefined)
-      if (a._tag === "NestedResult") return results.get(a.value[0])!(a.value[1])
-      return a
-    }
+    const remap = remapWith(results)
     const pending = new Map<string, Array<T.Argument>>()
 
+    yield* rewrite(() => {
     for (const [index, c] of plan.draft.commands.entries()) {
       if (c._tag !== "BalanceIntent") {
         const at = out.length
@@ -713,12 +769,9 @@ const coinIntents = (
         }
         result = pending.get(key)!.shift()!
       }
-      const r = result
-      results.set(index, (n) => {
-        if (n === undefined || n === 0) return r
-        throw new Error(`a coin/balance intent has a single result; NestedResult(${index}, ${n}) is invalid`)
-      })
+      results.set(index, singleResult(index, result))
     }
+    })
 
     return { ...plan, draft: { inputs, commands: out } }
   })
@@ -727,23 +780,86 @@ const coinIntents = (
 // gas
 // -----------------------------------------------------------------------------
 
+/** How many of the gas owner's SUI coins `prefetch` lists (one page of the gRPC listing). */
+const PREFETCH_COINS = 100
+
+/**
+ * Everything the default pipeline reads whatever the transaction is, in one
+ * round trip: the reference gas price (unless set), chain info (for the dry
+ * run's `ValidDuring`, a coin reservation or an address-balance expiration)
+ * and, unless `payment: false`, the gas owner's SUI balance and first page of
+ * SUI coins. `Tx.resolve` runs it alongside `Resolve.inputs`; later steps use
+ * what it read instead of asking again (as `@mysten/sui` does with one
+ * `Promise.all`).
+ */
+export const prefetch = (
+  plan: Plan,
+  options?: { readonly payment?: boolean }
+): Effect.Effect<Plan, RpcError, Chain | Coins> =>
+  Effect.gen(function*() {
+    const chain = Effect.service(Chain)
+    const coins = Effect.service(Coins)
+    const owner = plan.gasOwner ?? plan.sender
+    const payment = options?.payment !== false && plan.gasPayment === undefined
+    const [gasPrice, info, gasBalance, gasCoins] = yield* Effect.all([
+      plan.gasPrice !== undefined ? Effect.succeed(plan.gasPrice) : Effect.flatMap(chain, (c) => c.referenceGasPrice),
+      payment || (plan.gasBudget === undefined && plan.expiration === undefined)
+        ? Effect.flatMap(chain, (c) => c.info)
+        : Effect.succeed(undefined),
+      payment ? Effect.flatMap(coins, (c) => c.getBalance(owner, TypeTag.SUI)) : Effect.succeed(undefined),
+      payment
+        ? Effect.flatMap(coins, (c) => Stream.runCollect(Stream.take(c.list(owner, TypeTag.SUI), PREFETCH_COINS)))
+        : Effect.succeed(undefined)
+    ], { concurrency: "unbounded" })
+    return {
+      ...plan,
+      gasPrice,
+      prefetched: {
+        ...(info !== undefined && { chain: info }),
+        owner,
+        ...(gasBalance !== undefined && { gasBalance }),
+        ...(gasCoins !== undefined && { gasCoins })
+      }
+    }
+  })
+
+/** `owner`'s balance of `coinType`: the prefetched SUI balance when the plan has it, else read. */
+const balanceOf = (plan: Plan, coins: Coins["Service"], owner: Address, coinType: string): Effect.Effect<Balance, RpcError> => {
+  const pre = plan.prefetched
+  return coinType === TypeTag.SUI && pre?.owner === owner && pre.gasBalance !== undefined
+    ? Effect.succeed(pre.gasBalance)
+    : coins.getBalance(owner, coinType)
+}
+
+/** `owner`'s coins of `coinType`: the prefetched SUI coins when they are all of them, else listed. */
+const coinsOf = (plan: Plan, coins: Coins["Service"], owner: Address, coinType: string): Stream.Stream<Coin, RpcError> => {
+  const pre = plan.prefetched
+  return coinType === TypeTag.SUI && pre?.owner === owner && pre.gasCoins !== undefined && pre.gasCoins.length < PREFETCH_COINS
+    ? Stream.fromIterable(pre.gasCoins)
+    : coins.list(owner, coinType)
+}
+
+const chainInfo = (plan: Plan): Effect.Effect<ChainInfo, RpcError, Chain> =>
+  plan.prefetched?.chain !== undefined ? Effect.succeed(plan.prefetched.chain) : Effect.flatMap(Effect.service(Chain), (c) => c.info)
+
 export const gasPrice = (plan: Plan): Effect.Effect<Plan, RpcError, Chain> =>
   plan.gasPrice !== undefined
     ? Effect.succeed(plan)
     : Effect.map(Effect.flatMap(Effect.service(Chain), (c) => c.referenceGasPrice), (gasPrice) => ({ ...plan, gasPrice }))
 
+const validDuringFor = (info: ChainInfo): T.TransactionExpiration => ({
+  _tag: "ValidDuring",
+  minEpoch: Option.some(info.epoch),
+  maxEpoch: Option.some(info.epoch + 1n),
+  minTimestamp: Option.none(),
+  maxTimestamp: Option.none(),
+  chain: info.chainId,
+  nonce: crypto.getRandomValues(new Uint32Array(1))[0]!
+})
+
 /** A `ValidDuring` expiration for this epoch and the next: the replay protection address-balance gas needs. */
-export const validDuring = Effect.fn("Resolve.validDuring")(function*() {
-  const info = yield* Effect.flatMap(Effect.service(Chain), (c) => c.info)
-  return {
-    _tag: "ValidDuring",
-    minEpoch: Option.some(info.epoch),
-    maxEpoch: Option.some(info.epoch + 1n),
-    minTimestamp: Option.none(),
-    maxTimestamp: Option.none(),
-    chain: info.chainId,
-    nonce: crypto.getRandomValues(new Uint32Array(1))[0]!
-  } satisfies T.TransactionExpiration
+export const validDuring = /* @__PURE__ */ Effect.fn("Resolve.validDuring")(function*() {
+  return validDuringFor(yield* Effect.flatMap(Effect.service(Chain), (c) => c.info))
 })
 
 const MAX_BUDGET = 50_000_000_000n
@@ -762,6 +878,40 @@ const programmable = (draft: Draft) =>
       })
   )
 
+/** Commands may only use results of earlier commands. */
+const checkReferences = (kind: T.TransactionKind): InvalidTransaction | undefined => {
+  if (kind._tag !== "ProgrammableTransaction") return undefined
+  for (const [i, c] of kind.commands.entries()) {
+    for (const a of argumentsOf(c)) {
+      const r = a._tag === "Result" ? a.value : a._tag === "NestedResult" ? a.value[0] : undefined
+      if (r !== undefined && r >= i) return new InvalidTransaction({ reason: `command ${i} uses the result of command ${r}` })
+      if (a._tag === "Input" && a.value >= kind.inputs.length) return new InvalidTransaction({ reason: `command ${i} uses input ${a.value}, which doesn't exist` })
+    }
+  }
+  return undefined
+}
+
+/** BCS bytes of transaction data; data that can't be encoded (bad address, too many inputs) is `InvalidTransaction`. */
+export const encode = (data: T.TransactionData): Effect.Effect<Uint8Array, InvalidTransaction> =>
+  Effect.suspend(() => {
+    const bad = checkReferences(data.kind)
+    if (bad) return Effect.fail(bad)
+    return Effect.try({
+      try: () => T.encode(data),
+      catch: (e) => new InvalidTransaction({ reason: e instanceof Error ? e.message : String(e) })
+    })
+  })
+
+/** A failure status's fields, for the errors that report one. */
+export const failureFields = (status: Extract<Status, { _tag: "Failure" }>) => ({
+  description: status.description,
+  ...(status.command !== undefined && { command: status.command }),
+  ...(status.abortCode !== undefined && { abortCode: status.abortCode }),
+  ...(status.location !== undefined && {
+    location: `${status.location.package}::${status.location.module}${status.location.function !== undefined ? `::${status.location.function}` : ""}`
+  })
+})
+
 /**
  * Estimate the budget with a dry run: maximum budget, empty payment and a
  * `ValidDuring` expiration, so the node mocks the gas coin and the estimate
@@ -769,23 +919,21 @@ const programmable = (draft: Draft) =>
  */
 export const budget = (
   plan: Plan
-): Effect.Effect<Plan, RpcError | GasEstimationFailed | Incomplete, Transactions | Chain> =>
+): Effect.Effect<Plan, RpcError | GasEstimationFailed | Incomplete | InvalidTransaction, Transactions | Chain> =>
   plan.gasBudget !== undefined
     ? Effect.succeed(plan)
     : Effect.gen(function*() {
       const price = plan.gasPrice ?? (yield* Effect.flatMap(Effect.service(Chain), (c) => c.referenceGasPrice))
       const kind = yield* programmable(plan.draft)
-      const dryRun = T.encode({
+      const dryRun = yield* encode({
         _tag: "V1",
         kind,
         sender: plan.sender,
         gasData: { payment: [], owner: plan.gasOwner ?? plan.sender, price, budget: MAX_BUDGET },
-        expiration: plan.expiration ?? (yield* validDuring())
+        expiration: plan.expiration ?? validDuringFor(yield* chainInfo(plan))
       })
       const sim = yield* Effect.flatMap(Effect.service(Transactions), (t) => t.simulate(dryRun))
-      if (sim.effects.status._tag === "Failure") {
-        return yield* new GasEstimationFailed({ description: sim.effects.status.description })
-      }
+      if (sim.effects.status._tag === "Failure") return yield* new GasEstimationFailed(failureFields(sim.effects.status))
       const g = sim.effects.gasUsed
       const base = g.computationCost + GAS_SAFE_OVERHEAD * price
       const total = base + g.storageCost - g.storageRebate
@@ -795,9 +943,33 @@ export const budget = (
 /** How gas is paid. A strategy is just a step. */
 export type PaymentStrategy<E = never, R = never> = (plan: Plan) => Effect.Effect<Plan, E, R>
 
+/** The errors and requirements of the built-in strategies (`auto`, `addressBalance`, `coins`). */
+export type DefaultPaymentError = RpcError | InsufficientGas | Incomplete
+export type DefaultPaymentServices = Chain | Coins
+
 /** Does any command take the gas coin as an argument? */
 export const usesGasCoin = (draft: Draft): boolean =>
   draft.commands.some((c) => argumentsOf(c).some((a) => a._tag === "GasCoin"))
+
+const decodeU64 = (bytes: Uint8Array): bigint | undefined =>
+  bytes.length === 8 ? new DataView(bytes.buffer, bytes.byteOffset, 8).getBigUint64(0, true) : undefined
+
+/**
+ * What commands split off the gas coin, as far as the draft says: the pure
+ * amounts of every `SplitCoins(GasCoin, ...)`. Other uses (a Move call taking
+ * the gas coin, an amount computed on chain) can't be known before execution.
+ */
+export const gasCoinSpend = (draft: Draft): bigint => {
+  let total = 0n
+  for (const c of draft.commands) {
+    if (c._tag !== "SplitCoins" || c.coin._tag !== "GasCoin") continue
+    for (const a of c.amounts) {
+      const input = a._tag === "Input" ? draft.inputs[a.value] : undefined
+      if (input?._tag === "Pure") total += decodeU64(input.bytes) ?? 0n
+    }
+  }
+  return total
+}
 
 /** Who a withdrawal input draws from. */
 const withdrawalOwner = (w: T.FundsWithdrawal, plan: Plan): Address =>
@@ -826,7 +998,7 @@ export const reservedBy = (plan: Plan, owner: Address, coinType: string): bigint
  * which is a visible failure rather than a silently widened validity).
  */
 const keepExpiration = (plan: Plan) =>
-  plan.expiration !== undefined ? Effect.succeed(plan.expiration) : validDuring()
+  plan.expiration !== undefined ? Effect.succeed(plan.expiration) : Effect.map(chainInfo(plan), validDuringFor)
 
 const needBudget = (plan: Plan) =>
   plan.gasBudget === undefined
@@ -834,72 +1006,102 @@ const needBudget = (plan: Plan) =>
     : Effect.succeed(plan.gasBudget)
 
 /** A reservation ref for whatever the owner's SUI address balance holds beyond the transaction's own withdrawals. */
-const reservation = (owner: Address, available: bigint) =>
-  Effect.map(Effect.flatMap(Effect.service(Chain), (c) => c.info), (info) =>
-    CoinReservation.make({ reserved: available, owner, chainId: info.chainId, epoch: info.epoch }))
+const reservation = (plan: Plan, owner: Address, available: bigint) =>
+  Effect.map(chainInfo(plan), (info) => CoinReservation.make({ reserved: available, owner, chainId: info.chainId, epoch: info.epoch }))
+
+const gasBalance = (plan: Plan, owner: Address) =>
+  Effect.flatMap(Effect.service(Coins), (c) => balanceOf(plan, c, owner, TypeTag.SUI))
 
 /**
  * Pay entirely from the gas owner's SUI address balance, or fail with
  * `InsufficientGas` before anything is signed. No coin is touched: the payment
  * is empty with a `ValidDuring` expiration, or, when the transaction uses the
- * gas coin, a single coin reservation that funds it from the balance.
+ * gas coin, a single coin reservation that funds it from the balance (which
+ * must then also cover what commands split off the gas coin).
  */
-export const addressBalance: PaymentStrategy<RpcError | InsufficientGas | Incomplete, Chain | Coins> = (plan) =>
+export const addressBalance: PaymentStrategy<DefaultPaymentError, DefaultPaymentServices> = (plan) =>
   Effect.gen(function*() {
     if (plan.gasPayment !== undefined) return plan
     const budget = yield* needBudget(plan)
     const owner = plan.gasOwner ?? plan.sender
-    const balance = yield* Effect.flatMap(Effect.service(Coins), (c) => c.getBalance(owner, TypeTag.SUI))
+    const balance = yield* gasBalance(plan, owner)
     const available = balance.addressBalance - reservedBy(plan, owner, TypeTag.SUI)
-    if (available < budget) return yield* new InsufficientGas({ owner, required: budget, available: available < 0n ? 0n : available })
-    if (usesGasCoin(plan.draft)) return { ...plan, gasPayment: [yield* reservation(owner, available)] }
+    const gasCoin = usesGasCoin(plan.draft)
+    const required = budget + (gasCoin ? gasCoinSpend(plan.draft) : 0n)
+    if (available < required) return yield* new InsufficientGas({ owner, required, available: available < 0n ? 0n : available })
+    if (gasCoin) return { ...plan, gasPayment: [yield* reservation(plan, owner, available)] }
     return { ...plan, gasPayment: [], expiration: yield* keepExpiration(plan) }
   })
 
-const pickCoins = (plan: Plan, owner: Address, target: bigint, limit: number) =>
+/** SUI coins of `owner` not already used as inputs, in listing order, until they reach `target` or `limit` coins (`target` undefined: all of them, up to `limit`). */
+const pickCoins = (plan: Plan, owner: Address, target: bigint | undefined, limit: number) =>
   Effect.gen(function*() {
     const used = new Set(plan.draft.inputs.flatMap((i) => (i._tag === "Object" ? [i.value.objectId] : [])))
     const picked = yield* Effect.flatMap(Effect.service(Coins), (c) =>
-      c.list(owner).pipe(
+      coinsOf(plan, c, owner, TypeTag.SUI).pipe(
         Stream.filter((coin) => !used.has(coin.ref.objectId)),
         Stream.scan((): { total: bigint; refs: Array<T.ObjectRef> } => ({ total: 0n, refs: [] }), (acc, coin) => ({
           total: acc.total + coin.balance,
           refs: [...acc.refs, coin.ref]
         })),
-        Stream.takeUntil((acc) => acc.total >= target || acc.refs.length >= limit),
+        Stream.takeUntil((acc) => (target !== undefined && acc.total >= target) || acc.refs.length >= limit),
         Stream.runLast
       ))
     return Option.getOrElse(picked, () => ({ total: 0n, refs: [] as Array<T.ObjectRef> }))
   })
 
 /**
+ * Payment when commands spend from the gas coin: every SUI coin of the owner
+ * not used as an input (up to the 256-object limit, one taken by a reservation
+ * of the address balance when it holds any), as `@mysten/sui` does, so the gas
+ * coin holds everything the owner has. Fails with `InsufficientGas` when that
+ * is less than the budget plus the amounts split off the gas coin.
+ */
+const payWithGasCoin = (plan: Plan, owner: Address, budget: bigint, available: bigint) =>
+  Effect.gen(function*() {
+    const fromBalance = available > 0n ? available : 0n
+    const limit = fromBalance > 0n ? MAX_GAS_OBJECTS - 1 : MAX_GAS_OBJECTS
+    const required = budget + gasCoinSpend(plan.draft)
+    // The prefetched first page, when it already covers what the gas coin must
+    // hold (as `@mysten/sui` uses its first page); otherwise every coin, listed.
+    const used = new Set(plan.draft.inputs.flatMap((i) => (i._tag === "Object" ? [i.value.objectId] : [])))
+    const page = plan.prefetched?.owner === owner ? plan.prefetched.gasCoins?.filter((c) => !used.has(c.ref.objectId)).slice(0, limit) : undefined
+    const pageTotal = page?.reduce((s, c) => s + c.balance, 0n) ?? 0n
+    const coins = page !== undefined && page.length > 0 && pageTotal + fromBalance >= required
+      ? { total: pageTotal, refs: page.map((c) => c.ref) }
+      : yield* pickCoins(plan, owner, undefined, limit)
+    const total = coins.total + fromBalance
+    if (total < required || (fromBalance === 0n && coins.refs.length === 0)) {
+      return yield* new InsufficientGas({ owner, required, available: total })
+    }
+    const refs = fromBalance > 0n ? [yield* reservation(plan, owner, fromBalance), ...coins.refs] : coins.refs
+    return { ...plan, gasPayment: refs }
+  })
+
+const MAX_GAS_OBJECTS = 256
+
+/**
  * The recommended default, matching `@mysten/sui`: pay from the address
  * balance when it covers the budget (plus the transaction's own SUI
- * withdrawals) and the gas coin isn't used; otherwise pay with SUI coins,
- * and when the gas coin is used let a coin reservation add whatever the
- * address balance holds. Fails with `InsufficientGas` when neither covers it.
+ * withdrawals) and the gas coin isn't used. When commands use the gas coin,
+ * pay with every SUI coin, plus a coin reservation of the address balance, so
+ * the gas coin can cover what they spend. Otherwise pay with SUI coins up to
+ * the budget. Fails with `InsufficientGas` when none of that covers it.
  */
-export const auto: PaymentStrategy<RpcError | InsufficientGas | Incomplete, Chain | Coins> = (plan) =>
+export const auto: PaymentStrategy<DefaultPaymentError, DefaultPaymentServices> = (plan) =>
   Effect.gen(function*() {
     if (plan.gasPayment !== undefined) return plan
     const budget = yield* needBudget(plan)
     const owner = plan.gasOwner ?? plan.sender
     const gasCoin = usesGasCoin(plan.draft)
-    const balance = yield* Effect.flatMap(Effect.service(Coins), (c) => c.getBalance(owner, TypeTag.SUI))
-    const withdrawals = reservedBy(plan, owner, TypeTag.SUI)
-    const available = balance.addressBalance - withdrawals
+    const balance = yield* gasBalance(plan, owner)
+    const available = balance.addressBalance - reservedBy(plan, owner, TypeTag.SUI)
 
     if (budget === 0n || (!gasCoin && available >= budget)) {
       return { ...plan, gasPayment: [], expiration: yield* keepExpiration(plan) }
     }
-    if (gasCoin && available > 0n) {
-      const coins = yield* pickCoins(plan, owner, budget > available ? budget - available : 0n, 255)
-      if (coins.total + available < budget) {
-        return yield* new InsufficientGas({ owner, required: budget, available: coins.total + available })
-      }
-      return { ...plan, gasPayment: [yield* reservation(owner, available), ...coins.refs] }
-    }
-    const coins = yield* pickCoins(plan, owner, budget, 256)
+    if (gasCoin) return yield* payWithGasCoin(plan, owner, budget, available)
+    const coins = yield* pickCoins(plan, owner, budget, MAX_GAS_OBJECTS)
     if (coins.total < budget) {
       return yield* new InsufficientGas({ owner, required: budget, available: coins.total + (available > 0n ? available : 0n) })
     }
@@ -921,15 +1123,21 @@ export const unchecked: PaymentStrategy<RpcError, Chain> = (plan) =>
 export const fixed = (payment: ReadonlyArray<T.ObjectRef>): PaymentStrategy => (plan) =>
   Effect.succeed({ ...plan, gasPayment: payment })
 
-/** Select SUI coins owned by the gas owner until they cover the budget (at most 256). */
+/**
+ * Pay with SUI coins owned by the gas owner (at most 256): until they cover the
+ * budget, or, when commands use the gas coin, all of them (which must cover the
+ * budget plus what is split off the gas coin).
+ */
 export const coins: PaymentStrategy<RpcError | InsufficientGas | Incomplete, Coins> = (plan) =>
   Effect.gen(function*() {
     if (plan.gasPayment !== undefined) return plan
     if (plan.gasBudget === undefined) return yield* new Incomplete({ missing: "gas budget (run Resolve.budget first)" })
     const owner = plan.gasOwner ?? plan.sender
     const budget = plan.gasBudget
-    const best = yield* pickCoins(plan, owner, budget, 256)
-    if (best.total < budget) return yield* new InsufficientGas({ owner, required: budget, available: best.total })
+    const gasCoin = usesGasCoin(plan.draft)
+    const required = budget + (gasCoin ? gasCoinSpend(plan.draft) : 0n)
+    const best = yield* pickCoins(plan, owner, gasCoin ? undefined : budget, MAX_GAS_OBJECTS)
+    if (best.total < required || (gasCoin && best.refs.length === 0)) return yield* new InsufficientGas({ owner, required, available: best.total })
     return { ...plan, gasPayment: best.refs }
   })
 
@@ -937,13 +1145,14 @@ export const coins: PaymentStrategy<RpcError | InsufficientGas | Incomplete, Coi
 // finish
 // -----------------------------------------------------------------------------
 
-export const finish = (plan: Plan): Effect.Effect<T.TransactionData, Incomplete> =>
+/** The final `TransactionData`; fails with `InvalidTransaction` if it can't be encoded as it stands. */
+export const finish = (plan: Plan): Effect.Effect<T.TransactionData, Incomplete | InvalidTransaction> =>
   Effect.gen(function*() {
     const kind = yield* programmable(plan.draft)
     if (plan.gasPrice === undefined) return yield* new Incomplete({ missing: "gas price" })
     if (plan.gasBudget === undefined) return yield* new Incomplete({ missing: "gas budget" })
     if (plan.gasPayment === undefined) return yield* new Incomplete({ missing: "gas payment" })
-    return {
+    const data: T.TransactionData = {
       _tag: "V1",
       kind,
       sender: plan.sender,
@@ -954,5 +1163,7 @@ export const finish = (plan: Plan): Effect.Effect<T.TransactionData, Incomplete>
         budget: plan.gasBudget
       },
       expiration: plan.expiration ?? { _tag: "None" }
-    } satisfies T.TransactionData
+    }
+    yield* encode(data)
+    return data
   })

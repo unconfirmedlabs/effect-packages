@@ -18,6 +18,8 @@ export type Owner =
   | { readonly _tag: "Shared"; readonly initialSharedVersion: bigint }
   | { readonly _tag: "Immutable" }
   | { readonly _tag: "ConsensusAddressOwner"; readonly startVersion: bigint; readonly address: Address }
+  /** An owner kind newer than this SDK (the transport's raw kind number). */
+  | { readonly _tag: "Unknown"; readonly kind: number }
 
 export interface SuiObject {
   readonly objectId: Address
@@ -34,11 +36,11 @@ export interface SuiObject {
 
 export const refOf = (o: SuiObject): ObjectRef => ({ objectId: o.objectId, version: o.version, digest: o.digest })
 
-export class ObjectNotFound extends Schema.TaggedError<ObjectNotFound>()("ObjectNotFound", {
+export class ObjectNotFound extends /* @__PURE__ */ Schema.TaggedError<ObjectNotFound>()("ObjectNotFound", {
   objectId: Schema.String
 }) {}
 
-export class ObjectDecodeError extends Schema.TaggedError<ObjectDecodeError>()("ObjectDecodeError", {
+export class ObjectDecodeError extends /* @__PURE__ */ Schema.TaggedError<ObjectDecodeError>()("ObjectDecodeError", {
   objectId: Schema.String,
   type: Schema.String,
   issue: Schema.String
@@ -60,7 +62,7 @@ export interface ListOwnedOptions {
   readonly pageSize?: number
 }
 
-export class Objects extends Context.Service<Objects, {
+export class Objects extends /* @__PURE__ */ Context.Service<Objects, {
   readonly get: (objectId: Address) => Effect.Effect<SuiObject, ObjectNotFound | RpcError>
   readonly listOwned: (owner: Address, options?: ListOwnedOptions) => Stream.Stream<SuiObject, RpcError>
 }>()("@unconfirmed/sui/Objects") {}

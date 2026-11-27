@@ -29,7 +29,7 @@ export interface Event {
   readonly eventIndex: number
 }
 
-export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
+export class EventDecodeError extends /* @__PURE__ */ Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
   transactionDigest: Schema.String,
   eventIndex: Schema.Number,
   type: Schema.String,
@@ -114,9 +114,9 @@ export interface ListOptions {
   readonly descending?: boolean
 }
 
-export class Events extends Context.Service<Events, {
+export class Events extends /* @__PURE__ */ Context.Service<Events, {
   /** Matching events in ledger order, across as many requests as it takes. An empty `any()` matches nothing. */
   readonly list: (options?: ListOptions) => Stream.Stream<Event, RpcError>
-  /** Matching events as they are emitted, from the node's current tip. Never ends successfully. */
+  /** Matching events as they are emitted, from the node's current tip. Ends cleanly if the server closes the stream (resubscribe to continue); a cut-off stream fails. */
   readonly subscribe: (filter?: EventFilter) => Stream.Stream<Event, RpcError>
 }>()("@unconfirmed/sui/Events") {}

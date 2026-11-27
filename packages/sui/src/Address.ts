@@ -20,7 +20,7 @@ export const normalize = (s: string): Address => {
 }
 
 /** Decode a value someone typed: exactly 64 hex digits, `0x` optional. A truncated paste is an error, not a padded address. */
-export const Strict: Schema.Codec<Address, string> = Schema.String.pipe(
+export const Strict: Schema.Codec<Address, string> = /* @__PURE__ */ Schema.String.pipe(
   Schema.check(Schema.isPattern(/^(0x)?[0-9a-fA-F]{64}$/)),
   Schema.decodeTo(
     Address,
@@ -38,8 +38,8 @@ export const fromPublicKey = (flag: number, publicKey: Uint8Array): Address => {
   return fromBytes(blake2b(input, { dkLen: 32 }))
 }
 
-export const ZERO = normalize("0x0")
-export const SUI_FRAMEWORK = normalize("0x2")
-export const SUI_SYSTEM = normalize("0x3")
-export const CLOCK = normalize("0x6")
-export const RANDOM = normalize("0x8")
+export const ZERO = /* @__PURE__ */ normalize("0x0")
+export const SUI_FRAMEWORK = /* @__PURE__ */ normalize("0x2")
+export const SUI_SYSTEM = /* @__PURE__ */ normalize("0x3")
+export const CLOCK = /* @__PURE__ */ normalize("0x6")
+export const RANDOM = /* @__PURE__ */ normalize("0x8")

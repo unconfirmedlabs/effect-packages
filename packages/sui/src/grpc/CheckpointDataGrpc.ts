@@ -11,7 +11,7 @@ import { CHECKPOINT_LIMIT, checkpointBounds, convert, pinned, resumable } from "
 const MASK = { paths: CHECKPOINT_PATHS }
 
 /** `CheckpointData` over gRPC: checkpoints read with their transactions, effects and events. */
-export const layer: Layer.Layer<CheckpointData, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<CheckpointData, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   CheckpointData,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

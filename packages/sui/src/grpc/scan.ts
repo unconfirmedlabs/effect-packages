@@ -7,6 +7,7 @@
 import * as Effect from "effect/Effect"
 import * as Stream from "effect/Stream"
 import { RpcError } from "../RpcError.ts"
+import { convert } from "./convert.ts"
 import type * as P from "./generated/proto.ts"
 import * as Rpc from "./generated/lean.ts"
 import type { GrpcWeb } from "./GrpcWeb.ts"
@@ -22,54 +23,87 @@ const budgetExhausted = (end: P.QueryEnd) => end.reason === 1 || end.reason === 
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
-/** Run a conversion that may throw on a malformed message; a throw is `DATA_LOSS`, not a defect. */
-export const convert = <A>(method: string, f: () => A): Effect.Effect<A, RpcError> =>
-  Effect.try({
-    try: f,
-    catch: (e) => new RpcError({ method, code: "DATA_LOSS", message: `malformed response: ${e instanceof Error ? e.message : String(e)}` })
-  })
+export { convert }
+
+export interface Recovery {
+  /**
+   * Called when a request fails with `error` after the scan reached `last`
+   * (`undefined` before any watermark): `"retry"` re-opens from `last`,
+   * `"end"` ends the scan cleanly, a failure fails it.
+   */
+  readonly recover: (error: RpcError, last: P.Watermark | undefined) => Effect.Effect<"retry" | "end", RpcError>
+  /** Consecutive recoveries without a new watermark before the error is raised instead (default 3). */
+  readonly attempts?: number
+}
 
 export const resumable = <F, A>(
   method: string,
   open: (resume: P.Watermark | undefined) => Stream.Stream<F, RpcError>,
-  read: (frame: F) => Frame<A>
+  read: (frame: F) => Frame<A>,
+  recovery?: Recovery
 ): Stream.Stream<A, RpcError> => {
   const fail = (message: string) => Stream.fail(new RpcError({ method, code: "DATA_LOSS", message }))
-  const go = (resume: P.Watermark | undefined): Stream.Stream<A, RpcError> =>
+  const maxAttempts = recovery?.attempts ?? 3
+  const go = (resume: P.Watermark | undefined, attempts: number): Stream.Stream<A, RpcError> =>
     Stream.suspend(() => {
-      let last: P.Watermark | undefined
+      let last = resume
       let stoppedEarly = false
+      let sawEnd = false
+      let recovered = false
       let items = 0
-      return Stream.concat(
-        open(resume).pipe(
-          Stream.mapEffect((f) =>
-            convert(method, () => {
-              const frame = read(f)
-              if (frame.watermark?.cursor) last = frame.watermark
-              if (frame.end && budgetExhausted(frame.end)) stoppedEarly = true
-              if (frame.item !== undefined) items++
-              return frame.item
-            })
-          ),
-          Stream.filter((a): a is A => a !== undefined)
+      const body = open(resume).pipe(
+        Stream.mapEffect((f) =>
+          convert(method, () => {
+            const frame = read(f)
+            if (frame.watermark?.cursor) last = frame.watermark
+            if (frame.end) {
+              sawEnd = true
+              if (budgetExhausted(frame.end)) stoppedEarly = true
+            }
+            if (frame.item !== undefined) items++
+            return frame.item
+          })
         ),
+        Stream.filter((a): a is A => a !== undefined)
+      )
+      const guarded = recovery === undefined ? body : body.pipe(
+        Stream.catch((error) => {
+          const progressed = last?.cursor !== undefined && !(resume?.cursor && sameBytes(resume.cursor, last.cursor))
+          const tries = progressed ? 1 : attempts + 1
+          if (tries > maxAttempts) return Stream.fail(error)
+          recovered = true
+          return Stream.unwrap(
+            Effect.map(recovery.recover(error, last), (next) => (next === "end" ? Stream.empty : go(last, tries)))
+          )
+        })
+      )
+      return Stream.concat(
+        guarded,
         Stream.suspend(() => {
+          if (recovered) return Stream.empty
+          // Every successful scan stream ends with exactly one `QueryEnd` frame;
+          // a stream without one was cut short and has not delivered its range.
+          if (!sawEnd) return fail("the scan stream ended without its QueryEnd frame")
           if (!stoppedEarly) return Stream.empty
           if (!last?.cursor) return fail("scan stopped at a budget without a resume cursor")
           if (items === 0 && resume?.cursor && sameBytes(resume.cursor, last.cursor)) {
             return fail("scan made no progress (the same resume cursor twice)")
           }
-          return go(last)
+          return go(last, 0)
         })
       )
     })
-  return go(undefined)
+  return go(undefined, 0)
 }
 
 /** The node's ledger window: `[lowest, tip + 1)`, read fresh. */
 export const ledgerWindow = (grpc: GrpcWeb["Service"]) =>
   grpc.unary(Rpc.LedgerService_GetServiceInfo, {}).pipe(
-    Effect.map((i) => ({ lowest: i.lowest_available_checkpoint ?? 0n, end: (i.checkpoint_height ?? 0n) + 1n }))
+    Effect.flatMap((i) =>
+      i.checkpoint_height === undefined
+        ? Effect.fail(new RpcError({ method: Rpc.LedgerService_GetServiceInfo.path, code: "UNAVAILABLE", message: "incomplete response: no checkpoint_height" }))
+        : Effect.succeed({ lowest: i.lowest_available_checkpoint ?? 0n, end: i.checkpoint_height + 1n })
+    )
   )
 
 /**

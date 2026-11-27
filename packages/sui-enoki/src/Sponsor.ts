@@ -255,6 +255,7 @@ export const run = <A, E, R>(
   | Objects.ObjectNotFound
   | RpcError.RpcError
   | Resolve.Incomplete
+  | Resolve.InvalidTransaction
   | Resolve.InsufficientBalance
   | Resolve.InvalidBalanceIntent
   | Resolve.AllowanceError

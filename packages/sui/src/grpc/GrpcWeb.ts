@@ -18,7 +18,6 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest"
 import { type RpcCode, RpcCode as GrpcCode, RpcError } from "../RpcError.ts"
 import type { Rpc } from "./Rpc.ts"
 
-
 // -----------------------------------------------------------------------------
 // Framing
 // -----------------------------------------------------------------------------
@@ -52,33 +51,103 @@ const statusOf = (method: string, get: (key: string) => string | undefined): Rpc
 }
 
 interface Frame {
-  readonly trailer: boolean
+  /** `data` and `trailer` are wire frames; `incomplete` marks a body that ended inside a frame or before its trailers. */
+  readonly kind: "data" | "trailer" | "incomplete"
   readonly payload: Uint8Array
 }
 
-/** Incrementally split a gRPC-web body into frames. */
-const toFrames = <E>(body: Stream.Stream<Uint8Array, E>): Stream.Stream<Frame, E> =>
-  body.pipe(
-    Stream.mapAccum(() => new Uint8Array(0), (buffer: Uint8Array, chunk: Uint8Array) => {
-      const merged = buffer.length === 0 ? chunk : concat(buffer, chunk)
-      const out: Array<Frame> = []
-      let pos = 0
-      while (merged.length - pos >= 5) {
-        const len = new DataView(merged.buffer, merged.byteOffset + pos + 1, 4).getUint32(0, false)
-        if (merged.length - pos - 5 < len) break
-        out.push({ trailer: (merged[pos]! & 0x80) !== 0, payload: merged.subarray(pos + 5, pos + 5 + len) })
-        pos += 5 + len
+interface Reassembly {
+  /** Body chunks not yet consumed, oldest first; the first `offset` bytes of `chunks[0]` are consumed. */
+  readonly chunks: Array<Uint8Array>
+  offset: number
+  size: number
+  trailerSeen: boolean
+}
+
+/** Consume `n` buffered bytes; each byte is copied at most once. */
+const take = (s: Reassembly, n: number): Uint8Array => {
+  const first = s.chunks[0]!
+  let out: Uint8Array
+  if (first.length - s.offset >= n) {
+    out = first.subarray(s.offset, s.offset + n)
+    s.offset += n
+  } else {
+    out = new Uint8Array(n)
+    let filled = 0
+    while (filled < n) {
+      const c = s.chunks[0]!
+      const k = Math.min(c.length - s.offset, n - filled)
+      out.set(c.subarray(s.offset, s.offset + k), filled)
+      filled += k
+      s.offset += k
+      if (s.offset === c.length) {
+        s.chunks.shift()
+        s.offset = 0
       }
-      return [merged.slice(pos), out] as const
+    }
+  }
+  if (s.chunks.length > 0 && s.offset === s.chunks[0]!.length) {
+    s.chunks.shift()
+    s.offset = 0
+  }
+  s.size -= n
+  return out
+}
+
+/** The 5-byte frame header at the front of the buffer (`size >= 5`), not consumed. */
+const peekHeader = (s: Reassembly) => {
+  const h = new Uint8Array(5)
+  let filled = 0
+  for (let i = 0, off = s.offset; filled < 5; i++, off = 0) {
+    const c = s.chunks[i]!
+    const k = Math.min(c.length - off, 5 - filled)
+    h.set(c.subarray(off, off + k), filled)
+    filled += k
+  }
+  return { flags: h[0]!, length: new DataView(h.buffer).getUint32(1, false) }
+}
+
+/**
+ * Incrementally split a gRPC-web body into frames, in time linear in its size.
+ * A body that ends inside a frame or without a trailers frame ends with an
+ * `incomplete` marker: the server or a proxy cut the response short.
+ */
+export const toFrames = <E>(body: Stream.Stream<Uint8Array, E>): Stream.Stream<Frame, E> =>
+  body.pipe(
+    Stream.mapAccum((): Reassembly => ({ chunks: [], offset: 0, size: 0, trailerSeen: false }), (s, chunk: Uint8Array) => {
+      if (chunk.length > 0) {
+        s.chunks.push(chunk)
+        s.size += chunk.length
+      }
+      const out: Array<Frame> = []
+      while (s.size >= 5) {
+        const { flags, length } = peekHeader(s)
+        if (s.size - 5 < length) break
+        take(s, 5)
+        const payload = length === 0 ? new Uint8Array(0) : take(s, length)
+        const trailer = (flags & 0x80) !== 0
+        if (trailer) s.trailerSeen = true
+        out.push({ kind: trailer ? "trailer" : "data", payload })
+      }
+      return [s, out] as const
+    }, {
+      onHalt: (s): ReadonlyArray<Frame> => (s.trailerSeen && s.size === 0 ? [] : [{ kind: "incomplete", payload: new Uint8Array(0) }])
     })
   )
 
-const concat = (a: Uint8Array, b: Uint8Array) => {
-  const out = new Uint8Array(a.length + b.length)
-  out.set(a)
-  out.set(b, a.length)
-  return out
-}
+/** gRPC's HTTP-to-status mapping, for a response that carries no `grpc-status` (5xx are kept retryable). */
+export const httpCode = (status: number): RpcCode =>
+  status === 400
+    ? "INTERNAL"
+    : status === 401
+    ? "UNAUTHENTICATED"
+    : status === 403
+    ? "PERMISSION_DENIED"
+    : status === 404
+    ? "UNIMPLEMENTED"
+    : status === 429 || status >= 500
+    ? "UNAVAILABLE"
+    : "UNKNOWN"
 
 // -----------------------------------------------------------------------------
 // Service
@@ -91,7 +160,7 @@ export interface GrpcWebOptions {
   readonly headers?: Readonly<Record<string, string>>
 }
 
-export class GrpcWeb extends Context.Service<GrpcWeb, {
+export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
   readonly unary: <I, O>(method: Rpc<I, O, false>, request: I) => Effect.Effect<O, RpcError>
   readonly serverStream: <I, O>(method: Rpc<I, O, true>, request: I) => Stream.Stream<O, RpcError>
 }>()("@unconfirmed/sui/GrpcWeb") {
@@ -107,22 +176,28 @@ export class GrpcWeb extends Context.Service<GrpcWeb, {
           const codec = method.codec()
           const fail = (message: string, code: RpcCode = "UNAVAILABLE") => new RpcError({ method: path, code, message })
 
-          return HttpClientRequest.post(`${baseUrl}/${path}`).pipe(
-            HttpClientRequest.setHeaders({ ...options.headers, "x-grpc-web": "1", accept: "application/grpc-web+proto" }),
-            HttpClientRequest.bodyUint8Array(frame(codec.encode(request)), "application/grpc-web+proto"),
-            http.execute,
-            Effect.mapError((e) => fail(e.message)),
+          return Effect.try({
+            try: () => frame(codec.encode(request)),
+            catch: (e) => fail(`invalid request: ${e instanceof Error ? e.message : String(e)}`, "INVALID_ARGUMENT")
+          }).pipe(
+            Effect.flatMap((body) =>
+              HttpClientRequest.post(`${baseUrl}/${path}`).pipe(
+                HttpClientRequest.setHeaders({ ...options.headers, "x-grpc-web": "1", accept: "application/grpc-web+proto" }),
+                HttpClientRequest.bodyUint8Array(body, "application/grpc-web+proto"),
+                http.execute,
+                Effect.mapError((e) => fail(e.message))
+              )
+            ),
             Effect.flatMap((res) => {
               // A trailers-only response carries its status in the headers.
               const err = statusOf(path, (k) => res.headers[k])
               if (err) return Effect.fail(err)
-              if (res.status !== 200) {
-                return Effect.fail(fail(`HTTP ${res.status}`, res.status >= 500 || res.status === 429 ? "UNAVAILABLE" : "UNKNOWN"))
-              }
+              if (res.status !== 200) return Effect.fail(fail(`HTTP ${res.status}`, httpCode(res.status)))
               return Effect.succeed(
                 toFrames(res.stream.pipe(Stream.mapError((e) => fail(e.message)))).pipe(
                   Stream.mapEffect((f) => {
-                    if (f.trailer) {
+                    if (f.kind === "incomplete") return Effect.fail(fail("the response ended before its gRPC trailers"))
+                    if (f.kind === "trailer") {
                       const t = parseTrailers(f.payload)
                       const e = statusOf(path, (k) => t[k])
                       return e ? Effect.fail(e) : Effect.succeed<ReadonlyArray<O>>([])
@@ -142,8 +217,9 @@ export class GrpcWeb extends Context.Service<GrpcWeb, {
 
         return GrpcWeb.of({
           unary: (method, request) =>
+            // Read through to the trailers: an error status after the message must not be dropped.
             call(method, request).pipe(
-              Stream.runHead,
+              Stream.runFold((): Option.Option<any> => Option.none(), (acc, m) => (Option.isNone(acc) ? Option.some(m) : acc)),
               Effect.flatMap(Option.match({
                 onNone: () => Effect.fail(new RpcError({ method: method.path, code: "INTERNAL", message: "no response message" })),
                 onSome: Effect.succeed

@@ -168,9 +168,9 @@ describe("generated API", () => {
       // @ts-expect-error a non-key struct value can't be an object id
       fixture.setPair({ arguments: ["0x1", "0x2"] })
       const pair: fixture.Pair<number, bigint> = { first: 1, second: 2n }
-      // Error and requirement channels are exact: no `Package` in R, failures only from pure encoding.
-      const noArgs: Effect.Effect<readonly [], never, Ptb.PtbBuilder> = fixture.newVault()
-      const objects: Effect.Effect<readonly [T.Argument], never, Ptb.PtbBuilder> = fixture.name({ arguments: ["0x1"] })
+      // Error and requirement channels are exact: no `Package` in R, failures only from parsing ids, types and pure values.
+      const noArgs: Effect.Effect<readonly [], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.newVault()
+      const objects: Effect.Effect<readonly [T.Argument], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.name({ arguments: ["0x1"] })
       const mixed: Effect.Effect<readonly [], Ptb.InvalidPureValue, Ptb.PtbBuilder> = fixture.rename({ arguments: ["0x1", "n"] })
       return [pair, noArgs, objects, mixed]
     }

@@ -30,6 +30,7 @@ import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
+import * as SchemaAST from "effect/SchemaAST"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "./Address.ts"
 import * as Hash from "./Hash.ts"
@@ -44,12 +45,12 @@ import * as TypeTag from "./TypeTag.ts"
 // -----------------------------------------------------------------------------
 
 /** Not v2 transaction JSON: wrong shape, a bad u64, address, digest, type tag or base64. */
-export class InvalidTransactionJson extends Schema.TaggedError<InvalidTransactionJson>()("InvalidTransactionJson", {
+export class InvalidTransactionJson extends /* @__PURE__ */ Schema.TaggedError<InvalidTransactionJson>()("InvalidTransactionJson", {
   issue: Schema.String
 }) {}
 
 /** Well-formed, but uses something this SDK can't represent faithfully. */
-export class UnsupportedTransactionJson extends Schema.TaggedError<UnsupportedTransactionJson>()(
+export class UnsupportedTransactionJson extends /* @__PURE__ */ Schema.TaggedError<UnsupportedTransactionJson>()(
   "UnsupportedTransactionJson",
   { construct: Schema.String, reason: Schema.String }
 ) {}
@@ -61,16 +62,16 @@ export class UnsupportedTransactionJson extends Schema.TaggedError<UnsupportedTr
 const U64_MAX = (1n << 64n) - 1n
 
 /** A u64 as Mysten writes it: a decimal string or a safe integer. */
-export const JsonU64 = Schema.Union([
+export const JsonU64 = /* @__PURE__ */ Schema.Union([
   Schema.Int.check(Schema.makeFilter((n) => (n >= 0 && Number.isSafeInteger(n)) || "expected a non-negative safe integer")),
   Schema.String.check(Schema.makeFilter((s) => (/^\d+$/.test(s) && BigInt(s) <= U64_MAX) || "expected a u64 decimal string"))
 ])
 
 /** Any hex address; normalized on decode, like Mysten's `SuiAddress`. */
-export const JsonAddress = Schema.String.check(Schema.isPattern(/^(0x)?[0-9a-fA-F]{1,64}$/))
+export const JsonAddress = /* @__PURE__ */ Schema.String.check(Schema.isPattern(/^(0x)?[0-9a-fA-F]{1,64}$/))
 
-const U32 = Schema.Int.check(Schema.makeFilter((n) => (n >= 0 && n < 2 ** 32) || "expected a u32"))
-const Index = Schema.Int.check(Schema.makeFilter((n) => (n >= 0 && n < 65536) || "expected a u16 index"))
+const U32 = /* @__PURE__ */ Schema.Int.check(Schema.makeFilter((n) => (n >= 0 && n < 2 ** 32) || "expected a u32"))
+const Index = /* @__PURE__ */ Schema.Int.check(Schema.makeFilter((n) => (n >= 0 && n < 65536) || "expected a u16 index"))
 const Base64 = Schema.String
 
 /** `{ [key]: value, $kind?: key }`, Mysten's enum encoding. */
@@ -79,7 +80,7 @@ const variant = <K extends string, S extends Schema.Top>(key: K, value: S) =>
     & { readonly [P in K]: S }
     & { readonly $kind: Schema.optionalKey<Schema.Literal<K>> })
 
-export const Argument = Schema.Union([
+export const Argument = /* @__PURE__ */ Schema.Union([
   variant("GasCoin", Schema.Literal(true)),
   Schema.Struct({
     Input: Index,
@@ -91,9 +92,9 @@ export const Argument = Schema.Union([
 ])
 export type Argument = typeof Argument.Type
 
-export const ObjectRef = Schema.Struct({ objectId: JsonAddress, version: JsonU64, digest: Bcs.Digest })
+export const ObjectRef = /* @__PURE__ */ Schema.Struct({ objectId: JsonAddress, version: JsonU64, digest: Bcs.Digest })
 
-export const ObjectArg = Schema.Union([
+export const ObjectArg = /* @__PURE__ */ Schema.Union([
   variant("ImmOrOwnedObject", ObjectRef),
   variant(
     "SharedObject",
@@ -107,7 +108,7 @@ export const ObjectArg = Schema.Union([
   variant("Receiving", ObjectRef)
 ])
 
-export const FundsWithdrawal = Schema.Struct({
+export const FundsWithdrawal = /* @__PURE__ */ Schema.Struct({
   reservation: variant("MaxAmountU64", JsonU64),
   typeArg: variant("Balance", Schema.String),
   withdrawFrom: Schema.Union([
@@ -117,7 +118,7 @@ export const FundsWithdrawal = Schema.Struct({
   ])
 })
 
-export const CallArg = Schema.Union([
+export const CallArg = /* @__PURE__ */ Schema.Union([
   variant("Object", ObjectArg),
   variant("Pure", Schema.Struct({ bytes: Base64 })),
   variant("UnresolvedPure", Schema.Struct({ value: Schema.Unknown })),
@@ -135,13 +136,13 @@ export const CallArg = Schema.Union([
 ])
 export type CallArg = typeof CallArg.Type
 
-export const Intent = Schema.Struct({
+export const Intent = /* @__PURE__ */ Schema.Struct({
   name: Schema.String,
   inputs: Schema.Record(Schema.String, Schema.Union([Argument, Schema.Array(Argument)])),
   data: Schema.Record(Schema.String, Schema.Unknown)
 })
 
-export const Command = Schema.Union([
+export const Command = /* @__PURE__ */ Schema.Union([
   variant(
     "MoveCall",
     Schema.Struct({
@@ -179,7 +180,7 @@ const ValidDuringFields = {
   nonce: U32
 }
 
-export const Expiration = Schema.Union([
+export const Expiration = /* @__PURE__ */ Schema.Union([
   variant("None", Schema.Literal(true)),
   variant("Epoch", JsonU64),
   variant("ValidDuring", Schema.Struct(ValidDuringFields)),
@@ -192,7 +193,7 @@ export const Expiration = Schema.Union([
   )
 ])
 
-export const GasData = Schema.Struct({
+export const GasData = /* @__PURE__ */ Schema.Struct({
   budget: Schema.NullOr(JsonU64),
   price: Schema.NullOr(JsonU64),
   owner: Schema.NullOr(JsonAddress),
@@ -200,7 +201,7 @@ export const GasData = Schema.Struct({
 })
 
 /** `SerializedTransactionDataV2`: what `Transaction.toJSON()` produces. */
-export const TransactionJson = Schema.Struct({
+export const TransactionJson = /* @__PURE__ */ Schema.Struct({
   version: Schema.Literal(2),
   sender: Schema.optionalKey(Schema.NullOr(JsonAddress)),
   expiration: Schema.optionalKey(Schema.NullOr(Expiration)),
@@ -212,10 +213,10 @@ export const TransactionJson = Schema.Struct({
 export type TransactionJson = typeof TransactionJson.Type
 
 /** The same, as a JSON string. */
-export const TransactionJsonString = Schema.fromJsonString(TransactionJson)
+export const TransactionJsonString = /* @__PURE__ */ Schema.fromJsonString(TransactionJson)
 
 /** `CoinWithBalance` intent data. */
-const CoinWithBalanceData = Schema.Struct({
+const CoinWithBalanceData = /* @__PURE__ */ Schema.Struct({
   type: Schema.String,
   balance: JsonU64,
   outputKind: Schema.optionalKey(Schema.Literals(["coin", "balance"]))
@@ -224,7 +225,7 @@ const CoinWithBalanceData = Schema.Struct({
 export const COIN_WITH_BALANCE = "CoinWithBalance"
 
 /** `AllowanceBalance` intent data. */
-const AllowanceBalanceData = Schema.Struct({
+const AllowanceBalanceData = /* @__PURE__ */ Schema.Struct({
   objectId: Schema.String,
   funder: Schema.optionalKey(Schema.String),
   appType: Schema.optionalKey(Schema.String),
@@ -503,13 +504,34 @@ const KNOWN_COMMANDS = new Set([
   "$Intent"
 ])
 
-/** Every enum variant key in the v2 schema. */
-const VARIANT_KEYS = new Set([
-  "$Intent", "Balance", "Epoch", "FundsWithdrawal", "GasCoin", "ImmOrOwnedObject", "Input", "MakeMoveVec", "MaxAmountU64",
-  "MergeCoins", "MoveCall", "NestedResult", "None", "Object", "Publish", "Pure", "Receiving", "Result", "Sender",
-  "SenderAllowance", "SharedObject", "SplitCoins", "Sponsor", "TransferObjects", "UnresolvedObject", "UnresolvedPure",
-  "Upgrade", "ValidDuring"
-])
+/**
+ * Every enum variant key in the v2 schema, derived from the schema itself (a
+ * variant is a struct with an optional `$kind`), so a new variant can't be
+ * missed by the ambiguity guard. Computed on first use.
+ */
+let variantKeys: Set<string> | undefined
+const VARIANT_KEYS = (): Set<string> => {
+  if (variantKeys) return variantKeys
+  const keys = new Set<string>()
+  const seen = new Set<SchemaAST.AST>()
+  const visit = (n: SchemaAST.AST): void => {
+    if (seen.has(n)) return
+    seen.add(n)
+    if (SchemaAST.isObjects(n)) {
+      const names = n.propertySignatures.map((p) => String(p.name))
+      if (names.includes("$kind")) names.filter((k) => k !== "$kind" && /^[$A-Z]/.test(k)).forEach((k) => keys.add(k))
+      n.propertySignatures.forEach((p) => visit(p.type))
+      n.indexSignatures.forEach((i) => visit(i.type))
+    } else if (SchemaAST.isUnion(n)) n.types.forEach(visit)
+    else if (SchemaAST.isArrays(n)) {
+      n.elements.forEach(visit)
+      n.rest.forEach(visit)
+    } else if (SchemaAST.isSuspend(n)) visit(n.thunk())
+    n.encoding?.forEach((link) => visit(link.to))
+  }
+  visit(TransactionJson.ast)
+  return variantKeys = keys
+}
 
 /**
  * An object carrying two enum variants (`{ "Pure": …, "Object": … }`) reads as
@@ -525,7 +547,7 @@ const ambiguousVariant = (v: unknown, path: string): InvalidTransactionJson | un
     }
     return undefined
   }
-  const variants = Object.keys(v).filter((k) => VARIANT_KEYS.has(k))
+  const variants = Object.keys(v).filter((k) => VARIANT_KEYS().has(k))
   if (variants.length > 1) {
     return new InvalidTransactionJson({ issue: `${path || "transaction"} has more than one enum variant: ${variants.join(", ")}` })
   }
@@ -565,9 +587,9 @@ const unknownVariant = (input: unknown): UnsupportedTransactionJson | undefined 
   return undefined
 }
 
-const decodeJsonObject = Schema.decodeUnknownResult(TransactionJson)
-const decodeCoinWithBalance = Schema.decodeUnknownResult(CoinWithBalanceData)
-const decodeAllowanceBalance = Schema.decodeUnknownResult(AllowanceBalanceData)
+const decodeJsonObject = /* @__PURE__ */ Schema.decodeUnknownResult(TransactionJson)
+const decodeCoinWithBalance = /* @__PURE__ */ Schema.decodeUnknownResult(CoinWithBalanceData)
+const decodeAllowanceBalance = /* @__PURE__ */ Schema.decodeUnknownResult(AllowanceBalanceData)
 
 /** Validate a parsed JSON value (or a JSON string) against the v2 schema. */
 export const parse = (input: unknown): Effect.Effect<TransactionJson, InvalidTransactionJson | UnsupportedTransactionJson> =>
@@ -688,8 +710,8 @@ const toExpiration = (e: typeof Expiration.Type): T.TransactionExpiration => {
   }
 }
 
-const encodeU64 = Bcs.encodeSync(Bcs.u64)
-const encodeAddress = Bcs.encodeSync(Bcs.Address)
+const encodeU64 = /* @__PURE__ */ Bcs.encodeSync(Bcs.u64)
+const encodeAddress = /* @__PURE__ */ Bcs.encodeSync(Bcs.Address)
 
 /** What an `UnresolvedPure` input must be, from where it's used (as Mysten's `normalizeRawArguments`). */
 type PureUse = "u64" | "address" | "other"
@@ -944,7 +966,7 @@ export const toPlan = (tx: Unresolved, sender?: Address.Address): Effect.Effect<
 }
 
 /** The `TransactionData` of a transaction that is already fully resolved (no network). */
-export const toTransactionData = (tx: Unresolved): Effect.Effect<T.TransactionData, Resolve.Incomplete> =>
+export const toTransactionData = (tx: Unresolved): Effect.Effect<T.TransactionData, Resolve.Incomplete | Resolve.InvalidTransaction> =>
   Effect.flatMap(toPlan(tx), Resolve.finish)
 
 /**

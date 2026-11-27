@@ -19,7 +19,7 @@ export interface ChainInfo {
   readonly epochFirstCheckpoint: bigint | undefined
 }
 
-export class Chain extends Context.Service<Chain, {
+export class Chain extends /* @__PURE__ */ Context.Service<Chain, {
   readonly info: Effect.Effect<ChainInfo, RpcError>
   readonly referenceGasPrice: Effect.Effect<bigint, RpcError>
 }>()("@unconfirmed/sui/Chain") {}

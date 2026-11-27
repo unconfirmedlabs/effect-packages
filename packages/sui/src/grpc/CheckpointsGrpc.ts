@@ -11,7 +11,7 @@ const summary = (c: P.Checkpoint | undefined) => ({ sequenceNumber: c?.sequence_
 const MASK = { paths: ["sequence_number", "digest"] }
 
 /** `Checkpoints` over gRPC server streams. */
-export const layer: Layer.Layer<Checkpoints, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<Checkpoints, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Checkpoints,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

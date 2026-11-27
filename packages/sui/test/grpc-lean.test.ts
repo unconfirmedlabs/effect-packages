@@ -169,9 +169,9 @@ const responses: Record<string, ReadonlyArray<object>> = {
   ExecuteTransaction: [{ transaction: executed("ok") }],
   GetTransaction: [{ transaction: executed("abort") }],
   GetCheckpoint: [{ checkpoint }],
-  ListCheckpoints: [{ checkpoint, watermark: { checkpoint: 42n } }],
+  ListCheckpoints: [{ checkpoint, watermark: { checkpoint: 42n }, end: { reason: 3 } }],
   SubscribeCheckpoints: [{ cursor: 42n, checkpoint }],
-  ListEvents: [{ event, watermark: { checkpoint: 42n } }],
+  ListEvents: [{ event, watermark: { checkpoint: 42n }, end: { reason: 3 } }],
   SubscribeEvents: [{ event }],
   ListDynamicFields: [{
     dynamic_fields: [{

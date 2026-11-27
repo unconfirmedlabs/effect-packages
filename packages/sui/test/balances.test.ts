@@ -175,7 +175,7 @@ describe("coin / balance intents match tx.coin / tx.balance", () => {
 
   test("SUI with no address balance splits from the gas coin", () =>
     same(
-      { balances: {}, coins: {} },
+      { balances: {}, coins: { [TypeTag.SUI]: [{ id: "0xa9", version: 3n, balance: 5000n }] } },
       Effect.gen(function*() {
         const c = yield* Ptb.coin({ amount: 1000n })
         yield* Ptb.transferObjects([c], yield* Ptb.address(recipient))
@@ -304,12 +304,12 @@ describe("gas payment strategies", () => {
     expect(exit._tag === "Success" && exit.value.gasPayment!.map((r) => r.objectId)).toEqual([A("0xa1"), A("0xa2")])
   })
 
-  test("auto: the gas coin is used and there is an address balance → reservation first, coins only for the rest", async () => {
+  test("auto: the gas coin is used and there is an address balance → reservation plus every coin (the gas coin may be spent beyond the budget)", async () => {
     const exit = await run({ balances: { [TypeTag.SUI]: 700_000n }, coins: { [TypeTag.SUI]: suiCoins } }, usesGas, Resolve.auto)
     if (exit._tag !== "Success") throw new Error(JSON.stringify(exit))
     const [first, ...rest] = exit.value.gasPayment!
     expect(first).toEqual(CoinReservation.make({ reserved: 700_000n, owner: sender, chainId: CHAIN, epoch: 812n }))
-    expect(rest.map((r) => r.objectId)).toEqual([A("0xa1")])
+    expect(rest.map((r) => r.objectId)).toEqual(suiCoins.map((c) => A(c.id)))
   })
 
   test("auto: the transaction's own SUI withdrawals count against the address balance", async () => {

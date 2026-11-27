@@ -53,19 +53,19 @@ export interface FieldInfo {
   readonly childId: Address | undefined
 }
 
-export class DynamicFieldNotFound extends Schema.TaggedError<DynamicFieldNotFound>()("DynamicFieldNotFound", {
+export class DynamicFieldNotFound extends /* @__PURE__ */ Schema.TaggedError<DynamicFieldNotFound>()("DynamicFieldNotFound", {
   parent: Schema.String,
   nameType: Schema.String,
   fieldId: Schema.String
 }) {}
 
 /** The name's type doesn't parse, or its value doesn't encode with the given schema. */
-export class InvalidDynamicFieldName extends Schema.TaggedError<InvalidDynamicFieldName>()("InvalidDynamicFieldName", {
+export class InvalidDynamicFieldName extends /* @__PURE__ */ Schema.TaggedError<InvalidDynamicFieldName>()("InvalidDynamicFieldName", {
   nameType: Schema.String,
   issue: Schema.String
 }) {}
 
-export class DynamicFieldDecodeError extends Schema.TaggedError<DynamicFieldDecodeError>()("DynamicFieldDecodeError", {
+export class DynamicFieldDecodeError extends /* @__PURE__ */ Schema.TaggedError<DynamicFieldDecodeError>()("DynamicFieldDecodeError", {
   fieldId: Schema.String,
   valueType: Schema.String,
   issue: Schema.String
@@ -75,8 +75,8 @@ export class DynamicFieldDecodeError extends Schema.TaggedError<DynamicFieldDeco
 // Pure
 // -----------------------------------------------------------------------------
 
-const encodeTypeTag = Bcs.encodeSync(TypeTag.TypeTag)
-const encodeU64 = Bcs.encodeSync(Bcs.u64)
+const encodeTypeTag = /* @__PURE__ */ Bcs.encodeSync(TypeTag.TypeTag)
+const encodeU64 = /* @__PURE__ */ Bcs.encodeSync(Bcs.u64)
 
 /**
  * A dynamic field's object id:
@@ -128,7 +128,7 @@ export interface ListOptions {
   readonly pageSize?: number
 }
 
-export class DynamicFields extends Context.Service<DynamicFields, {
+export class DynamicFields extends /* @__PURE__ */ Context.Service<DynamicFields, {
   readonly get: (parent: Address, name: Name) => Effect.Effect<DynamicField, DynamicFieldNotFound | InvalidDynamicFieldName | RpcError>
   /** The child object of a dynamic object field. */
   readonly getObject: (parent: Address, name: Name) => Effect.Effect<SuiObject, DynamicFieldNotFound | InvalidDynamicFieldName | RpcError>

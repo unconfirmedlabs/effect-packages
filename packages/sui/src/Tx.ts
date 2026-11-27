@@ -30,24 +30,42 @@ export interface ResolveOptions<E = never, R = never> {
   readonly payment?: Resolve.PaymentStrategy<E, R>
 }
 
-/** Draft -> TransactionData with the default pipeline. */
-export const resolve = <E = never, R = never>(draft: Ptb.Draft, options: ResolveOptions<E, R>) =>
-  Effect.succeed<Resolve.Plan>({
+/**
+ * Draft -> TransactionData with the default pipeline.
+ *
+ * Object lookups and everything independent of them (gas price, chain info,
+ * the gas owner's SUI balance and coins: `Resolve.prefetch`) run in one round
+ * trip; then intents, the budget dry run and payment. The error type always
+ * includes the default payment strategy's (`InsufficientGas`), which is what
+ * runs when `payment` is not given.
+ */
+export const resolve = <E = never, R = never>(draft: Ptb.Draft, options: ResolveOptions<E, R>) => {
+  const strategy: Resolve.PaymentStrategy<E | Resolve.DefaultPaymentError, R | Resolve.DefaultPaymentServices> = options.payment ??
+    Resolve.auto
+  const plan: Resolve.Plan = {
     sender: options.sender,
     draft,
     ...(options.gasOwner && { gasOwner: options.gasOwner }),
     ...(options.gasPrice !== undefined && { gasPrice: options.gasPrice }),
     ...(options.gasBudget !== undefined && { gasBudget: options.gasBudget }),
     ...(options.expiration && { expiration: options.expiration })
+  }
+  return Effect.all([Resolve.inputs(plan), Resolve.prefetch(plan, { payment: options.payment === undefined })], {
+    concurrency: "unbounded"
   }).pipe(
-    Effect.flatMap(Resolve.inputs),
+    Effect.map(([resolved, pre]): Resolve.Plan => ({
+      ...resolved,
+      ...(pre.gasPrice !== undefined && { gasPrice: pre.gasPrice }),
+      ...(pre.prefetched && { prefetched: pre.prefetched })
+    })),
     Effect.flatMap(Resolve.balances),
     Effect.flatMap(Resolve.gasPrice),
     Effect.flatMap(Resolve.budget),
-    Effect.flatMap((plan) => (options.payment ?? (Resolve.auto as unknown as Resolve.PaymentStrategy<E, R>))(plan)),
+    Effect.flatMap(strategy),
     Effect.flatMap(Resolve.finish),
     Effect.withSpan("Tx.resolve")
   )
+}
 
 /** Build a recipe and resolve it. */
 export const build = <A, E1, R1, E2 = never, R2 = never>(
@@ -59,20 +77,24 @@ export const build = <A, E1, R1, E2 = never, R2 = never>(
 export const serialize = T.encode
 
 /** The transaction reached the chain and Move aborted. Gas was charged. */
-export class ExecutionFailed extends Schema.TaggedError<ExecutionFailed>()("ExecutionFailed", {
+export class ExecutionFailed extends /* @__PURE__ */ Schema.TaggedError<ExecutionFailed>()("ExecutionFailed", {
   digest: Schema.String,
   description: Schema.String,
   command: Schema.optionalKey(Schema.Number),
-  abortCode: Schema.optionalKey(Schema.BigInt)
+  abortCode: Schema.optionalKey(Schema.BigInt),
+  /** The aborting module, `0x…::module` (and `::function` when known). */
+  location: Schema.optionalKey(Schema.String)
 }) {}
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
  * What a transaction signer may change. Its returned bytes must keep the
- * sender, the programmable transaction and the gas owner; it may re-pick gas
- * price, budget, payment and expiration only when no key `Signer` is the gas
- * owner (a sponsor key never signs gas terms it didn't see).
+ * sender, the programmable transaction and the gas owner. It may re-pick gas
+ * price, budget and payment only when no key `Signer` is the gas owner (a
+ * sponsor key never signs gas terms it didn't see), and the expiration only
+ * when no key `Signer` is the sender or the gas owner (a key never signs a
+ * validity window it didn't see).
  */
 const checkChange = (
   before: T.TransactionData,
@@ -85,7 +107,13 @@ const checkChange = (
   if (after.gasData.owner !== before.gasData.owner) return refused("gas owner")
   const restOf = (d: T.TransactionData) => T.encode({ ...d, gasData: before.gasData, expiration: before.expiration })
   if (!sameBytes(restOf(after), restOf(before))) return refused("commands or inputs")
-  if (keySigners.some((k) => k.address === before.gasData.owner)) return refused("gas or expiration, which a key signer pays for")
+  const keyIs = (address: string) => keySigners.some((k) => k.address === address)
+  const gasChanged = !sameBytes(T.encode({ ...before, gasData: after.gasData }), T.encode(before))
+  const expirationChanged = !sameBytes(T.encode({ ...before, expiration: after.expiration }), T.encode(before))
+  if (gasChanged && keyIs(before.gasData.owner)) return refused("gas or expiration, which a key signer pays for")
+  if (expirationChanged && (keyIs(before.sender) || keyIs(before.gasData.owner))) {
+    return refused("expiration, which a key signer signs")
+  }
   return undefined
 }
 
@@ -96,9 +124,9 @@ const checkChange = (
  * gas terms (its returned bytes win, see `checkChange`), but not after another
  * has signed. Intent-message `Signer`s then sign the final bytes concurrently.
  */
-const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
+const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
   let current = data
-  let bytes = T.encode(data)
+  let bytes = yield* Resolve.encode(data)
   const signatures: Array<Uint8Array | undefined> = signers.map(() => undefined)
   let signedByTransactionSigner = false
   for (const [i, s] of signers.entries()) {
@@ -142,7 +170,7 @@ const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: Reado
  * gas terms it pays for, never the sender, commands, inputs or gas owner, and
  * nothing a key signer pays for; what is submitted is exactly the bytes it signed.
  */
-export const execute = Effect.fn("Tx.execute")(function*(
+export const execute = /* @__PURE__ */ Effect.fn("Tx.execute")(function*(
   data: T.TransactionData,
   signers: Signer | TransactionSigner | ReadonlyArray<Signer | TransactionSigner>
 ) {
@@ -151,9 +179,7 @@ export const execute = Effect.fn("Tx.execute")(function*(
   if (effects.status._tag === "Failure") {
     return yield* new ExecutionFailed({
       digest: effects.digest,
-      description: effects.status.description,
-      ...(effects.status.command !== undefined && { command: effects.status.command }),
-      ...(effects.status.abortCode !== undefined && { abortCode: effects.status.abortCode })
+      ...Resolve.failureFields(effects.status)
     })
   }
   return effects

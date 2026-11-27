@@ -31,6 +31,6 @@ export interface FunctionTarget {
   readonly function: string
 }
 
-export class Packages extends Context.Service<Packages, {
+export class Packages extends /* @__PURE__ */ Context.Service<Packages, {
   readonly getFunction: (target: FunctionTarget) => Effect.Effect<MoveFunction, RpcError>
 }>()("@unconfirmed/sui/Packages") {}

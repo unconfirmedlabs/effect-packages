@@ -26,9 +26,9 @@ export const RpcCode = [
 ] as const
 export type RpcCode = (typeof RpcCode)[number]
 
-const RETRYABLE: ReadonlySet<RpcCode> = new Set(["UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED"])
+const RETRYABLE: ReadonlySet<RpcCode> = /* @__PURE__ */ new Set(["UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED"])
 
-export class RpcError extends Schema.TaggedError<RpcError>()("RpcError", {
+export class RpcError extends /* @__PURE__ */ Schema.TaggedError<RpcError>()("RpcError", {
   method: Schema.String,
   code: Schema.Literals(RpcCode),
   message: Schema.String

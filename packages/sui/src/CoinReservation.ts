@@ -18,7 +18,7 @@ import { type Address, fromBytes, normalize } from "./Address.ts"
 import { deriveId } from "./DynamicFields.ts"
 import type { ObjectDigest, ObjectRef } from "./TransactionData.ts"
 
-const ACCUMULATOR_ROOT = normalize("0xacc")
+const ACCUMULATOR_ROOT = /* @__PURE__ */ normalize("0xacc")
 const SUI_ACCUMULATOR_KEY = "0x2::accumulator::Key<0x2::balance::Balance<0x2::sui::SUI>>"
 const MAGIC = new Uint8Array(20).fill(0xac)
 

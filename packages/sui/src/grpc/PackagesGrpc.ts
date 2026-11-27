@@ -5,6 +5,7 @@ import * as RequestResolver from "effect/RequestResolver"
 import { type FunctionTarget, type MoveFunction, Packages, type Parameter, type Reference } from "../Packages.ts"
 import type { RpcError } from "../RpcError.ts"
 import type * as P from "./generated/proto.ts"
+import { convert } from "./convert.ts"
 import * as Rpc from "./generated/lean.ts"
 import { successByKey } from "./cache.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
@@ -40,8 +41,11 @@ const parameter = (p: P.OpenSignature): Parameter => {
   return typeArguments.every((a) => a !== undefined) ? { ...out, typeArguments: typeArguments as Array<string> } : out
 }
 
-/** `Packages` over gRPC. Function signatures are immutable; successful reads are cached for the layer's lifetime. */
-export const layer: Layer.Layer<Packages, never, GrpcWeb> = Layer.effect(
+/**
+ * `Packages` over gRPC. Function signatures are immutable; successful reads are
+ * cached for the layer's lifetime, and concurrent reads of one target share a request.
+ */
+export const layer: Layer.Layer<Packages, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Packages,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb
@@ -53,10 +57,12 @@ export const layer: Layer.Layer<Packages, never, GrpcWeb> = Layer.effect(
           name: request.function
         })
         .pipe(
-          Effect.map((r): MoveFunction => ({
-            isEntry: r.function?.is_entry ?? false,
-            parameters: (r.function?.parameters ?? []).map(parameter)
-          }))
+          Effect.flatMap((r) =>
+            convert(Rpc.MovePackageService_GetFunction.path, (): MoveFunction => {
+              if (r.function === undefined) throw new Error("no function")
+              return { isEntry: r.function.is_entry ?? false, parameters: (r.function.parameters ?? []).map(parameter) }
+            })
+          )
         )
     )
     // Successes only: a transient failure must not poison the target for the layer's lifetime.

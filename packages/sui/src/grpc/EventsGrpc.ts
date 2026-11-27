@@ -6,7 +6,7 @@ import { event, EVENT_PATHS } from "./convert.ts"
 import type * as P from "./generated/proto.ts"
 import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
-import { convert, EVENT_LIMIT, eventBounds, pinned, resumable } from "./scan.ts"
+import { convert, EVENT_LIMIT, eventBounds, ledgerWindow, pinned, type Recovery, resumable } from "./scan.ts"
 
 const literal = (l: Literal): P.EventLiteral => {
   const p = l.predicate
@@ -37,7 +37,7 @@ export const filter = (f: EventFilter): P.EventFilter | undefined | "none" => {
 const MASK = { paths: EVENT_PATHS }
 
 /** `Events` over gRPC: `ListEvents` resumed across server budgets, and `SubscribeEvents`. */
-export const layer: Layer.Layer<Events, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<Events, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Events,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb
@@ -47,7 +47,7 @@ export const layer: Layer.Layer<Events, never, GrpcWeb> = Layer.effect(
         const f = options?.filter && filter(options.filter)
         if (f === "none") return Stream.empty
         const method = Rpc.LedgerService_ListEvents.path
-        const scan = pinned(grpc, { start: options?.start, end: options?.end }, descending, (range) =>
+        const scan = (range: { start: bigint | undefined; readonly end: bigint | undefined }, recovery?: Recovery) =>
           resumable(
             method,
             (w) =>
@@ -61,13 +61,30 @@ export const layer: Layer.Layer<Events, never, GrpcWeb> = Layer.effect(
                   ...(w?.cursor && (descending ? { before: w.cursor } : { after: w.cursor }))
                 }
               }),
-            (r) => ({ item: r.event && event(r.event), watermark: r.watermark, end: r.end })
-          ))
-        // The pruning floor can pass a pinned start during a long descending
-        // scan: running into it is the end of history, not a failure.
-        return descending && options?.start === undefined
-          ? scan.pipe(Stream.catchIf((e) => e.code === "OUT_OF_RANGE", () => Stream.empty))
-          : scan
+            (r) => ({ item: r.event && event(r.event), watermark: r.watermark, end: r.end }),
+            recovery
+          )
+        if (!descending || options?.start !== undefined) {
+          return pinned(grpc, { start: options?.start, end: options?.end }, descending, (range) => scan({ ...range }))
+        }
+        // A descending scan to the pruning floor: the floor moves while it runs,
+        // and the node refuses (`OUT_OF_RANGE`) a request whose start it has passed.
+        // Re-read the floor and continue from the last watermark; the scan is done
+        // only when what is left of the range is below the new floor.
+        return Stream.unwrap(Effect.map(ledgerWindow(grpc), (window) => {
+          const range = { start: window.lowest as bigint | undefined, end: options?.end }
+          return scan(range, {
+            recover: (error, last) =>
+              error.code !== "OUT_OF_RANGE" ? Effect.fail(error) : Effect.map(ledgerWindow(grpc), (w) => {
+                const pos = last?.cursor_position
+                const indexed = (pos?.transaction_index ?? 0n) !== 0n || (pos?.event_index ?? 0) !== 0
+                const remainingEnd = pos?.checkpoint !== undefined ? pos.checkpoint + (indexed ? 1n : 0n) : range.end ?? w.end
+                if (remainingEnd <= w.lowest) return "end" as const
+                range.start = w.lowest
+                return "retry" as const
+              })
+          })
+        }))
       },
       subscribe: (filterBy) => {
         const f = filterBy && filter(filterBy)

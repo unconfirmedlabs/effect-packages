@@ -16,7 +16,7 @@ export type TypeTag =
   | { readonly _tag: "vector"; readonly value: TypeTag }
   | ({ readonly _tag: "struct" } & StructTag)
 
-export const StructTag: Bcs.BcsSchema<StructTag, any> = Bcs.struct({
+export const StructTag: Bcs.BcsSchema<StructTag, any> = /* @__PURE__ */ Bcs.struct({
   address: Bcs.Address,
   module: Bcs.string,
   name: Bcs.string,
@@ -24,7 +24,7 @@ export const StructTag: Bcs.BcsSchema<StructTag, any> = Bcs.struct({
 }) as any
 
 /** Variant order is Rust's `TypeTag` (u16/u32/u256 were appended later). */
-export const TypeTag: Bcs.BcsSchema<TypeTag, any> = Bcs.enum({
+export const TypeTag: Bcs.BcsSchema<TypeTag, any> = /* @__PURE__ */ Bcs.enum({
   bool: null,
   u8: null,
   u64: null,
@@ -38,7 +38,7 @@ export const TypeTag: Bcs.BcsSchema<TypeTag, any> = Bcs.enum({
   u256: null
 }) as any
 
-const PRIMITIVES = new Set(["bool", "u8", "u16", "u32", "u64", "u128", "u256", "address", "signer"])
+const PRIMITIVES = /* @__PURE__ */ new Set(["bool", "u8", "u16", "u32", "u64", "u128", "u256", "address", "signer"])
 
 /** Parse `vector<0x2::coin::Coin<0x2::sui::SUI>>`. Throws on malformed input. */
 export const parse = (input: string): TypeTag => {
@@ -92,7 +92,7 @@ export const format = (t: TypeTag): string =>
 export const normalizeString = (s: string) => format(parse(s))
 
 /** `0x2::sui::SUI`, padded. */
-export const SUI = normalizeString("0x2::sui::SUI")
+export const SUI = /* @__PURE__ */ normalizeString("0x2::sui::SUI")
 
 /**
  * Pad the addresses of a type or a type prefix used as a filter,

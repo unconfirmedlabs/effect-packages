@@ -1,19 +1,14 @@
-import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Stream from "effect/Stream"
 import type { Address } from "../Address.ts"
-import { Coins } from "../Coins.ts"
+import { Coins, fromObjects } from "../Coins.ts"
 import { Objects } from "../Objects.ts"
 import * as TypeTag from "../TypeTag.ts"
 import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
-const CoinStruct = Bcs.struct({ id: Bcs.Address, balance: Bcs.u64 })
-const decodeCoin = Bcs.decodeSync(CoinStruct)
-
 /** `Coins` over gRPC. Coin listing goes through `Objects.listOwned`. */
-export const layer: Layer.Layer<Coins, never, GrpcWeb | Objects> = Layer.effect(
+export const layer: Layer.Layer<Coins, never, GrpcWeb | Objects> = /* @__PURE__ */ Layer.effect(
   Coins,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb
@@ -29,13 +24,7 @@ export const layer: Layer.Layer<Coins, never, GrpcWeb | Objects> = Layer.effect(
           }))
         ),
       list: (owner: Address, coinType = TypeTag.SUI) =>
-        objects.listOwned(owner, { type: `0x2::coin::Coin<${TypeTag.normalizeString(coinType)}>` }).pipe(
-          Stream.map((o) => ({
-            ref: { objectId: o.objectId, version: o.version, digest: o.digest },
-            coinType,
-            balance: decodeCoin(o.contents).balance
-          }))
-        )
+        fromObjects(Rpc.StateService_ListOwnedObjects.path, coinType, (type) => objects.listOwned(owner, { type }))
     })
   })
 )

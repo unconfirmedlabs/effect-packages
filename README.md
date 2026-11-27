@@ -175,7 +175,7 @@ const plaintext = yield* Seal.decrypt({ data: encryptedObject, session, approval
 **1. Capabilities are separate services.** Instead of one client with 30 methods there are `Chain`, `Objects`, `Coins`, `Packages`, `Transactions` and `Checkpoints`. A function's type says what it touches:
 
 ```ts
-Resolve.inputs   // Effect<Plan, ObjectNotFound | RpcError, Objects | Packages>
+Resolve.inputs   // Effect<Plan, ObjectNotFound | RpcError | InvalidTransaction, Objects | Packages>
 Resolve.budget   // Effect<Plan, ..., Transactions | Chain>
 Resolve.coins    // Effect<Plan, ..., Coins>
 ```
@@ -204,7 +204,7 @@ SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, MultiSig.scheme)
 
 **3. Signers are values.** `Signer = { address, publicKey, sign(intentMessage) }`. An in-memory key, a hardware wallet, a KMS and `MultiSig.signer(pk, [a, b])` are all the same type, and anything that takes a `Signer` (`Tx.run`, `Signer.signPersonalMessage`) works with all of them.
 
-A browser wallet never signs raw intent messages: it signs a whole transaction and may change it first (re-resolving gas). That is a `TransactionSigner = { address, signTransaction(data) => { bytes, signature } }`. `Tx.execute` and `Tx.run` take either kind, and submit exactly the bytes the wallet signed. With several signers, wallets sign first; key signers then sign the final bytes. A wallet may re-pick only gas terms it pays for: a changed sender, command, input or gas owner, or changed gas terms a key signer (a sponsor) pays for, is a `SigningError` before any key signs.
+A browser wallet never signs raw intent messages: it signs a whole transaction and may change it first (re-resolving gas). That is a `TransactionSigner = { address, signTransaction(data) => { bytes, signature } }`. `Tx.execute` and `Tx.run` take either kind, and submit exactly the bytes the wallet signed. With several signers, wallets sign first; key signers then sign the final bytes. A wallet may re-pick only gas terms it pays for: a changed sender, command, input or gas owner, changed gas terms a key signer (a sponsor) pays for, or a changed expiration when a key signer is the sender or sponsor, is a `SigningError` before any key signs.
 
 **4. Transactions are Effects; resolution is a pipeline of steps.**
 
@@ -224,8 +224,9 @@ A payment strategy is just a step (`Plan -> Effect<Plan, E, R>`), and so is a sp
 
 ```ts
 // Gas: Resolve.auto (the default) pays from the address balance when it covers the
-// budget and the gas coin isn't used, otherwise with coins. If the gas coin is used,
-// a coin reservation lets the address balance fund it.
+// budget and the gas coin isn't used, otherwise with coins. If commands use the gas
+// coin, every SUI coin pays (plus a coin reservation of the address balance), so the
+// gas coin can cover what they split off it; too little is InsufficientGas before signing.
 yield* Tx.run(recipe, { signer })
 yield* Tx.run(recipe, { signer, payment: Resolve.addressBalance })  // only the address balance, or InsufficientGas before signing
 

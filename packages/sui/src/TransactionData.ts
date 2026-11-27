@@ -9,26 +9,26 @@ import { TypeTag } from "./TypeTag.ts"
 export const ObjectDigest = Bcs.Digest
 export type ObjectDigest = Bcs.Digest
 
-export const ObjectRef = Bcs.struct({ objectId: Address, version: Bcs.u64, digest: ObjectDigest })
+export const ObjectRef = /* @__PURE__ */ Bcs.struct({ objectId: Address, version: Bcs.u64, digest: ObjectDigest })
 export type ObjectRef = typeof ObjectRef.Type
 
-export const SharedObjectMutability = Bcs.enum({ Immutable: null, Mutable: null, NonExclusiveWrite: null })
+export const SharedObjectMutability = /* @__PURE__ */ Bcs.enum({ Immutable: null, Mutable: null, NonExclusiveWrite: null })
 
-export const SharedObjectRef = Bcs.struct({
+export const SharedObjectRef = /* @__PURE__ */ Bcs.struct({
   objectId: Address,
   initialSharedVersion: Bcs.u64,
   mutability: SharedObjectMutability
 })
 export type SharedObjectRef = typeof SharedObjectRef.Type
 
-export const ObjectArg = Bcs.enum({
+export const ObjectArg = /* @__PURE__ */ Bcs.enum({
   ImmOrOwnedObject: ObjectRef,
   SharedObject: SharedObjectRef,
   Receiving: ObjectRef
 })
 export type ObjectArg = typeof ObjectArg.Type
 
-export const FundsWithdrawal = Bcs.struct({
+export const FundsWithdrawal = /* @__PURE__ */ Bcs.struct({
   reservation: Bcs.enum({ MaxAmountU64: Bcs.u64 }),
   typeArg: Bcs.enum({ Balance: TypeTag }),
   withdrawFrom: Bcs.enum({
@@ -39,14 +39,14 @@ export const FundsWithdrawal = Bcs.struct({
 })
 export type FundsWithdrawal = typeof FundsWithdrawal.Type
 
-export const CallArg = Bcs.enum({
+export const CallArg = /* @__PURE__ */ Bcs.enum({
   Pure: Bcs.struct({ bytes: Bcs.byteVector }),
   Object: ObjectArg,
   FundsWithdrawal
 })
 export type CallArg = typeof CallArg.Type
 
-export const Argument = Bcs.enum({
+export const Argument = /* @__PURE__ */ Bcs.enum({
   GasCoin: null,
   Input: Bcs.u16,
   Result: Bcs.u16,
@@ -54,7 +54,7 @@ export const Argument = Bcs.enum({
 })
 export type Argument = typeof Argument.Type
 
-export const Command = Bcs.enum({
+export const Command = /* @__PURE__ */ Bcs.enum({
   MoveCall: Bcs.struct({
     package: Address,
     module: Bcs.string,
@@ -76,7 +76,7 @@ export const Command = Bcs.enum({
 })
 export type Command = typeof Command.Type
 
-export const ProgrammableTransaction = Bcs.struct({
+export const ProgrammableTransaction = /* @__PURE__ */ Bcs.struct({
   inputs: Bcs.vector(CallArg),
   commands: Bcs.vector(Command)
 })
@@ -87,10 +87,10 @@ export type ProgrammableTransaction = typeof ProgrammableTransaction.Type
  * Rust order and would be added as variants; decoding one today is a typed
  * `BcsDecodeError`, never a guess.
  */
-export const TransactionKind = Bcs.enum({ ProgrammableTransaction })
+export const TransactionKind = /* @__PURE__ */ Bcs.enum({ ProgrammableTransaction })
 export type TransactionKind = typeof TransactionKind.Type
 
-export const GasData = Bcs.struct({
+export const GasData = /* @__PURE__ */ Bcs.struct({
   payment: Bcs.vector(ObjectRef),
   owner: Address,
   price: Bcs.u64,
@@ -107,7 +107,7 @@ const ValidDuringFields = {
   nonce: Bcs.u32
 }
 
-export const TransactionExpiration = Bcs.enum({
+export const TransactionExpiration = /* @__PURE__ */ Bcs.enum({
   None: null,
   Epoch: Bcs.u64,
   ValidDuring: Bcs.struct(ValidDuringFields),
@@ -118,17 +118,17 @@ export const TransactionExpiration = Bcs.enum({
 })
 export type TransactionExpiration = typeof TransactionExpiration.Type
 
-export const TransactionDataV1 = Bcs.struct({
+export const TransactionDataV1 = /* @__PURE__ */ Bcs.struct({
   kind: TransactionKind,
   sender: Address,
   gasData: GasData,
   expiration: TransactionExpiration
 })
 
-export const TransactionData = Bcs.enum({ V1: TransactionDataV1 })
+export const TransactionData = /* @__PURE__ */ Bcs.enum({ V1: TransactionDataV1 })
 export type TransactionData = typeof TransactionData.Type
 
-export const encode = Bcs.encodeSync(TransactionData)
+export const encode = /* @__PURE__ */ Bcs.encodeSync(TransactionData)
 /** Alias of `encode`, for call sites that read better as "serialize". */
 export const serialize = encode
-export const decode = Bcs.decode(TransactionData)
+export const decode = /* @__PURE__ */ Bcs.decode(TransactionData)

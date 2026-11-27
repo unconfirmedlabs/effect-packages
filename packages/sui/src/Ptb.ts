@@ -93,9 +93,13 @@ export interface Draft {
   readonly commands: ReadonlyArray<Command>
 }
 
-export class InvalidPureValue extends Schema.TaggedError<InvalidPureValue>()("InvalidPureValue", {
+export class InvalidPureValue extends /* @__PURE__ */ Schema.TaggedError<InvalidPureValue>()("InvalidPureValue", {
   issue: Schema.String
 }) {}
+
+/** Run a parse that throws on bad input (an address, a type string); a throw is `InvalidPureValue`, not a defect. */
+const attempt = <A>(f: () => A): Effect.Effect<A, InvalidPureValue> =>
+  Effect.try({ try: f, catch: (e) => new InvalidPureValue({ issue: e instanceof Error ? e.message : String(e) }) })
 
 interface MutableDraft {
   inputs: Array<Input>
@@ -103,7 +107,7 @@ interface MutableDraft {
   objectIndex: Map<string, number>
 }
 
-export class PtbBuilder extends Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/sui/PtbBuilder") {}
+export class PtbBuilder extends /* @__PURE__ */ Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/sui/PtbBuilder") {}
 
 const addCommand = (command: Command) =>
   Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
@@ -139,23 +143,47 @@ export const u8 = (v: number) => pure(Bcs.u8, v)
 export const u64 = (v: bigint) => pure(Bcs.u64, v)
 export const bool = (v: boolean) => pure(Bcs.bool, v)
 export const string = (v: string) => pure(Bcs.string, v)
-export const address = (v: string) => pure(Bcs.Address, Address.normalize(v))
+export const address = (v: string) => Effect.flatMap(attempt(() => Address.normalize(v)), (a) => pure(Bcs.Address, a))
 
-/** An object input by id. The same id always maps to the same input. */
+/** Widen an existing object input to mutable: a repeat use can only widen it. */
+const widen = (d: MutableDraft, index: number) => {
+  const input = d.inputs[index]!
+  if (input._tag === "UnresolvedObject" && input.mutable === false) d.inputs[index] = { ...input, mutable: true }
+  if (input._tag === "Object" && input.value._tag === "SharedObject" && input.value.mutability._tag !== "Mutable") {
+    d.inputs[index] = { _tag: "Object", value: { ...input.value, mutability: { _tag: "Mutable" } } }
+  }
+}
+
+/**
+ * An object input by id. The same id always maps to the same input; a repeat
+ * with `mutable: true` widens one forced immutable.
+ */
 export const object = (objectId: string, options?: { readonly mutable?: boolean }) =>
-  Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
-    const id = Address.normalize(objectId)
-    const existing = d.objectIndex.get(id)
-    if (existing !== undefined) return { _tag: "Input", value: existing }
-    d.inputs.push({ _tag: "UnresolvedObject", objectId: id, ...(options?.mutable !== undefined && { mutable: options.mutable }) })
-    d.objectIndex.set(id, d.inputs.length - 1)
-    return { _tag: "Input", value: d.inputs.length - 1 }
-  })
+  Effect.flatMap(attempt(() => Address.normalize(objectId)), (id) =>
+    Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
+      const existing = d.objectIndex.get(id)
+      if (existing !== undefined) {
+        if (options?.mutable === true) widen(d, existing)
+        return { _tag: "Input", value: existing }
+      }
+      d.inputs.push({ _tag: "UnresolvedObject", objectId: id, ...(options?.mutable !== undefined && { mutable: options.mutable }) })
+      d.objectIndex.set(id, d.inputs.length - 1)
+      return { _tag: "Input", value: d.inputs.length - 1 }
+    }))
 
-/** An already-resolved object input (offline builds, sponsored flows). */
+/**
+ * An already-resolved object input (offline builds, sponsored flows),
+ * deduplicated by id together with `object` and `sharedObject`.
+ */
 export const objectArg = (arg: T.ObjectArg) =>
   Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
+    const existing = d.objectIndex.get(arg.objectId)
+    if (existing !== undefined) {
+      if (arg._tag === "SharedObject" && arg.mutability._tag === "Mutable") widen(d, existing)
+      return { _tag: "Input", value: existing }
+    }
     d.inputs.push({ _tag: "Object", value: arg })
+    d.objectIndex.set(arg.objectId, d.inputs.length - 1)
     return { _tag: "Input", value: d.inputs.length - 1 }
   })
 
@@ -167,17 +195,14 @@ export const moveCall = (call: {
   readonly target: `${string}::${string}::${string}`
   readonly typeArguments?: ReadonlyArray<string>
   readonly arguments?: ReadonlyArray<T.Argument>
-}) => {
-  const [pkg, module, fn] = call.target.split("::") as [string, string, string]
-  return addCommand({
-    _tag: "MoveCall",
-    package: Address.normalize(pkg),
-    module,
-    function: fn,
-    typeArguments: (call.typeArguments ?? []).map(TypeTag.parse),
-    arguments: call.arguments ?? []
-  })
-}
+}) =>
+  Effect.flatMap(
+    attempt(() => {
+      const [pkg, module, fn] = call.target.split("::") as [string, string, string]
+      return { package: Address.normalize(pkg), module, function: fn, typeArguments: (call.typeArguments ?? []).map(TypeTag.parse) }
+    }),
+    (target) => addCommand({ _tag: "MoveCall", ...target, arguments: call.arguments ?? [] })
+  )
 
 export const splitCoins = (coin: T.Argument, amounts: ReadonlyArray<T.Argument>) =>
   Effect.map(addCommand({ _tag: "SplitCoins", coin, amounts }), (r) => amounts.map((_, i) => nested(r, i)))
@@ -189,11 +214,10 @@ export const transferObjects = (objects: ReadonlyArray<T.Argument>, address: T.A
   addCommand({ _tag: "TransferObjects", objects, address })
 
 export const makeMoveVec = (elements: ReadonlyArray<T.Argument>, type?: string) =>
-  addCommand({
-    _tag: "MakeMoveVec",
-    type: type === undefined ? Option.none() : Option.some(TypeTag.parse(type)),
-    elements
-  })
+  Effect.flatMap(
+    attempt(() => (type === undefined ? Option.none() : Option.some(TypeTag.parse(type)))),
+    (t) => addCommand({ _tag: "MakeMoveVec", type: t, elements })
+  )
 
 // -----------------------------------------------------------------------------
 // Address balances
@@ -223,20 +247,26 @@ export const withdrawal = (options: {
   readonly from?: WithdrawFrom
 }) =>
   Effect.flatMap(checkAmount(options.amount), () =>
-    Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
-      const from = options.from ?? "sender"
-      d.inputs.push({
-        _tag: "FundsWithdrawal",
-        reservation: { _tag: "MaxAmountU64", value: options.amount },
-        typeArg: { _tag: "Balance", value: TypeTag.parse(options.type ?? TypeTag.SUI) },
-        withdrawFrom: from === "sender"
-          ? { _tag: "Sender" }
-          : from === "sponsor"
-          ? { _tag: "Sponsor" }
-          : { _tag: "SenderAllowance", funder: Address.normalize(from.funder), allowance: Address.normalize(from.allowance) }
-      })
-      return { _tag: "Input", value: d.inputs.length - 1 }
-    }))
+    Effect.flatMap(
+      attempt((): T.CallArg => {
+        const from = options.from ?? "sender"
+        return {
+          _tag: "FundsWithdrawal",
+          reservation: { _tag: "MaxAmountU64", value: options.amount },
+          typeArg: { _tag: "Balance", value: TypeTag.parse(options.type ?? TypeTag.SUI) },
+          withdrawFrom: from === "sender"
+            ? { _tag: "Sender" }
+            : from === "sponsor"
+            ? { _tag: "Sponsor" }
+            : { _tag: "SenderAllowance", funder: Address.normalize(from.funder), allowance: Address.normalize(from.allowance) }
+        }
+      }),
+      (input) =>
+        Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
+          d.inputs.push(input)
+          return { _tag: "Input", value: d.inputs.length - 1 }
+        })
+    ))
 
 /** `0x2::coin::redeem_funds<T>(withdrawal)`: a `Coin<T>` from a withdrawal. */
 export const redeemCoin = (withdrawal: T.Argument, type: string = TypeTag.SUI) =>
@@ -256,26 +286,23 @@ export const sendBalance = (balance: T.Argument, recipient: T.Argument, type: st
 
 /** A shared-object input by id, deduplicated like `object`; a repeat use can only widen it to mutable. */
 export const sharedObject = (objectId: string, initialSharedVersion: bigint, mutable: boolean) =>
-  Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
-    const id = Address.normalize(objectId)
-    const existing = d.objectIndex.get(id)
-    if (existing !== undefined) {
-      const input = d.inputs[existing]!
-      if (mutable && input._tag === "Object" && input.value._tag === "SharedObject") {
-        d.inputs[existing] = { _tag: "Object", value: { ...input.value, mutability: { _tag: "Mutable" } } }
+  Effect.flatMap(attempt(() => Address.normalize(objectId)), (id) =>
+    Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
+      const existing = d.objectIndex.get(id)
+      if (existing !== undefined) {
+        if (mutable) widen(d, existing)
+        return { _tag: "Input", value: existing }
       }
-      return { _tag: "Input", value: existing }
-    }
-    d.inputs.push({
-      _tag: "Object",
-      value: { _tag: "SharedObject", objectId: id, initialSharedVersion, mutability: { _tag: mutable ? "Mutable" : "Immutable" } }
-    })
-    d.objectIndex.set(id, d.inputs.length - 1)
-    return { _tag: "Input", value: d.inputs.length - 1 }
-  })
+      d.inputs.push({
+        _tag: "Object",
+        value: { _tag: "SharedObject", objectId: id, initialSharedVersion, mutability: { _tag: mutable ? "Mutable" : "Immutable" } }
+      })
+      d.objectIndex.set(id, d.inputs.length - 1)
+      return { _tag: "Input", value: d.inputs.length - 1 }
+    }))
 
 /** The `0x6` clock, shared and immutable. */
-export const clock = sharedObject(Address.CLOCK, 1n, false)
+export const clock = /* @__PURE__ */ sharedObject(Address.CLOCK, 1n, false)
 
 /**
  * An allowance to spend under: its id, or the id with the funder (checked
@@ -314,34 +341,24 @@ const allowanceIntent = (
 ) =>
   Effect.gen(function*() {
     const ref = typeof options.allowance === "string" ? { objectId: options.allowance } : options.allowance
-    const allowanceId = Address.normalize(ref.objectId)
-    // Input order matches @mysten/sui: allowance, clock, then the permit.
-    const allowance = yield* object(allowanceId)
-    const clockArg = yield* clock
-    return yield* addCommand({
-      _tag: "AllowanceIntent",
+    const parsed = yield* attempt(() => ({
+      allowanceId: Address.normalize(ref.objectId),
       coinType: TypeTag.normalizeString(options.type ?? TypeTag.SUI),
-      amount: options.amount,
-      output,
-      allowanceId,
       ...(ref.funder !== undefined && { funder: Address.normalize(ref.funder) }),
-      ...(ref.app !== undefined && { appType: TypeTag.normalizeString(ref.app.type), permit: ref.app.permit }),
-      allowance,
-      clock: clockArg
-    })
+      ...(ref.app !== undefined && { appType: TypeTag.normalizeString(ref.app.type), permit: ref.app.permit })
+    }))
+    // Input order matches @mysten/sui: allowance, clock, then the permit.
+    const allowance = yield* object(parsed.allowanceId)
+    const clockArg = yield* clock
+    return yield* addCommand({ _tag: "AllowanceIntent", amount: options.amount, output, ...parsed, allowance, clock: clockArg })
   })
 
 const intent = (output: BalanceIntent["output"]) => (options: IntentOptions) =>
   Effect.flatMap(checkAmount(options.amount), () =>
     options.allowance !== undefined
       ? allowanceIntent(output, { ...options, allowance: options.allowance })
-      : addCommand({
-        _tag: "BalanceIntent",
-        coinType: TypeTag.normalizeString(options.type ?? TypeTag.SUI),
-        amount: options.amount,
-        output,
-        useGasCoin: options.useGasCoin ?? true
-      }))
+      : Effect.flatMap(attempt(() => TypeTag.normalizeString(options.type ?? TypeTag.SUI)), (coinType) =>
+        addCommand({ _tag: "BalanceIntent", coinType, amount: options.amount, output, useGasCoin: options.useGasCoin ?? true })))
 
 /**
  * A `Coin<T>` worth `amount` (default SUI), sourced by `Resolve.balances`:
@@ -352,13 +369,13 @@ const intent = (output: BalanceIntent["output"]) => (options: IntentOptions) =>
  * instead (`Resolve.balances` reads the allowance, checks it, and emits a
  * `SenderAllowance` withdrawal plus `allowance::balance_spend`).
  */
-export const coin = intent("coin")
+export const coin = /* @__PURE__ */ intent("coin")
 
 /** A `Balance<T>` worth `amount`, sourced like `coin` (also under an `allowance`). */
-export const balance = intent("balance")
+export const balance = /* @__PURE__ */ intent("balance")
 
 export const publish = (modules: ReadonlyArray<Uint8Array>, dependencies: ReadonlyArray<string>) =>
-  addCommand({ _tag: "Publish", modules, dependencies: dependencies.map(Address.normalize) })
+  Effect.flatMap(attempt(() => dependencies.map(Address.normalize)), (deps) => addCommand({ _tag: "Publish", modules, dependencies: deps }))
 
 export const upgrade = (options: {
   readonly modules: ReadonlyArray<Uint8Array>
@@ -366,13 +383,10 @@ export const upgrade = (options: {
   readonly package: string
   readonly ticket: T.Argument
 }) =>
-  addCommand({
-    _tag: "Upgrade",
-    modules: options.modules,
-    dependencies: options.dependencies.map(Address.normalize),
-    package: Address.normalize(options.package),
-    ticket: options.ticket
-  })
+  Effect.flatMap(
+    attempt(() => ({ dependencies: options.dependencies.map(Address.normalize), package: Address.normalize(options.package) })),
+    (ids) => addCommand({ _tag: "Upgrade", modules: options.modules, ...ids, ticket: options.ticket })
+  )
 
 // -----------------------------------------------------------------------------
 // Building

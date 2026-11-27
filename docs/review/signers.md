@@ -159,6 +159,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 - **What** gas data and expiration are treated as one bundle that only a key *gas owner* protects (`:88`). Expiration is the sender's term, not the payer's.
 - **Scenario** key sender `K`, wallet sponsor `W`, transaction with `expiration: Epoch(5)`. `W` returns bytes with `expiration: None`. `checkChange` accepts, `K` signs bytes it never saw, and they are submitted. The reverse case (wallet sender, key sponsor) is correctly refused, as are sender, command, input and gas owner changes.
 - **Fix** refuse an expiration change whenever a key signer is the sender; keep the gas-terms rule for the gas owner.
+- **Resolution** Fixed in core (`Tx.ts` `checkChange`): an expiration change is refused whenever a key signer is the sender or the gas owner; gas-term changes stay refused only when a key signer is the gas owner. Tests in `packages/sui/test/core-review.test.ts`; README updated.
 
 ### SIGN-13: low-S and prehash rules rest on noble's defaults, with no k1/r1 test
 
