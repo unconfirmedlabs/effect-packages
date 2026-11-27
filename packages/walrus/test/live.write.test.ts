@@ -1,5 +1,5 @@
 /**
- * Live writes on testnet (§6.4, cases 1–2). **Spends SUI and WAL.** Opt in
+ * Live writes on testnet (§6.4, cases 1–3). **Spends SUI and WAL.** Opt in
  * with SUI_LIVE=1 and WALRUS_LIVE=1; with SUI_LIVE=1 alone this file spends
  * nothing (every test is skipped).
  *
@@ -19,11 +19,22 @@
  * | 2 | 2 resume | 4,017,875 | 891,135 | 9QkZBfmy…, 39n5W3kA…, Wf4pVUMa… |
  * | 3 | 1 direct | 4,017,875 | 891,135 | 4LE8eP4F…, GJK2Qg4j…, DK3QXs6F… |
  * | 4 | 2 resume | 3,011,676 | 891,135 | 76eKdjAP…, 28GBL9S5…, A3DWYBic… |
+ * | 5 | 3 relay (W8) | 3,975,382 | 891,135 | 38XNVBBH…, —, BmeoWciP… (relay accepted the tip; the response parse failed: `blob_id` is a byte array, fixed) |
+ * | 6 | 3 relay | 3,999,781 | 891,135 | Gm3roqAC…, GBidX3Sq…, Hj7uTr63… |
+ * | 7 | 1 direct | 4,017,875 | 891,135 | 3nWZJtTV…, 3mbeUbCt…, CnAgr59v… |
+ * | 8 | 2 resume | 4,017,875 | 891,135 | 5wK7Srmz…, 9SBknNf2…, 5JAtvGWE… |
+ * | 9 | 3 relay | 5,005,980 | 891,135 | 9Qx1dpFz…, B72Zw37p…, 7dp4MysX… |
  *
- * So a write with cleanup costs about 0.003–0.004 SUI and 0.00089 WAL. The
+ * So a write with cleanup costs about 0.003–0.005 SUI and 0.00089 WAL. The
  * register transaction's gas budget is resolved automatically (it rewrites
  * the system object, so the budget is about 0.12 SUI; most is not charged).
- * Balance after run 4: 1,146,580,225 MIST, 936,093,052 FROST.
+ * Through the relay, the register transaction also carries the auth input
+ * (input 0, 72 bytes) and the relay's tip: 105 MIST (testnet's constant tip),
+ * a coin redeemed from the address balance and transferred to the tip
+ * address; the relay accepts it (balance change +105 to
+ * `0x4b6a…52b6` in Gm3roqAC…). The relay path's SUI includes that tip and the
+ * tip coin's storage.
+ * Balance after run 9: 1,128,551,532 MIST, 931,637,377 FROST.
  *
  * Until the read path (W5) lands, the read-back uses the nodes directly: a
  * quorum of `n − 2f` primary slivers, decoded, compared with the bytes; and
@@ -57,6 +68,7 @@ import * as Recipes from "../src/Recipes.ts"
 import * as Status from "../src/Status.ts"
 import * as StorageNode from "../src/StorageNode.ts"
 import * as System from "../src/System.ts"
+import * as UploadRelay from "../src/UploadRelay.ts"
 import * as Write from "../src/Write.ts"
 
 const live = process.env.SUI_LIVE === "1" && process.env.WALRUS_LIVE === "1"
@@ -93,7 +105,15 @@ const loadSigner = async (): Promise<Signer.Signer> => {
 // Layers and helpers
 // -----------------------------------------------------------------------------
 
-const layer = Layer.mergeAll(System.layer, Committee.layer(), StorageNode.layer(), Encoder.layer()).pipe(
+const RELAY = process.env.WALRUS_RELAY_URL ?? UploadRelay.TESTNET_HOST
+
+const layer = Layer.mergeAll(
+  System.layer,
+  Committee.layer(),
+  StorageNode.layer(),
+  Encoder.layer(),
+  UploadRelay.layer({ host: RELAY, maxTip: 1_000_000n })
+).pipe(
   Layer.provideMerge(Config.layer(Config.testnet)),
   Layer.provideMerge(SuiGrpc.layer({ baseUrl: FULLNODE })),
   Layer.provideMerge(FetchHttpClient.layer)
@@ -257,6 +277,53 @@ suite("live writes (testnet, spends funds)", () => {
     } finally {
       for (const id of toBurn) digests[`burn ${id.slice(0, 10)}`] = (await runLive(burn(signer, id))).digest
       report("case 2", digests, before, await runLive(balances(signer.address)))
+    }
+  }, TIMEOUT)
+
+  test("3. relay: write through the testnet upload relay (tip from the address balance), read back, burn", async () => {
+    const signer = await loadSigner()
+    const before = await runLive(balances(signer.address))
+    if (before.sui < 300_000_000n || before.wal < 10_000_000n) {
+      console.warn(`[live.write] skipped: balance ${before.sui} MIST / ${before.wal} FROST is below 0.3 SUI / 0.01 WAL`)
+      return
+    }
+    const tipConfig = await runLive(Effect.flatMap(Effect.service(UploadRelay.UploadRelay), (r) => r.tipConfig))
+    const bytes = randomBlob()
+    const steps: Array<Write.Step> = []
+    const digests: Record<string, string> = {}
+    let blobObjectId: Address.Address | undefined
+    try {
+      const certified = await runLive(Write.run(bytes, {
+        epochs: 1,
+        deletable: true,
+        executor: Write.viaTx(signer),
+        via: "relay",
+        onStep: (s) =>
+          Effect.sync(() => {
+            steps.push(s)
+            if (s._tag === "Registered") {
+              blobObjectId = s.blobObjectId
+              if (s.digest) digests.register = s.digest
+            }
+          })
+      }))
+      if (certified.digest) digests.certify = certified.digest
+      expect(steps.map((s) => s._tag)).toEqual(["Encoded", "Registered", "Uploaded", "Certified"])
+      const encoded = steps[0]!
+      expect(encoded._tag === "Encoded" && encoded.relayNonce?.length).toBe(32)
+      const uploaded = steps[2]!
+      if (uploaded._tag !== "Uploaded") throw new Error("no Uploaded step")
+      expect(uploaded.certificate.epoch).toBe(certified.certifiedEpoch)
+
+      const read = await runLive(readBack(certified.blobId, bytes.length))
+      expect(read).toEqual(bytes)
+      const statuses = await runLive(certifiedByNodes(certified.blobId))
+      expect(statuses.length).toBeGreaterThan(0)
+    } finally {
+      if (blobObjectId !== undefined) digests.burn = (await runLive(burn(signer, blobObjectId))).digest
+      const tip = tipConfig._tag === "SendTip" ? UploadRelay.tipAmount(tipConfig, bytes.length, 1000) : 0n
+      console.log(`[live.write] case 3: relay ${RELAY}, tip ${tip} MIST (${tipConfig._tag})`)
+      report("case 3", digests, before, await runLive(balances(signer.address)))
     }
   }, TIMEOUT)
 })

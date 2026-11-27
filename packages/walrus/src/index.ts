@@ -4,7 +4,7 @@
  * Pure core (no services): BlobId, Bft, Encoding, Merkle, Messages,
  * Certificate, Cost, Status, Errors.
  * Chain state: Config, System, Committee. Transactions: Recipes.
- * Services: Encoder (WASM), StorageNode (HTTP). Flows: Read, Write.
+ * Services: Encoder (WASM), StorageNode (HTTP), UploadRelay (HTTP). Flows: Read, Write.
  */
 export * as BlobId from "./BlobId.ts"
 export * as Bft from "./Bft.ts"
@@ -22,4 +22,5 @@ export * as Recipes from "./Recipes.ts"
 export * as Status from "./Status.ts"
 export * as StorageNode from "./StorageNode.ts"
 export * as System from "./System.ts"
+export * as UploadRelay from "./UploadRelay.ts"
 export * as Write from "./Write.ts"

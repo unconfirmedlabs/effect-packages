@@ -111,7 +111,7 @@ The two `count_deletable_*` fields are snake_case (`api.rs:111-116` has no renam
 | R1 | `GET /v1/tip-config` answers `"no_tip"` or `{ "send_tip": { "address", "kind": { "const": u64 } \| { "linear": { "base", "encoded_size_mul_per_kib" } } } }`. Testnet relay (`https://upload-relay.testnet.walrus.space`): const 105 MIST. A linear tip is `base + encodedLength.divCeil(1024) × mul`. | `crates/walrus-sdk/src/upload_relay/tip_config.rs`; live |
 | R2 | `POST /v1/blob-upload-relay?blob_id=&tx_id=&nonce=&deletable_blob_object=&encoding_type=`, body the raw blob. `nonce` is URL-safe base64 without padding; `tx_id` and `nonce` are required when a tip is. | `crates/walrus-sdk/src/upload_relay/params.rs:52-73`; `crates/walrus-sdk/src/upload_relay.rs:36-60` |
 | R3 | The relay loads `tx_id` and requires **its first input** to be a pure value equal to BCS `{ blob_digest: sha256(blob), nonce_digest: sha256(nonce), unencoded_length: u64 }` (72 bytes), the transaction to be recent, and its SUI balance changes to pay the tip address at least the tip. | `crates/walrus-upload-relay/src/utils.rs:24-84`; `crates/walrus-upload-relay/src/tip/check.rs` |
-| R4 | The response is JSON `{ blob_id, confirmation_certificate: { signers: number[], serialized_message: number[], signature: base64url } }`. | `crates/walrus-sdk/src/upload_relay.rs:27-33`; `walrus/dist/upload-relay/client.mjs:47-54` |
+| R4 | The response is JSON `{ blob_id, confirmation_certificate: { signers: number[], serialized_message: number[], signature: base64url } }`. **`blob_id` is serde's `BlobId([u8; 32])`: an array of 32 numbers, not the text form** (live, W8; `@mysten/walrus` ignores the field). | `crates/walrus-sdk/src/upload_relay.rs:27-33`; `walrus/dist/upload-relay/client.mjs:47-54` |
 
 ### 1.7 `@mysten/walrus-wasm` 0.3.1
 
@@ -575,8 +575,18 @@ As built (W7), differences from the above:
 - **Resuming** from `Encoded`, `Registered` or `Uploaded` encodes again (one WASM call) and compares the id; `Uploaded` needs the slivers anyway if the certificate turns out stale. A resumed `Certified` is checked with `Encoder.blobId` only. `run` and `stream` share one state machine; a stale certificate re-uploads at most twice, then `CertificateStale`.
 - **Epoch moved during upload**: a confirmation for a newer epoch counts as an `InvalidSignature` failure; if the quorum then fails, both caches are refreshed and the upload runs once more; a second time it is `NotEnoughConfirmations` with a failure of kind `"EpochMoved"`. A committee whose `nShards` differs from the encoding's is `NotEnoughConfirmations` (weight 0); `run` does not re-encode in that case.
 - **Register** reads the created `Blob` (retrying `ObjectNotFound` for up to 10 s) to fill `endEpoch`. Reuse depends on the owner index (`listOwned`); right after a register a fullnode may not list it yet (live case 2 waits for it, as a restarted process would).
-- `viaTx(signer, { gasBudget?, gasPrice? })` takes optional gas terms; the automatic budget works for both transactions (live). `via: "relay"` is not in W7 (W8 adds it). Exported extras: `defaultLinger`, `defaultRetry`, `findRegistration`, `PER_NODE_CONCURRENCY`, `STATUS_CHECK_MIN_BYTES`, `DEFAULT_MAX_IN_FLIGHT_BYTES`, the step types `Encoded | Registered | Uploaded | Certified`.
+- `viaTx(signer, { gasBudget?, gasPrice? })` takes optional gas terms; the automatic budget works for both transactions (live). `via: "relay"` came with W8 (below). Exported extras: `defaultLinger`, `defaultRetry`, `findRegistration`, `PER_NODE_CONCURRENCY`, `STATUS_CHECK_MIN_BYTES`, `DEFAULT_MAX_IN_FLIGHT_BYTES`, the step types `Encoded | Registered | Uploaded | Certified`.
 - Live case 1 reads the blob back from the nodes directly (a sliver quorum and `f + 1` shards reporting it certified) instead of `Read.blob`/`Read.status`, which W5 was building in parallel; switch to `Read` once merged.
+
+As built (W8), the relay path:
+
+- **Types.** `WriteOptions<E, R, E2, R2, V extends Via = "nodes">` with `via?: V`; `run`, `stream` and `register` add `ViaServices<V>` to `R` (`UploadRelay` only when `via: "relay"`), so direct writes need no relay layer. Internally the relay is read with `serviceOption`; a missing layer is a `RelayError`. `WriteError` also includes `RelayError | TipTooHigh | CertificateInvalid`.
+- **Steps.** `upload(encoded, …)` is unchanged; the relay path uses two new exports, `encodeForRelay(bytes)` (`Encoder.blobId` plus a nonce) and `uploadViaRelay(bytes, registered, { txDigest? })`. `register` takes `via` and, for the relay, `blob` (its SHA-256 and length go into the auth input); an `Encoded` step without `relayNonce` gets one.
+- **`Registered.digest`** on the relay path is the transaction that carried the auth input and tip: the register transaction, or the auth-only transaction sent for a reused registration. No transaction is sent when the relay wants no tip.
+- **Freshness.** The relay checks that the tip transaction is recent (`tx_freshness_threshold`). A `Registered` step resumed from storage, and a re-upload after a stale certificate, first send a new auth-only transaction (one small transaction plus the tip) rather than reuse a digest of unknown age.
+- **Verification.** The relay's certificate is checked with `verifyCertificate` against the current committee carrying the system object's BLS keys (as W7's confirmations); a certificate for a newer epoch refreshes both caches and is checked against the new committee. Nothing is certified with a certificate that fails.
+- **Retries.** The relay `POST` is retried twice (1 s, 2 s) on no answer, `5xx` or `429`; other statuses (`400`, `401` auth, `402` tip) fail at once.
+- **Live (case 3):** the testnet relay's tip is 105 MIST; paying it from the address balance (a coin redeemed from a `FundsWithdrawal`, transferred to the tip address, as `@mysten/walrus` transfers its `coinWithBalance`) satisfies the relay's balance-change check.
 
 ### 4.8 Upload relay
 
@@ -597,6 +607,15 @@ export const verifyCertificate: (certificate: Certificate, expectedMessage: Uint
 ```
 
 The auth input is `Ptb.pure` of a 72-byte struct schema (`Bcs.bytes(32)`, `Bcs.bytes(32)`, `Bcs.u64`), which encodes with no length prefix. The implementer must confirm with an offline build that it is input 0 of the resolved transaction.
+
+As built (W8):
+
+- Confirmed: input 0 of the transaction after `Resolve.balances` and through `TransactionData` encode/decode, byte-equal to `@mysten/walrus`'s `addAuthPayload` (`test/relay.test.ts`), and live (`Gm3roqAC…`: input 0 is the 72-byte pure value).
+- The service also carries `maxTip: bigint | undefined` (from the layer), which `authAndTip` enforces. `authAndTip`'s error type is honest: `RelayError | TipTooHigh | BlobTooLarge | SystemError | Ptb.InvalidPureValue`; `authAndTipWith(relay, o)` takes the service explicitly (what `Write` uses). With `NoTip` it adds nothing.
+- `upload` sends `encoding_type=RS2` always, as `@mysten/walrus`'s write flow does; URL (parameter order included) and body equal `UploadRelayClient.writeBlob`'s. We also label the body `application/octet-stream`. `nonce` and `tx_id` are sent only when given (`Write` gives them when the relay wants a tip). Non-2xx is `RelayError { status, message: body text }`; no answer is `RelayError` without `status`; default `requestTimeout` 60 s (the relay stores the blob on the nodes before answering).
+- The nonce comes from `crypto.getRandomValues` (`makeNonce`), not Effect's `Random`: it is what keeps others from spending our tip transaction, so it must be unpredictable. Tests pin it through a saved step.
+- `verifyCertificate` fails with `CertificateInvalid` only: a malformed signature or key is reported as `CertificateInvalid` ("malformed signature"), since it is the relay's fault. It also checks the signature is 96 bytes.
+- Extra exports: `parseTipConfig`, `parseUploadResponse` (accepts `blob_id` as bytes or text and checks it is the requested blob), `uploadPath`, `AuthPackage`, `authPackage`, `makeNonce`, `TESTNET_HOST`, `MAINNET_HOST`, `TipKind`, `UploadOptions`, `UploadRelayOptions`, `UploadRelayService`.
 
 ### 4.9 Quilts
 
