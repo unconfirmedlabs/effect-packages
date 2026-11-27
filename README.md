@@ -10,7 +10,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only), `@scure/base` |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
-| `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / KeyValueStore), sender lock | — |
+| `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / any KeyValueStore, plus IndexedDB and OPFS stores), sender lock (in-process or Web Locks) | — |
 | `@unconfirmed/sui-secp256k1` | Secp256k1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-mldsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
@@ -310,6 +310,34 @@ const effects = yield* Lifecycle.run(recipe, { signer })
 - **Journal.** The durable journal stores each entry as versioned JSON (`{"v":1,…}`) and still reads entries written before versioning. An entry it cannot read does not fail the listing: it is reported in `listUnresolved().corrupt` and as `{ _tag: "Corrupt" }` from `reconcileAll`. `Journal.remove(digest)` drops any entry, unresolved or corrupt. The in-memory default keeps the latest 10 000 settled entries.
 - `reconcileAll({ concurrency, resubmit })` makes one lookup per entry, without polling, and keeps the time each unknown entry was first sent and its last send error. `reconcile(digest)` uses the signed bytes the journal holds for that digest.
 
+**Which layers on which platform.** `JournalKeyValueStore.layer()` runs over any Effect `KeyValueStore`; the sender lock is a separate choice.
+
+| Platform | `KeyValueStore` under the journal | `SenderLock` |
+|---|---|---|
+| CLI / server | `KeyValueStore.layerFileSystem(dir)` (with the platform's `FileSystem` and `Path`) or `KeyValueStore.layerSql()` | the in-process default (one process per sender), or your own distributed lock |
+| Web (recommended) | `KeyValueStoreIndexedDb.layer()`: asynchronous, strict durability on writes, survives other tabs upgrading or deleting the database | `SenderLockWebLocks.layer` |
+| Web, alternative | `KeyValueStoreOpfs.layer()`: a file per key, written atomically through `createWritable` (Chromium, Firefox 111+, Safari 26+; older Safari fails typed) | `SenderLockWebLocks.layer` |
+| Web, small | `KeyValueStore.layerStorage(() => localStorage)`: synchronous (blocks the main thread on every write), about 5 MB per origin, bytes stored as Base64 | `SenderLockWebLocks.layer` |
+| Tests | `KeyValueStore.layerMemory`, or `Journal.layerMemory` for no store at all | `SenderLock.layerMemory` |
+
+```ts
+import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb"
+import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
+
+const browser = Layer.mergeAll(
+  EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),
+  JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())),  // one connection per layer scope
+  SenderLockWebLocks.layer                                                           // fails typed without navigator.locks
+)
+const program = Effect.gen(function*() {
+  yield* Lifecycle.reconcileAll()             // this tab settles what any tab left unresolved
+  return yield* Lifecycle.run(recipe, { signer })
+}).pipe(Effect.provide(browser))
+```
+
+- **The journal is safe across tabs; the lock needs Web Locks.** Every journal key is written whole and nothing is read-modify-written, so tabs sharing one store never lose each other's entries. That holds over any store with per-key get, set and remove. The default sender lock lives in one tab, though, and two tabs running for one address can then build on the same gas coin and equivocate. `SenderLockWebLocks` holds an exclusive Web Lock per address (`@unconfirmed/sui-lifecycle/sender/<address>`), taken in ascending address order like the memory lock. Interrupting the run, or closing the tab, releases it. Without `navigator.locks` (outside a secure context, for example) the layer fails with `SenderLockUnavailable` rather than quietly falling back to a lock other tabs can't see. `SenderLockWebLocks.layerWith({ ifUnavailable: "memory" })` opts into the fallback.
+- Every store failure (quota, a blocked upgrade, private-mode refusals, an aborted transaction) is a `KeyValueStoreError`, which the journal reports as `JournalError`. Each store is its own subpath, so an app bundles only the one it uses.
+
 ## Keys
 
 **Import and export** use the `suiprivkey1…` strings the Sui CLI and wallets exchange. The core can't build a signer for a scheme it doesn't ship, so decoding gives bytes and the scheme package makes the signer:
@@ -424,6 +452,8 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | The same with `SuiGrpc.layer` (all nine services) | 343 / 108 | 339 / 108 | 334 / 104 | — |
 | The same over GraphQL (`SuiGraphQL.layer`) | 310 / 107 | 304 / 106 | 297 / 101 | — |
 | `Lifecycle.run` (`SuiGrpc.layer`, KeyValueStore journal) | 375 / 119 | 370 / 119 | 362 / 113 | — |
+| `Lifecycle.run` in a browser (IndexedDB journal, Web Locks) | 380 / 121 | 375 / 120 | 367 / 115 | — |
+| The same over OPFS | 379 / 120 | 373 / 120 | 366 / 114 | — |
 | Hand-written `Ptb.moveCall` | 82 / 28 | 84 / 29 | 79 / 26 | — |
 | One generated call (Walrus `blob.burn`) | 82 / 28 | 85 / 29 | 79 / 27 | — |
 | Walrus: read via the aggregator | 139 / 47 | 139 / 47 | 133 / 45 | — |

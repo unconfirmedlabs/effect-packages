@@ -12,6 +12,8 @@ import * as TransactionJson from "@unconfirmed/sui/TransactionJson"
 import * as Wallet from "@unconfirmed/sui-wallet/Wallet"
 import * as EvidenceGrpc from "@unconfirmed/sui-lifecycle/EvidenceGrpc"
 import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/sui-lifecycle"
+import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb"
+import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
 import type { Address } from "@unconfirmed/sui/Address"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
 import * as Ptb from "@unconfirmed/sui/Ptb"
@@ -128,3 +130,18 @@ export const lifecycle = (recipe: typeof aRecipe) =>
     const effects = yield* Lifecycle.run(recipe, { signer })
     // #endregion
   })
+
+export const lifecycleBrowser = (recipe: typeof aRecipe) => {
+  // #region readme
+  const browser = Layer.mergeAll(
+    EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),
+    JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())),  // one connection per layer scope
+    SenderLockWebLocks.layer                                                           // fails typed without navigator.locks
+  )
+  const program = Effect.gen(function*() {
+    yield* Lifecycle.reconcileAll()             // this tab settles what any tab left unresolved
+    return yield* Lifecycle.run(recipe, { signer })
+  }).pipe(Effect.provide(browser))
+  // #endregion
+  return program
+}

@@ -106,6 +106,33 @@ const programs: Record<string, string> = {
       const signer = yield* Ed25519.generate
       return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
     }).pipe(Effect.provide(layer))).then(console.log)`,
+  // The browser setup the README recommends: the durable journal over IndexedDB, sender locks over Web Locks.
+  "ours: Lifecycle.run, browser (IndexedDB, Web Locks)": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
+    ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
+    import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb"
+    import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = Layer.mergeAll(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
+  "ours: the same over OPFS": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
+    ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
+    import * as KeyValueStoreOpfs from "@unconfirmed/sui-lifecycle/KeyValueStoreOpfs"
+    import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = Layer.mergeAll(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreOpfs.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
   "walrus: read via aggregator": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
