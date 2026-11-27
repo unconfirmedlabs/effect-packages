@@ -359,15 +359,10 @@ describe("Packages.getFunction type arguments", () => {
       )
     )
     expect(f.parameters).toEqual([
-      { reference: "Mutable", typeName: `${A("0x2")}::coin::Coin`, typeArguments: [WAL], type: `${A("0x2")}::coin::Coin<${WAL}>` },
+      { reference: "Mutable", typeName: `${A("0x2")}::coin::Coin`, typeArguments: [WAL] },
       { reference: "Value", typeName: `${A("0x2")}::coin::Coin` },
-      {
-        reference: "Value",
-        typeName: `${A("0x2")}::vec_map::VecMap`,
-        typeArguments: ["address", "vector<u16>"],
-        type: `${A("0x2")}::vec_map::VecMap<address, vector<u16>>`
-      },
-      { reference: "Value", typeName: undefined, type: "u64" }
+      { reference: "Value", typeName: `${A("0x2")}::vec_map::VecMap`, typeArguments: ["address", "vector<u16>"] },
+      { reference: "Value", typeName: undefined }
     ])
   })
 })

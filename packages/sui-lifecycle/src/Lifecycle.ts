@@ -558,7 +558,7 @@ const send = Effect.fnUntraced(function*(
         Effect.retry({
           schedule: config.resubmit,
           times: Math.max(config.resubmitAttempts - 1, 0),
-          while: isRetryable
+          while: (e) => e._tag === "RpcError" && isRetryable(e)
         })
       )
     ).pipe(
@@ -582,6 +582,8 @@ const send = Effect.fnUntraced(function*(
     return effects
   }
   const failure = result.failure
+  // Accepted, but the answer can't be read as effects: it may have executed.
+  if (failure._tag === "ExecutedEffectsIncomplete") return yield* reconcileSigned(signed, failure.message, attempts, 0)
   // A lock held by another transaction, whatever the code: the bytes reached
   // validators, so it reconciles (with rechecks while the winner becomes readable).
   if (LOCK_CONFLICT.test(failure.message)) {

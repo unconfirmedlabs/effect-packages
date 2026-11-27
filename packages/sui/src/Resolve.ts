@@ -57,17 +57,17 @@ export interface Prefetched {
   readonly gasCoins?: ReadonlyArray<Coin>
 }
 
-export class Incomplete extends Schema.TaggedError<Incomplete>()("Incomplete", {
+export class Incomplete extends /* @__PURE__ */ Schema.TaggedError<Incomplete>()("Incomplete", {
   missing: Schema.String
 }) {}
 
 /** The plan can't become valid transaction data (an invalid address, too many inputs, a reference to a later result, ...). */
-export class InvalidTransaction extends Schema.TaggedError<InvalidTransaction>()("InvalidTransaction", {
+export class InvalidTransaction extends /* @__PURE__ */ Schema.TaggedError<InvalidTransaction>()("InvalidTransaction", {
   reason: Schema.String
 }) {}
 
 /** The budget dry run failed: the transaction would fail on chain as it stands. */
-export class GasEstimationFailed extends Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", {
+export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", {
   description: Schema.String,
   command: Schema.optionalKey(Schema.Number),
   abortCode: Schema.optionalKey(Schema.BigInt),
@@ -79,30 +79,30 @@ export class GasEstimationFailed extends Schema.TaggedError<GasEstimationFailed>
  * The gas owner's SUI can't pay. `required` is the budget, plus, when commands
  * spend from the gas coin, the amounts they split off it.
  */
-export class InsufficientGas extends Schema.TaggedError<InsufficientGas>()("InsufficientGas", {
+export class InsufficientGas extends /* @__PURE__ */ Schema.TaggedError<InsufficientGas>()("InsufficientGas", {
   owner: Schema.String,
   required: Schema.BigInt,
   available: Schema.BigInt
 }) {}
 
-export class InsufficientBalance extends Schema.TaggedError<InsufficientBalance>()("InsufficientBalance", {
+export class InsufficientBalance extends /* @__PURE__ */ Schema.TaggedError<InsufficientBalance>()("InsufficientBalance", {
   owner: Schema.String,
   coinType: Schema.String,
   required: Schema.BigInt,
   available: Schema.BigInt
 }) {}
 
-export class InvalidBalanceIntent extends Schema.TaggedError<InvalidBalanceIntent>()("InvalidBalanceIntent", {
+export class InvalidBalanceIntent extends /* @__PURE__ */ Schema.TaggedError<InvalidBalanceIntent>()("InvalidBalanceIntent", {
   reason: Schema.String
 }) {}
 
 /** No object with the allowance's id. */
-export class AllowanceNotFound extends Schema.TaggedError<AllowanceNotFound>()("AllowanceNotFound", {
+export class AllowanceNotFound extends /* @__PURE__ */ Schema.TaggedError<AllowanceNotFound>()("AllowanceNotFound", {
   allowance: Schema.String
 }) {}
 
 /** The object isn't a shared `Allowance<Balance<T>>` for the intent's coin type, or its funder isn't the one the caller named. */
-export class InvalidAllowance extends Schema.TaggedError<InvalidAllowance>()("InvalidAllowance", {
+export class InvalidAllowance extends /* @__PURE__ */ Schema.TaggedError<InvalidAllowance>()("InvalidAllowance", {
   allowance: Schema.String,
   reason: Schema.String
 }) {}
@@ -112,35 +112,35 @@ export class InvalidAllowance extends Schema.TaggedError<InvalidAllowance>()("In
  * `SpendPermit`, a permit for another app, or a permit for an allowance that
  * isn't app-bound. `null` means "no app".
  */
-export class AllowanceAppMismatch extends Schema.TaggedError<AllowanceAppMismatch>()("AllowanceAppMismatch", {
+export class AllowanceAppMismatch extends /* @__PURE__ */ Schema.TaggedError<AllowanceAppMismatch>()("AllowanceAppMismatch", {
   allowance: Schema.String,
   allowanceApp: Schema.NullOr(Schema.String),
   permitApp: Schema.NullOr(Schema.String)
 }) {}
 
 /** The sender isn't the allowance's spender (`null`: the allowance has none, so nobody can spend). */
-export class AllowanceSpenderMismatch extends Schema.TaggedError<AllowanceSpenderMismatch>()("AllowanceSpenderMismatch", {
+export class AllowanceSpenderMismatch extends /* @__PURE__ */ Schema.TaggedError<AllowanceSpenderMismatch>()("AllowanceSpenderMismatch", {
   allowance: Schema.String,
   spender: Schema.NullOr(Schema.String),
   sender: Schema.String
 }) {}
 
 /** The allowance's start time (inclusive) is after the chain clock. */
-export class AllowanceNotStarted extends Schema.TaggedError<AllowanceNotStarted>()("AllowanceNotStarted", {
+export class AllowanceNotStarted extends /* @__PURE__ */ Schema.TaggedError<AllowanceNotStarted>()("AllowanceNotStarted", {
   allowance: Schema.String,
   startTimestampMs: Schema.BigInt,
   nowMs: Schema.BigInt
 }) {}
 
 /** The allowance's expiration (exclusive) has passed on the chain clock. */
-export class AllowanceExpired extends Schema.TaggedError<AllowanceExpired>()("AllowanceExpired", {
+export class AllowanceExpired extends /* @__PURE__ */ Schema.TaggedError<AllowanceExpired>()("AllowanceExpired", {
   allowance: Schema.String,
   expirationTimestampMs: Schema.BigInt,
   nowMs: Schema.BigInt
 }) {}
 
 /** The transaction's spends would exceed the allowance's lifetime cap or its current rate-limit window. */
-export class InsufficientAllowance extends Schema.TaggedError<InsufficientAllowance>()("InsufficientAllowance", {
+export class InsufficientAllowance extends /* @__PURE__ */ Schema.TaggedError<InsufficientAllowance>()("InsufficientAllowance", {
   allowance: Schema.String,
   coinType: Schema.String,
   limit: Schema.Literals(["lifetime", "rate"]),
@@ -314,8 +314,8 @@ function mapArguments(c: Command, f: (a: T.Argument) => T.Argument): Command {
   }
 }
 
-const encodeU64 = Bcs.encodeSync(Bcs.u64)
-const encodeAddress = Bcs.encodeSync(Bcs.Address)
+const encodeU64 = /* @__PURE__ */ Bcs.encodeSync(Bcs.u64)
+const encodeAddress = /* @__PURE__ */ Bcs.encodeSync(Bcs.Address)
 const GAS = "gas"
 
 const moveCall = (
@@ -372,13 +372,13 @@ const rewrite = <A>(f: () => A): Effect.Effect<A, InvalidBalanceIntent> =>
 // allowances (coin / balance intents under an allowance)
 // -----------------------------------------------------------------------------
 
-const Window = Bcs.enum({ PeriodicMs: Bcs.u64, CalendarMonths: Bcs.u8 })
-const RateLimit = Bcs.enum({
+const Window = /* @__PURE__ */ Bcs.enum({ PeriodicMs: Bcs.u64, CalendarMonths: Bcs.u8 })
+const RateLimit = /* @__PURE__ */ Bcs.enum({
   Windowed: Bcs.struct({ limit: Bcs.u256, spent: Bcs.u256, anchorMs: Bcs.option(Bcs.u64), index: Bcs.u64, window: Window })
 })
 
 /** `0x2::allowance::Allowance<T>`: settings plus cumulative spend. */
-const AllowanceObject = Bcs.struct({
+const AllowanceObject = /* @__PURE__ */ Bcs.struct({
   id: Bcs.Address,
   settings: Bcs.struct({
     funder: Bcs.Address,
@@ -395,8 +395,8 @@ const AllowanceObject = Bcs.struct({
 })
 type AllowanceObject = typeof AllowanceObject.Type
 
-const decodeAllowance = Bcs.decode(AllowanceObject)
-const decodeClock = Bcs.decode(Bcs.struct({ id: Bcs.Address, timestampMs: Bcs.u64 }))
+const decodeAllowance = /* @__PURE__ */ Bcs.decode(AllowanceObject)
+const decodeClock = /* @__PURE__ */ Bcs.decode(Bcs.struct({ id: Bcs.Address, timestampMs: Bcs.u64 }))
 
 const normalizeType = (s: string) => {
   try {
@@ -858,7 +858,7 @@ const validDuringFor = (info: ChainInfo): T.TransactionExpiration => ({
 })
 
 /** A `ValidDuring` expiration for this epoch and the next: the replay protection address-balance gas needs. */
-export const validDuring = Effect.fn("Resolve.validDuring")(function*() {
+export const validDuring = /* @__PURE__ */ Effect.fn("Resolve.validDuring")(function*() {
   return validDuringFor(yield* Effect.flatMap(Effect.service(Chain), (c) => c.info))
 })
 
@@ -1060,8 +1060,16 @@ const pickCoins = (plan: Plan, owner: Address, target: bigint | undefined, limit
 const payWithGasCoin = (plan: Plan, owner: Address, budget: bigint, available: bigint) =>
   Effect.gen(function*() {
     const fromBalance = available > 0n ? available : 0n
-    const coins = yield* pickCoins(plan, owner, undefined, fromBalance > 0n ? MAX_GAS_OBJECTS - 1 : MAX_GAS_OBJECTS)
+    const limit = fromBalance > 0n ? MAX_GAS_OBJECTS - 1 : MAX_GAS_OBJECTS
     const required = budget + gasCoinSpend(plan.draft)
+    // The prefetched first page, when it already covers what the gas coin must
+    // hold (as `@mysten/sui` uses its first page); otherwise every coin, listed.
+    const used = new Set(plan.draft.inputs.flatMap((i) => (i._tag === "Object" ? [i.value.objectId] : [])))
+    const page = plan.prefetched?.owner === owner ? plan.prefetched.gasCoins?.filter((c) => !used.has(c.ref.objectId)).slice(0, limit) : undefined
+    const pageTotal = page?.reduce((s, c) => s + c.balance, 0n) ?? 0n
+    const coins = page !== undefined && page.length > 0 && pageTotal + fromBalance >= required
+      ? { total: pageTotal, refs: page.map((c) => c.ref) }
+      : yield* pickCoins(plan, owner, undefined, limit)
     const total = coins.total + fromBalance
     if (total < required || (fromBalance === 0n && coins.refs.length === 0)) {
       return yield* new InsufficientGas({ owner, required, available: total })

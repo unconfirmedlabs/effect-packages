@@ -8,15 +8,15 @@ import { successFor } from "./cache.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
 const missing = (method: string, field: string) =>
-  Effect.fail(new RpcError({ method, code: "DATA_LOSS", message: `malformed response: no ${field}` }))
+  Effect.fail(new RpcError({ method, code: "UNAVAILABLE", message: `incomplete response: no ${field}` }))
 
 /**
  * `Chain` over gRPC. One `GetEpoch` serves both the gas price and chain info;
  * successes are cached for 30 seconds, failures are not, and concurrent
  * readers share one request. A response without a field the caller depends on
- * is `DATA_LOSS`, not a guessed value.
+ * is a retryable `UNAVAILABLE`, not a guessed value.
  */
-export const layer: Layer.Layer<Chain, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<Chain, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Chain,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

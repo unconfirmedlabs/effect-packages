@@ -101,7 +101,7 @@ export const ledgerWindow = (grpc: GrpcWeb["Service"]) =>
   grpc.unary(Rpc.LedgerService_GetServiceInfo, {}).pipe(
     Effect.flatMap((i) =>
       i.checkpoint_height === undefined
-        ? Effect.fail(new RpcError({ method: Rpc.LedgerService_GetServiceInfo.path, code: "DATA_LOSS", message: "malformed response: no checkpoint_height" }))
+        ? Effect.fail(new RpcError({ method: Rpc.LedgerService_GetServiceInfo.path, code: "UNAVAILABLE", message: "incomplete response: no checkpoint_height" }))
         : Effect.succeed({ lowest: i.lowest_available_checkpoint ?? 0n, end: i.checkpoint_height + 1n })
     )
   )

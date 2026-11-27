@@ -34,8 +34,7 @@ const typeString = (b: P.OpenSignatureBody | undefined): string | undefined => {
 }
 
 const parameter = (p: P.OpenSignature): Parameter => {
-  const type = typeString(p.body)
-  const out = { reference: REFERENCE[p.reference ?? 0] ?? "Value", typeName: p.body?.type_name, ...(type !== undefined && { type }) } as const
+  const out = { reference: REFERENCE[p.reference ?? 0] ?? "Value", typeName: p.body?.type_name } as const
   const inst = p.body?.type === 10 ? p.body.type_parameter_instantiation ?? [] : []
   if (inst.length === 0) return out
   const typeArguments = inst.map(typeString)
@@ -46,7 +45,7 @@ const parameter = (p: P.OpenSignature): Parameter => {
  * `Packages` over gRPC. Function signatures are immutable; successful reads are
  * cached for the layer's lifetime, and concurrent reads of one target share a request.
  */
-export const layer: Layer.Layer<Packages, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<Packages, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Packages,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

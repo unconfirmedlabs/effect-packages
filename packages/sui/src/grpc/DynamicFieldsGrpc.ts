@@ -62,7 +62,7 @@ const valueTypeOf = (fieldType: string) => {
  * through `Objects.get`, so concurrent reads batch with every other object read;
  * `list` pages `StateService.ListDynamicFields`.
  */
-export const layer: Layer.Layer<DynamicFields, never, GrpcWeb | Objects> = Layer.effect(
+export const layer: Layer.Layer<DynamicFields, never, GrpcWeb | Objects> = /* @__PURE__ */ Layer.effect(
   DynamicFields,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

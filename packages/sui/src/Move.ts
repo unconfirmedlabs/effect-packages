@@ -184,7 +184,11 @@ export const option = <A, E>(item: Schema.Codec<A, E>, input: OptionInput<A>): A
       Option.isOption(input) ? input as Option.Option<A> : input === undefined ? Option.none() : Option.some(input as A)
     )
 
-const PURE_STRUCTS: Record<string, (args: ReadonlyArray<TypeTag.TypeTag>) => Schema.Top | undefined> = {
+type PureStruct = (args: ReadonlyArray<TypeTag.TypeTag>) => Schema.Top | undefined
+
+/** Pure struct types by full name, built on first use so an unused `Move` import costs nothing at load. */
+let pureStructs: Record<string, PureStruct> | undefined
+const PURE_STRUCTS = (): Record<string, PureStruct> => pureStructs ??= {
   [`${Address.normalize("0x1")}::string::String`]: () => Bcs.string,
   [`${Address.normalize("0x1")}::ascii::String`]: () => Bcs.string,
   [`${Address.normalize("0x2")}::object::ID`]: () => address,
@@ -221,7 +225,7 @@ export const pureSchemaOf = (tag: TypeTag.TypeTag): Schema.Top | undefined => {
       return item === undefined ? undefined : Bcs.vector(item)
     }
     case "struct":
-      return PURE_STRUCTS[`${tag.address}::${tag.module}::${tag.name}`]?.(tag.typeParams)
+      return PURE_STRUCTS()[`${tag.address}::${tag.module}::${tag.name}`]?.(tag.typeParams)
   }
 }
 

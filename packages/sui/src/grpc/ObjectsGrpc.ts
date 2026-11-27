@@ -45,7 +45,7 @@ class GetObject extends Request.Class<{ readonly objectId: Address }, SuiObject,
  * coalesced into `BatchGetObjects` calls of up to 50, and gets of the same id
  * within a batch share one entry.
  */
-export const layer: Layer.Layer<Objects, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<Objects, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Objects,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

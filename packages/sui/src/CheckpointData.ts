@@ -44,7 +44,7 @@ export class CheckpointData extends /* @__PURE__ */ Context.Service<CheckpointDa
   readonly get: (sequenceNumber: bigint) => Effect.Effect<Checkpoint, CheckpointNotFound | RpcError>
   /** History in order, `start` inclusive to `end` exclusive (default: the tip at the time of the call, pinned for the whole scan). */
   readonly list: (options?: { readonly start?: bigint; readonly end?: bigint }) => Stream.Stream<Checkpoint, RpcError>
-  /** New checkpoints as they are executed. Never ends successfully. */
+  /** New checkpoints as they are executed. Ends cleanly if the server closes the stream (use `follow` to reconnect and fill gaps); a cut-off stream fails. */
   readonly subscribe: Stream.Stream<Checkpoint, RpcError>
 }>()("@unconfirmed/sui/CheckpointData") {}
 

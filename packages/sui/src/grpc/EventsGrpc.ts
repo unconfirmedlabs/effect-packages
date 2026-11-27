@@ -37,7 +37,7 @@ export const filter = (f: EventFilter): P.EventFilter | undefined | "none" => {
 const MASK = { paths: EVENT_PATHS }
 
 /** `Events` over gRPC: `ListEvents` resumed across server budgets, and `SubscribeEvents`. */
-export const layer: Layer.Layer<Events, never, GrpcWeb> = Layer.effect(
+export const layer: Layer.Layer<Events, never, GrpcWeb> = /* @__PURE__ */ Layer.effect(
   Events,
   Effect.gen(function*() {
     const grpc = yield* GrpcWeb

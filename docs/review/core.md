@@ -26,6 +26,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
   - Related: the gas path of `coinIntents` never compares the amount with what the sender owns (`if (key === GAS || ab >= t.total) return`), so `Ptb.coin({ amount: 100 SUI })` from a 1 SUI wallet builds and then fails on chain instead of raising `InsufficientBalance`.
 - **Fix.** When `usesGasCoin(draft)`, pay with every SUI coin not used as an input (255 with a reservation, else 256), as Mysten does. Add a typed `InsufficientBalance` check on the gas path (`balance.total − reserved < t.total`). The test "reservation first, coins only for the rest" in `balances.test.ts` encodes the current behaviour and needs updating.
 - **Effort** S
+- **Resolution** Fixed. When commands use the gas coin, `auto` and `coins` pay with every SUI coin not used as an input (255 plus a reservation of the whole address balance when there is one, else 256), as `@mysten/sui` does, using the prefetched first page when it already covers what is needed. They fail with `InsufficientGas` when coins plus balance are below the budget plus the pure amounts `SplitCoins(GasCoin, …)` takes (`Resolve.gasCoinSpend`); `addressBalance` checks the same. The gas path of `coinIntents` now raises `InsufficientBalance` like the others. Regression tests: offline (`core-review.test.ts`, the reviewer's 6 + 3.998 SUI case) and live on devnet with the faucet (`core-review.live.test.ts`: 8 SUI from the gas coin, payment of both coins, `Success`). The `balances.test.ts` case now expects every coin.
 
 ### CORE-2: `InsufficientGas` is missing from the error type of the default pipeline
 - **Severity** medium · **Category** api / error typing · **CONFIRMED** (`tsc`)
@@ -34,6 +35,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** `Extract<Effect.Error<typeof Tx.run(recipe, { signer })>, { _tag: "InsufficientGas" }>` is `never`, so `Effect.catchTag("InsufficientGas", …)` does not compile and exhaustive handlers treat it as impossible, yet the effect fails with it at run time. With `payment: Resolve.auto` written out, the type is correct.
 - **Fix.** Default the type parameters to the default strategy's: `<E = RpcError | InsufficientGas | Incomplete, R = Chain | Coins>`, and drop the cast. Add a type-level test.
 - **Effort** S
+- **Resolution** Fixed. `Tx.resolve` types its strategy as `PaymentStrategy<E | DefaultPaymentError, R | DefaultPaymentServices>` (no cast), so `InsufficientGas` is in `Tx.resolve`, `Tx.build`, `Tx.run` and `TransactionJson.resolve` whatever the `payment`. A custom strategy's type gains `InsufficientGas` too: an over-approximation, since nothing else it adds wasn't already required. Type-level test in `core-review.test.ts`.
 
 ### CORE-3: a stream cut mid-way completes normally
 - **Severity** medium · **Category** correctness · **CONFIRMED** (logic, with fakes); PLAUSIBLE in the field (needs a proxy that ends the body cleanly)
@@ -44,6 +46,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** `Events.list({ start: 1n, end: 100n })` against a stream that stops after checkpoint 2 with no `QueryEnd` returns 2 events and succeeds. An indexer records the range as fully scanned. `CheckpointData.follow` recovers through its gap fill; plain `list` callers do not.
 - **Fix.** In `call`, fail with `UNAVAILABLE` (retryable) when the body ends with leftover bytes or without a trailers frame. In `resumable`, fail with `DATA_LOSS` when the stream ends and no frame carried `end`.
 - **Effort** S
+- **Resolution** Fixed. `toFrames` emits an `incomplete` marker when the body ends inside a frame or without a trailers frame, and `call` fails with retryable `UNAVAILABLE`. `resumable` fails with `DATA_LOSS` when a stream ends without `QueryEnd`. Verified live: every list stream on testnet carries `QueryEnd`.
 
 ### CORE-4: a BCS vector length is trusted before any element is read
 - **Severity** medium · **Category** security (denial of service) · **CONFIRMED** (Bun 1.4.4)
@@ -55,6 +58,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Who is exposed.** Anything decoding bytes it did not produce: `TransactionData.decode` on wallet-returned bytes (`Tx.ts:114`), object and event contents, and parsers in other packages that use `Bcs.vector` on outside bytes (for example `packages/seal/src/EncryptedObject.ts:28,54`; read, not run).
 - **Fix.** Do not preallocate: `push` in the loop so the first missing element fails. Reject a length greater than the remaining bytes when the element has a non-zero minimum size, and cap lengths of zero-size elements (Rust `bcs` caps sequences at 2³¹−1 and container depth at 500; neither limit exists here).
 - **Effort** S
+- **Resolution** Fixed. Vector decode pushes element by element after checking `n × minSize(item) <= remaining`; zero-size elements are capped at `Bcs.MAX_ZERO_SIZE_ITEMS` (65,536). The 5-byte case fails in under 50 ms without allocating (`packages/bcs/test/bcs.test.ts`). No depth limit added: deep decodes already fail typed on stack overflow.
 
 ### CORE-5: `Transactions.execute` can die, or invent a failure, after the transaction ran
 - **Severity** medium · **Category** error handling · **CONFIRMED** (fake `GrpcWeb`)
@@ -64,6 +68,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
   - A response without `transaction` becomes `{ digest: "", status: Failure("unknown execution failure") }`. `Tx.execute` then raises `ExecutionFailed` ("reached the chain and Move aborted, gas was charged") with an empty digest for what is a malformed response.
 - **Fix.** Wrap the conversions with `scan.convert` (already used by `DynamicFieldsGrpc`) so a throw is `RpcError DATA_LOSS`. Map an unknown owner kind to a value (`{ _tag: "Unknown", kind }`) rather than throwing. Treat a missing `transaction`, `digest` or `effects.status` as `DATA_LOSS`.
 - **Effort** S
+- **Resolution** Fixed. `owner()` maps unknown kinds to a new `Owner` variant `{ _tag: "Unknown", kind }` (`Resolve.inputs` refuses such an object as an input with `InvalidTransaction`). Conversions run under `convert`, so a throw is `RpcError DATA_LOSS`; a missing transaction or status (and, except for simulations, digest) is `DATA_LOSS`. For `execute` it is the new typed `Transactions.ExecutedEffectsIncomplete { digest }` (digest computed from the bytes): reconcile, not `ExecutionFailed` (also CT-15; `sui-lifecycle` reconciles it).
 
 ### CORE-6: any per-object error in `BatchGetObjects` is reported as `ObjectNotFound`
 - **Severity** medium · **Category** error typing · **CONFIRMED** (fake `GrpcWeb`)
@@ -72,6 +77,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** The node answers one entry with `{ code: 13, message: "storage error" }`. `Objects.get` fails with `ObjectNotFound`. Callers that act on absence (`AllowanceNotFound`, `DynamicFieldNotFound`, lifecycle reconciliation from on-chain evidence) take a transient node fault for a deleted object.
 - **Fix.** `ObjectNotFound` only for `error.code === 5`; other statuses become `RpcError` with the mapped code and message; a missing entry is `DATA_LOSS`.
 - **Effort** S
+- **Resolution** Fixed. `ObjectNotFound` only for status code 5; another per-object status is `RpcError` with its mapped code and message; a missing entry is `DATA_LOSS`. Tests in `core-review.test.ts`.
 
 ### CORE-7: Ptb and Move builders throw on bad addresses and type strings
 - **Severity** low · **Category** error handling · **CONFIRMED**
@@ -80,6 +86,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** `Ptb.address(userTypedRecipient)` with `"nope"` dies with `Error: invalid Sui address: nope`; `Ptb.address` throws at call time, before any Effect exists. Also dying: `Ptb.object("nope")`, `Ptb.moveCall({ typeArguments: ["0x2::sui"] })`, `Ptb.coin({ type: "SUI" })`, `Move.obj("nope")`, `Move.param("0x2::sui", 1n)`. `Move.pure(Move.address, "nope")` is correctly a typed `InvalidPureValue`.
 - **Fix.** Fail with `InvalidPureValue` (or a new `InvalidArgument`) from these builders; `Ptb.address` can go through `Move.address`.
 - **Effort** S
+- **Resolution** Fixed. `Ptb.address`, `object`, `sharedObject`, `moveCall`, `makeMoveVec`, `withdrawal`, `coin` / `balance`, `publish`, `upgrade` and `Move.obj`, `param` (and the system-object helpers) fail with `InvalidPureValue` instead of throwing. API: these builders and `Move.call` now have `InvalidPureValue` in their error type (the codegen type test was updated).
 
 ### CORE-8: other defects where a typed error is expected
 - **Severity** low · **Category** error handling · **CONFIRMED**
@@ -90,6 +97,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
   - `packages/sui/src/grpc/ObjectsGrpc.ts:79`, `packages/sui/src/grpc/CoinsGrpc.ts:36`: `listOwned` and `Coins.list` convert inside `map`, so a malformed object is a defect; `get` on the same data is `DATA_LOSS`.
 - **Fix.** `InvalidBalanceIntent` for the intent cases; validate the plan once in `Resolve.finish` / `budget` and fail with a typed error; encode the request inside the effect and map failure to `RpcError INVALID_ARGUMENT`; use `scan.convert` in the listings.
 - **Effort** M
+- **Resolution** Fixed. A bad `NestedResult` of an intent or a forward result reference is `InvalidBalanceIntent`; an unencodable plan (bad sender, too many inputs, forward reference) is the new `Resolve.InvalidTransaction` from `budget`, `finish` and `Tx.execute` (`Resolve.encode`); requests are encoded inside the effect (`INVALID_ARGUMENT`); `listOwned` and `Coins.list` convert under `convert` (`DATA_LOSS`).
 
 ### CORE-9: `Tx.build` runs its lookups one after another
 - **Severity** low · **Category** performance · **CONFIRMED** (testnet trace)
@@ -98,6 +106,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **What is wrong.** Only the dry run depends on the others. Gas price, chain info and the gas owner's balance are independent of inputs and of the budget, so 4 phases can be 2. The SUI balance is read twice (intents, then payment). `GetEpoch` is called twice with different masks (`ChainGrpc.ts:16,30`).
 - **Fix.** Start gas price, `Chain.info` and the SUI balance alongside `Resolve.inputs`; pass the balance from `balances` to the payment step; fetch `reference_gas_price` in the same `GetEpoch` as `first_checkpoint`. `@mysten/sui` does the equivalent with one `Promise.all`.
 - **Effort** M
+- **Resolution** Fixed. New `Resolve.prefetch` reads the gas price, chain info and the gas owner's SUI balance and first page of coins in one round trip alongside `Resolve.inputs`; later steps use them (`Plan.prefetched`). `ChainGrpc` reads `reference_gas_price` in the same `GetEpoch` as `first_checkpoint`. Measured on testnet, cold, median of 9 (sender `0x1`): `splitCoins(gas) + transfer` 324 → 207 ms (5 sequential requests in 4 phases → 2 phases), `Ptb.coin + clock call + transfer` 474 → 205 ms (6 phases → 2).
 
 ### CORE-10: one `GetFunction` per MoveCall, and no in-flight sharing in the caches
 - **Severity** low · **Category** performance · **CONFIRMED**
@@ -108,6 +117,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** A PTB with 200 calls to one function sends 200 concurrent `GetFunction` requests the first time it is built.
 - **Fix.** In `Resolve.inputs`, fetch only for calls with an unresolved object argument, unique by target. In the caches, keep the in-flight effect (a `Deferred`) and drop it on failure.
 - **Effort** S
+- **Resolution** Fixed. `Resolve.inputs` fetches signatures only for calls taking an unresolved object, once per target. `successFor` / `successByKey` share an in-flight computation (a `Deferred`, dropped on failure; an interrupted leader hands over to a waiter). Five concurrent cold `getFunction`s make one request; concurrent `Chain.info` + gas price make one `GetServiceInfo` and one `GetEpoch`.
 
 ### CORE-11: `Objects.get` does not deduplicate, though three comments say so
 - **Severity** low · **Category** docs / performance · **CONFIRMED**
@@ -115,6 +125,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **What is wrong.** Four concurrent gets of two ids send a `BatchGetObjects` with four entries. 120 gets with 20 repeats send batches of 50, 50 and 20, the last one all repeats. The live test asks for `0x6` twice and only checks that one request was made.
 - **Fix.** Group entries by id inside the resolver and complete every entry of a group from one result, or correct the comments.
 - **Effort** S
+- **Resolution** Fixed. The resolver groups entries by id and completes every entry of a group from one result.
 
 ### CORE-12: gRPC-web frame reassembly is quadratic in message size
 - **Severity** low · **Category** performance · **CONFIRMED** (fake `HttpClient`)
@@ -123,6 +134,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Measurement.** One message in 16 KiB chunks: 1 MiB 30 ms, 4 MiB 199 ms, 16 MiB 2,699 ms (809 ms in 64 KiB chunks). Checkpoints with contents are the large case.
 - **Fix.** Keep a chunk list and the frame length read from the first 5 bytes; concatenate once per frame.
 - **Effort** S
+- **Resolution** Fixed. Reassembly keeps a chunk list and copies each byte once; an 8 MiB message in 16 KiB chunks decodes in ~40 ms (test bound 2 s).
 
 ### CORE-13: `TransactionJson` misses `Validity` in its ambiguous-variant guard
 - **Severity** low · **Category** correctness · **CONFIRMED** (against `Transaction.from`)
@@ -131,6 +143,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** `expiration: { Validity: { …, maxEpoch: "999", allowedProposers: null }, ValidDuring: { …, maxEpoch: "2" } }` decodes here as `ValidDuring` with `maxEpoch` 2, and in `@mysten/sui` as `Validity` with `maxEpoch` 999. `{ None: true, Epoch: "5" }` is refused, as intended.
 - **Fix.** Add `"Validity"`, and derive the set from the schemas so it cannot drift again.
 - **Effort** S
+- **Resolution** Fixed. The variant keys are derived from the `TransactionJson` schema on first use (every struct with an optional `$kind`), which adds `Validity`.
 
 ### CORE-14: `Ptb.object` ignores `mutable` on a repeat, and `Ptb.objectArg` is not deduplicated
 - **Severity** low · **Category** correctness · **CONFIRMED**
@@ -140,6 +153,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
   - `Ptb.objectArg(ref)` then `Ptb.object(sameId)` produces two inputs for one object, which validators reject as a duplicate input.
 - **Fix.** Widen `mutable` on a repeat (true wins) and register `objectArg` ids in `objectIndex`.
 - **Effort** S
+- **Resolution** Fixed. A repeat `Ptb.object(id, { mutable: true })` widens a forced-immutable input; `Ptb.objectArg` registers its id, so `object` / `sharedObject` / `objectArg` of one id share an input.
 
 ### CORE-15: missing response fields are replaced with plausible values
 - **Severity** low · **Category** error handling · **CONFIRMED** (code)
@@ -148,6 +162,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** A node or proxy that drops `reference_gas_price` gives every transaction a price of 1000, and the node rejects it later with an unrelated message.
 - **Fix.** Fail with `DATA_LOSS` when a field the caller depends on is absent.
 - **Effort** S
+- **Resolution** Fixed. `ChainGrpc` fails with retryable `UNAVAILABLE` (CT-13) when `epoch`, `reference_gas_price`, `chain_id` or `checkpoint_height` is missing; `object()` requires id, version, digest and type, and owners their address/version (`DATA_LOSS`).
 
 ### CORE-16: BCS decoding validates twice and is 3 to 14 times slower than `@mysten/bcs`
 - **Severity** low · **Category** performance · **CONFIRMED** (Bun 1.4.4)
@@ -165,6 +180,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **What is wrong.** The reader already guarantees ranges, lengths, UTF-8 and variant indexes. The schema pass re-checks every element, including a regex per address and a base58 decode per digest.
 - **Fix.** Compile a per-layout flag "the reader's output is already the decoded type" and skip the schema pass for it; only `Bcs.transform` nodes need the schema. Use `getBigUint64` for `u64`.
 - **Effort** M
+- **Resolution** Fixed (safe subset). Trees built entirely by `Bcs` skip the schema pass on decode, and encode validates in the writer, falling back to the schema path for any refusal so failures are unchanged; `getBigUint64` for u64. Bun: `TransactionData` decode ×2000 91 → 18 ms, encode 47 → 24 ms, `Coin` decode ×20k 76 → 10 ms, `vector<u64>` 100k 52 → 6 ms, `vector<u8>` 1 MB 132 → 65 ms.
 
 ### CORE-17: a sponsor wallet may change an expiration that a key sender then signs
 - **Severity** low · **Category** security (policy) · **CONFIRMED** (scripted wallet)
@@ -173,6 +189,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **Failure scenario.** The sender sets `Epoch(10)` to bound the transaction's life; the sponsoring wallet returns bytes with `None`. `Tx.execute(data, [key, wallet])` succeeds and submits the `None` bytes, signed by the sender's key.
 - **Fix.** When any key signer exists, allow the wallet to change `expiration` only from unset (`None`) to `ValidDuring`, or refuse expiration changes outright.
 - **Effort** S
+- **Resolution** Fixed with SIGN-12: `checkChange` refuses an expiration change whenever a key signer is the sender or the gas owner; gas terms stay refused only when a key signer is the gas owner. Test in `core-review.test.ts`.
 
 ### CORE-18: `GasEstimationFailed` and `ExecutionFailed` drop what the node reported
 - **Severity** low · **Category** error typing · **CONFIRMED** (code)
@@ -180,6 +197,7 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **What is wrong.** `GasEstimationFailed` keeps only `description`, although the simulation status has `command` and `abortCode`. Neither error carries the Move abort location (package, module, function) or the clever-error fields the node returns in `ExecutionError`.
 - **Fix.** Carry the `Status` failure fields in both errors and add the abort location to `Status`.
 - **Effort** S
+- **Resolution** Fixed. `Status.Failure` gains optional `location` (package, module, function, instruction) and `cleverError`; `GasEstimationFailed` now carries `command`, `abortCode` and `location`, and `ExecutionFailed` `location` (`Resolve.failureFields`).
 
 ### CORE-19: HTTP failures map to `UNKNOWN`
 - **Severity** low · **Category** error typing · **CONFIRMED**
@@ -187,15 +205,16 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 - **What is wrong.** Measured: 401, 403 and 404 give `UNKNOWN`. The gRPC HTTP mapping is 401 → `UNAUTHENTICATED`, 403 → `PERMISSION_DENIED`, 404 → `UNIMPLEMENTED`, 429 / 502 / 503 / 504 → `UNAVAILABLE`. A wrong API key or base URL is indistinguishable from an unknown fault.
 - **Fix.** Apply the standard table.
 - **Effort** S
+- **Resolution** Fixed. 400 → `INTERNAL`, 401 → `UNAUTHENTICATED`, 403 → `PERMISSION_DENIED`, 404 → `UNIMPLEMENTED`, 429 / 5xx → `UNAVAILABLE`, else `UNKNOWN`.
 
 ### Nits
 
-- **CORE-20 (docs, CONFIRMED).** `CheckpointData.ts:47` and `Events.ts:120` say `subscribe` "never ends successfully". It ends cleanly when the server closes the stream, which `follow` handles and a direct caller does not expect.
-- **CORE-21 (correctness, CONFIRMED).** `Bcs.string` encodes a lone surrogate as U+FFFD (`"\ud800"` gives `ef bf bd`), so the encoder changes data it is documented to validate. `Bcs.encode` of a 50,000-deep `TypeTag` throws (`Result adapter can only return schema issues`) instead of returning a failure.
-- **CORE-22 (api, CONFIRMED).** `Move.datatype` and `Move.withGet` (`Move.ts:102,106`) mutate the schema they are given. Generated code passes a fresh schema; `Move.datatype(type, () => Move.Table)` by hand would rewrite `.type` on the shared `Table`, which is also `Bag`, `ObjectTable` and `ObjectBag`.
-- **CORE-23 (api).** `Packages.Parameter` now has `typeName` plus `typeArguments`, absent for vectors and whenever a type parameter appears. `PackagesGrpc.typeString` already builds the full closed type string; exposing that as one `type?: string` would cover vectors and drop a field. "Absent" also cannot be told apart from "the transport does not report it".
-- **CORE-24 (correctness, CONFIRMED).** A unary call stops at the first message and cancels the body (`GrpcWeb.ts:146`), so an error status in the trailers after a message is ignored. No latency cost: head and drain both took 74 ms median against testnet.
-- **CORE-25 (tests).** `packages/bcs/test` is empty; canonical ULEB, bool and option tags, trailing bytes and length limits are tested only through other packages. There are no offline tests for gRPC-web framing (trailers, split frames, HTTP status mapping), for `ObjectsGrpc` batching, or for the error type of the default `Tx.run`.
+- **CORE-20 (docs, CONFIRMED).** `CheckpointData.ts:47` and `Events.ts:120` say `subscribe` "never ends successfully". It ends cleanly when the server closes the stream, which `follow` handles and a direct caller does not expect. **Resolution:** Fixed: both docs now say the stream ends cleanly when the server closes it, and fails when cut off (CORE-3).
+- **CORE-21 (correctness, CONFIRMED).** `Bcs.string` encodes a lone surrogate as U+FFFD (`"\ud800"` gives `ef bf bd`), so the encoder changes data it is documented to validate. `Bcs.encode` of a 50,000-deep `TypeTag` throws (`Result adapter can only return schema issues`) instead of returning a failure. **Resolution:** Fixed: lone surrogates are a typed `SchemaError`; an encode that throws is a `SchemaError` (Bun's tail calls make the 50,000-deep TypeTag encode succeed; tested with a deeper struct chain).
+- **CORE-22 (api, CONFIRMED).** `Move.datatype` and `Move.withGet` (`Move.ts:102,106`) mutate the schema they are given. Generated code passes a fresh schema; `Move.datatype(type, () => Move.Table)` by hand would rewrite `.type` on the shared `Table`, which is also `Bag`, `ObjectTable` and `ObjectBag`. **Resolution:** Fixed: both attach to a shallow copy (same prototype and AST); `Move.generic` wraps the function.
+- **CORE-23 (api).** `Packages.Parameter` now has `typeName` plus `typeArguments`, absent for vectors and whenever a type parameter appears. `PackagesGrpc.typeString` already builds the full closed type string; exposing that as one `type?: string` would cover vectors and drop a field. "Absent" also cannot be told apart from "the transport does not report it". **Resolution:** Not changed: adding `type` to the gRPC transport breaks gRPC/GraphQL parity of `Parameter` (the live parity test compares them), and dropping `typeArguments` is a breaking change for a nit. Left for a change made in both transports.
+- **CORE-24 (correctness, CONFIRMED).** A unary call stops at the first message and cancels the body (`GrpcWeb.ts:146`), so an error status in the trailers after a message is ignored. No latency cost: head and drain both took 74 ms median against testnet. **Resolution:** Fixed: `unary` reads through to the trailers.
+- **CORE-25 (tests).** `packages/bcs/test` is empty; canonical ULEB, bool and option tags, trailing bytes and length limits are tested only through other packages. There are no offline tests for gRPC-web framing (trailers, split frames, HTTP status mapping), for `ObjectsGrpc` batching, or for the error type of the default `Tx.run`. **Resolution:** Fixed: `packages/bcs/test/bcs.test.ts` (25 tests) and `packages/sui/test/core-review.test.ts` (framing, trailers, HTTP mapping, batching, scans, payment, error types, builders).
 
 ## Checked and found sound
 

@@ -117,6 +117,6 @@ export interface ListOptions {
 export class Events extends /* @__PURE__ */ Context.Service<Events, {
   /** Matching events in ledger order, across as many requests as it takes. An empty `any()` matches nothing. */
   readonly list: (options?: ListOptions) => Stream.Stream<Event, RpcError>
-  /** Matching events as they are emitted, from the node's current tip. Never ends successfully. */
+  /** Matching events as they are emitted, from the node's current tip. Ends cleanly if the server closes the stream (resubscribe to continue); a cut-off stream fails. */
   readonly subscribe: (filter?: EventFilter) => Stream.Stream<Event, RpcError>
 }>()("@unconfirmed/sui/Events") {}

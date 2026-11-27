@@ -108,12 +108,16 @@ const changed = (c: P.ChangedObject): ChangedObject => ({
 
 export const EFFECTS_PATHS = ["digest", "effects.status", "effects.gas_used", "effects.changed_objects"]
 
-/** Throws on a response without the transaction, its digest or its status; run it under `scan.convert`. */
-export const effects = (t: P.ExecutedTransaction | undefined): Effects => {
+/**
+ * Throws on a response without the transaction, its status or (unless the
+ * caller knows it: a simulation carries none) its digest; run it under `convert`.
+ */
+export const effects = (t: P.ExecutedTransaction | undefined, knownDigest?: string): Effects => {
   if (t === undefined) throw new Error("no transaction")
-  if (!t.digest) throw new Error("no transaction digest")
+  const digest = t.digest || knownDigest
+  if (!digest) throw new Error("no transaction digest")
   return {
-    digest: t.digest,
+    digest,
     status: status(t.effects?.status),
     gasUsed: gas(t.effects?.gas_used),
     changedObjects: (t.effects?.changed_objects ?? []).map(changed)

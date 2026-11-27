@@ -27,6 +27,8 @@ Not reproduced: the known flake in `packages/walrus/test/live.gateway.test.ts` p
 - This is what failed `packages/sui/test/extensions.live.test.ts:87` in live run 1 (`expect(filtered.length).toBeGreaterThan(0)`, received 0).
 - Fix: on `OUT_OF_RANGE`, re-read the floor and resume from the last watermark with the new start; end the stream only when the watermark is at or below the new floor. Never swallow it before the first item. Effort S–M.
 
+**Resolution:** fixed as proposed. `resumable` takes a recovery hook; a descending scan to the floor re-reads it on `OUT_OF_RANGE` and resumes from the last watermark with the new start, ending only when what is left is below the floor; without progress it fails typed after 3 tries. Other `OUT_OF_RANGE`s (an explicit start) are no longer swallowed. Offline tests in `core-review.test.ts`; live on testnet, 20 descending `take(1)` lists all returned an event, and the full live suite passed.
+
 ### X-2 · medium · docs · CONFIRMED
 **Three README examples do not compile or run as written.** Checked by transcribing every README snippet into one file and running `tsc` under the repo's `tsconfig.base.json`; everything else compiled.
 
@@ -55,6 +57,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - With barrel imports under esbuild the aggregator program drops 33.8 KB.
 - Caveat: Rolldown keeps annotation comments in minified output (X-14), so annotating every nested call adds up to 3 KB raw there. Annotate module-level declarations and class `extends`, as `walrus/src/Errors.ts` does.
 - Fix: annotate `Bcs.ts` first, then the `sui` core and `walrus/Status.ts`, `BlobId.ts`. Effort S.
+
+**Resolution (`bcs` and `sui`):** module-level declarations and `class … extends` calls annotated in `bcs` and every non-generated `sui` source (Walrus files left to the Walrus fix). Measured against the same tree with the annotations stripped (KB min / gzip, Bun / esbuild / Rolldown): read one object −6.6/−2.4, −5.5/−2.1, −11.3/−3.8; verify Ed25519 only −4.6/−1.4, −3.4/−1.0, −5.2/−1.4; `TransactionData` decode −4.4/−1.3, −4.2/−1.3, −3.9/−1.3; Bcs u64 decode −1.8/−0.6, −1.0/−0.4, −6.1/−2.1; the full transaction program −2.4/−0.7, −2.4/−0.7, +0.5/−0.2.
 
 ### X-4 · medium · bundle · CONFIRMED (cost), prototype measured (saving)
 **Protobuf descriptors are the largest part of our own code, and most of them describe fields nothing reads.**

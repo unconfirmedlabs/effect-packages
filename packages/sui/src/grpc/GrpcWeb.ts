@@ -160,7 +160,7 @@ export interface GrpcWebOptions {
   readonly headers?: Readonly<Record<string, string>>
 }
 
-export class GrpcWeb extends Context.Service<GrpcWeb, {
+export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
   readonly unary: <I, O>(method: Rpc<I, O, false>, request: I) => Effect.Effect<O, RpcError>
   readonly serverStream: <I, O>(method: Rpc<I, O, true>, request: I) => Stream.Stream<O, RpcError>
 }>()("@unconfirmed/sui/GrpcWeb") {

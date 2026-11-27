@@ -93,7 +93,7 @@ export interface Draft {
   readonly commands: ReadonlyArray<Command>
 }
 
-export class InvalidPureValue extends Schema.TaggedError<InvalidPureValue>()("InvalidPureValue", {
+export class InvalidPureValue extends /* @__PURE__ */ Schema.TaggedError<InvalidPureValue>()("InvalidPureValue", {
   issue: Schema.String
 }) {}
 
@@ -107,7 +107,7 @@ interface MutableDraft {
   objectIndex: Map<string, number>
 }
 
-export class PtbBuilder extends Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/sui/PtbBuilder") {}
+export class PtbBuilder extends /* @__PURE__ */ Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/sui/PtbBuilder") {}
 
 const addCommand = (command: Command) =>
   Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
@@ -369,10 +369,10 @@ const intent = (output: BalanceIntent["output"]) => (options: IntentOptions) =>
  * instead (`Resolve.balances` reads the allowance, checks it, and emits a
  * `SenderAllowance` withdrawal plus `allowance::balance_spend`).
  */
-export const coin = intent("coin")
+export const coin = /* @__PURE__ */ intent("coin")
 
 /** A `Balance<T>` worth `amount`, sourced like `coin` (also under an `allowance`). */
-export const balance = intent("balance")
+export const balance = /* @__PURE__ */ intent("balance")
 
 export const publish = (modules: ReadonlyArray<Uint8Array>, dependencies: ReadonlyArray<string>) =>
   Effect.flatMap(attempt(() => dependencies.map(Address.normalize)), (deps) => addCommand({ _tag: "Publish", modules, dependencies: deps }))

@@ -77,7 +77,7 @@ export const build = <A, E1, R1, E2 = never, R2 = never>(
 export const serialize = T.encode
 
 /** The transaction reached the chain and Move aborted. Gas was charged. */
-export class ExecutionFailed extends Schema.TaggedError<ExecutionFailed>()("ExecutionFailed", {
+export class ExecutionFailed extends /* @__PURE__ */ Schema.TaggedError<ExecutionFailed>()("ExecutionFailed", {
   digest: Schema.String,
   description: Schema.String,
   command: Schema.optionalKey(Schema.Number),
@@ -124,7 +124,7 @@ const checkChange = (
  * gas terms (its returned bytes win, see `checkChange`), but not after another
  * has signed. Intent-message `Signer`s then sign the final bytes concurrently.
  */
-const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
+const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
   let current = data
   let bytes = yield* Resolve.encode(data)
   const signatures: Array<Uint8Array | undefined> = signers.map(() => undefined)
@@ -170,7 +170,7 @@ const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: Reado
  * gas terms it pays for, never the sender, commands, inputs or gas owner, and
  * nothing a key signer pays for; what is submitted is exactly the bytes it signed.
  */
-export const execute = Effect.fn("Tx.execute")(function*(
+export const execute = /* @__PURE__ */ Effect.fn("Tx.execute")(function*(
   data: T.TransactionData,
   signers: Signer | TransactionSigner | ReadonlyArray<Signer | TransactionSigner>
 ) {

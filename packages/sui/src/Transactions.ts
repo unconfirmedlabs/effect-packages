@@ -78,11 +78,24 @@ export class TransactionNotFound extends /* @__PURE__ */ Schema.TaggedError<Tran
   digest: Schema.String
 }) {}
 
+/**
+ * The node accepted the transaction but its answer can't be read as effects
+ * (no transaction, digest or status). It may well have executed: reconcile by
+ * `digest` (`Transactions.waitFor`) rather than treating it as a failure.
+ */
+export class ExecutedEffectsIncomplete extends /* @__PURE__ */ Schema.TaggedError<ExecutedEffectsIncomplete>()("ExecutedEffectsIncomplete", {
+  digest: Schema.String,
+  message: Schema.String
+}) {}
+
 export class Transactions extends /* @__PURE__ */ Context.Service<Transactions, {
   /** Run without committing. `checks: false` skips signature/ownership checks (dev-inspect). */
   readonly simulate: (txBytes: Uint8Array, options?: { readonly checks?: boolean }) => Effect.Effect<Simulation, RpcError>
   /** Submit signed bytes. A Move abort is a successful submission with a `Failure` status. */
-  readonly execute: (txBytes: Uint8Array, signatures: ReadonlyArray<Uint8Array>) => Effect.Effect<Effects, RpcError>
+  readonly execute: (
+    txBytes: Uint8Array,
+    signatures: ReadonlyArray<Uint8Array>
+  ) => Effect.Effect<Effects, RpcError | ExecutedEffectsIncomplete>
   readonly get: (digest: string) => Effect.Effect<Effects, TransactionNotFound | RpcError>
 }>()("@unconfirmed/sui/Transactions") {}
 
