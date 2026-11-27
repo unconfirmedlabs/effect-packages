@@ -59,7 +59,8 @@ export const fromSecretKey = (secretKey: Uint8Array): Effect.Effect<Signer, Inva
   })
 }
 
-/** A fresh random key. */
-export const generate: Effect.Effect<Signer> = Effect.suspend(() =>
-  Effect.orDie(fromSecretKey(crypto.getRandomValues(new Uint8Array(32))))
-)
+/** A fresh random 32-byte secret key, to keep or export (`PrivateKey.encode({ flag: FLAG, secretKey })`). */
+export const generateSecretKey: Effect.Effect<Uint8Array> = Effect.sync(() => crypto.getRandomValues(new Uint8Array(32)))
+
+/** A signer over a fresh random key. Use `generateSecretKey` to keep the key. */
+export const generate: Effect.Effect<Signer> = Effect.flatMap(generateSecretKey, (sk) => Effect.orDie(fromSecretKey(sk)))

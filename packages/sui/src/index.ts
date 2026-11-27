@@ -4,7 +4,7 @@
  * Pure modules (no services): Address, TypeTag, TransactionData, Hash, Ptb.
  * Capability services (implemented by `@unconfirmed/sui/grpc`): Chain, Objects,
  * Coins, Packages, Transactions, Checkpoints, DynamicFields, Events, CheckpointData.
- * Signing: Signer, SignatureScheme (the plugin registry), Verify, Ed25519.
+ * Signing: Signer, SignatureScheme (the plugin registry), Verify, Ed25519, PrivateKey (suiprivkey, sui.keystore).
  * Other schemes are packages: `@unconfirmed/sui-secp256k1`, `-secp256r1`, `-multisig`, ...
  */
 export * as Address from "./Address.ts"
@@ -19,6 +19,7 @@ export * as Events from "./Events.ts"
 export * as Hash from "./Hash.ts"
 export * as Objects from "./Objects.ts"
 export * as Packages from "./Packages.ts"
+export * as PrivateKey from "./PrivateKey.ts"
 export * as Ptb from "./Ptb.ts"
 export * as Resolve from "./Resolve.ts"
 export * as RpcError from "./RpcError.ts"
