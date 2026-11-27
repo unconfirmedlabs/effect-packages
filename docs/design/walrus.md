@@ -169,11 +169,11 @@ Line numbers are in `walrus/dist/`. Items 1–5 are the ones `EXPLORATION.md` §
 ```
 packages/walrus/
   package.json     @unconfirmed/walrus; exports { ".": "./src/index.ts", "./*": "./src/*.ts" }
-                   dependencies: effect 4.1.6, @unconfirmed/bcs, @unconfirmed/sui, @unconfirmed/quorum (workspace:*),
+                   dependencies: effect 4.1.6, @unconfirmed/bcs, @unconfirmed/sui, @unconfirmed/quorum (workspace:*; added by W5, it does not exist yet at W1),
                                  @mysten/walrus-wasm 0.3.1 (exact), @noble/hashes ^2.3.0
   sui-codegen.config.ts, scripts/codegen.ts
   src/
-    BlobId.ts  Bft.ts  Encoding.ts  Merkle.ts  Messages.ts  Certificate.ts  Cost.ts  Status.ts   pure
+    BlobId.ts  Bft.ts  Encoding.ts  Merkle.ts  Messages.ts  Certificate.ts  Cost.ts  Status.ts  Errors.ts   pure
     generated/walrus/*.ts, generated/deps/**                                                     codegen output (committed)
     Config.ts  System.ts  Committee.ts                                                           chain state
     Encoder.ts                                                                                   WASM
@@ -202,6 +202,9 @@ export const toBytes: (id: BlobId) => Uint8Array
 export const fromU256: (n: bigint) => BlobId                              // little-endian, as on chain (E6)
 export const toU256: (id: BlobId) => bigint
 export const derive: (encodingType: number, unencodedLength: bigint, merkleRoot: Uint8Array) => BlobId   // E5
+export const fromString: (s: string) => Result.Result<BlobId, InvalidBlobId>
+export const Bcs32: Bcs.BcsSchema<BlobId, Uint8Array>                     // the 32 raw bytes, for BCS structs
+export class InvalidBlobId                                                // defined here (Errors.ts imports BlobId), re-exported by Errors.ts
 
 // Bft.ts — T1..T5
 export const maxFaulty: (n: number) => number        // f
@@ -214,6 +217,7 @@ export const RS2 = 1
 export const sourceSymbols: (n: number) => { readonly primary: number; readonly secondary: number }
 export const symbolSize: (unencodedLength: number, n: number) => Result.Result<number, BlobTooLarge>
 export const maxBlobSize: (n: number) => number
+// sliverBytes, bcsSliverBytes, encodedLength (and Cost.cost) throw RangeError above maxBlobSize: check symbolSize first for untrusted lengths
 export const sliverBytes: (unencodedLength: number, n: number) => { readonly symbolSize: number; readonly primary: number; readonly secondary: number }
 export const bcsSliverBytes: (unencodedLength: number, n: number) => { readonly primary: number; readonly secondary: number }   // W3
 export const encodedLength: (unencodedLength: number, n: number) => number
@@ -221,33 +225,50 @@ export const storageUnits: (encodedLength: number) => number
 export const shardOfPair: (pairIndex: number, blobId: BlobId, n: number) => number
 export const pairOfShard: (shard: number, blobId: BlobId, n: number) => number
 export const pairOfSecondary: (sliverIndex: number, n: number) => number
+export const rotationOffset: (blobId: BlobId, n: number) => number
 
 // Merkle.ts
 export const root: (leaves: ReadonlyArray<Uint8Array>) => Uint8Array      // E5; [] -> 32 zero bytes
+export const leafHash, innerHash, rootOfLeafHashes, empty
 
 // Messages.ts — BCS schemas built with @unconfirmed/bcs, and their checks
-export const BlobMetadata, BlobMetadataWithId, SliverData, Confirmation, Certificate   // E9, M1, M2
+export const BlobMetadata, BlobMetadataWithId, SliverData, Confirmation, Certificate   // E9, M1, M2; TS field names camelCase
+export const MerkleNode, EncodingType /* RedStuffRaptorQ | RS2 */, SliverPairMetadata, Symbols, Intent, PersistenceBcs, BLOB_CERT_INTENT
 export interface VerifiedMetadata { readonly blobId: BlobId; readonly unencodedLength: number; readonly nShards: number
                                     readonly hashes: ReadonlyArray<{ readonly primary: Uint8Array; readonly secondary: Uint8Array }>
                                     readonly bytes: Uint8Array /* BCS BlobMetadata, for PUT */ }
-/** Decode a node's metadata response and prove it belongs to `blobId`: hash count, RS2, length <= max, derived id (E5). */
+/** Decode a node's metadata response and prove it belongs to `blobId`: embedded id, RS2, hash count, length <= max, derived id (E5).
+ *  An `Empty` hash counts as 32 zero bytes, as in Rust. */
 export const verifyMetadata: (blobId: BlobId, response: Uint8Array, nShards: number) => Result.Result<VerifiedMetadata, InvalidMetadata>
 /** Header checks that need no WASM: BCS shape, sliver index, symbol size and data length for this blob. */
 export const checkSliver: (bytes: Uint8Array, expected: { readonly index: number; readonly symbolSize: number; readonly symbols: number }) => Result.Result<void, InvalidSliver>
+/** The header and a view (no copy) of the symbols; what `checkSliver` and the crafted-blob method (W6) build on. */
+export const parseSliver: (bytes: Uint8Array) => Result.Result<{ readonly index: number; readonly symbolSize: number; readonly data: Uint8Array }, InvalidSliver>
 export const confirmationMessage: (epoch: number, blobId: BlobId, persistence: Persistence) => Uint8Array
 export type Persistence = { readonly _tag: "Permanent" } | { readonly _tag: "Deletable"; readonly objectId: Address }
 
 // Certificate.ts
 export interface Certificate { readonly epoch: number; readonly signers: ReadonlyArray<number>; readonly serializedMessage: Uint8Array; readonly signature: Uint8Array }
-export const signersBitmap: (signers: ReadonlyArray<number>, members: number) => Uint8Array   // M3; fails on an index >= members
+/** JSON form, byte fields in base64: this is §4.7's `CertificateSchema`. */
+export const Certificate: Schema.Codec<Certificate, { epoch: number; signers: number[]; serializedMessage: string; signature: string }>
+/** From wire parts (R4, or a built aggregate): checks the intent, reads the epoch, rejects duplicate signers, sorts them. */
+export const fromParts: (parts: { signers; serializedMessage; signature }) => Result.Result<Certificate, CertificateInvalid>
+export const signersBitmap: (signers: ReadonlyArray<number>, members: number) => Uint8Array   // M3; throws RangeError on an index >= members
 
 // Cost.ts — C7, E4
 export const cost: (unencodedLength: number, epochs: number, prices: { readonly storage: bigint; readonly write: bigint }, n: number)
   => { readonly encodedLength: number; readonly units: number; readonly storage: bigint; readonly write: bigint; readonly total: bigint }
 
 // Status.ts — S1
-export type BlobStatus = /* tagged union: Nonexistent | Invalid | Permanent | Deletable, bigint-free, camelCase */
-export const BlobStatus: Schema.Codec<BlobStatus, unknown>                // from the node's JSON, including the snake_case counts
+export interface EventId { readonly txDigest: string; readonly eventSeq: string /* u64 as decimal */ }
+export interface DeletableCounts { readonly countDeletableTotal: number; readonly countDeletableCertified: number }
+export type BlobStatus =
+  | { _tag: "Nonexistent" } | { _tag: "Invalid"; event: EventId }
+  | { _tag: "Permanent"; endEpoch: number; isCertified: boolean; statusEvent: EventId; deletableCounts: DeletableCounts; initialCertifiedEpoch: number | null }
+  | { _tag: "Deletable"; initialCertifiedEpoch: number | null; deletableCounts: DeletableCounts }   // all fields readonly
+export const BlobStatus: Schema.Codec<BlobStatus, unknown>                // from the node's JSON, including the snake_case counts; encodes back to it
+export const BlobStatusType: Schema.Codec<BlobStatus>                     // the decoded shape, for embedding in errors
+export const toJson: (s: BlobStatus) => unknown
 export const order: (a: BlobStatus, b: BlobStatus) => number              // the Rust `Ord` (api.rs:138-200)
 export const canonical: (s: BlobStatus) => string                         // grouping key: fixed field order, no whitespace
 export const certifiedEpoch: (s: BlobStatus) => number | undefined
@@ -585,6 +606,8 @@ const bytes = yield* Read.blob(blobId).pipe(Effect.provide(layer))
 
 ### 4.12 Errors not defined above
 
+All of these live in `Errors.ts` (W1), so that the flows share one set of classes; `InvalidBlobId` is defined in `BlobId.ts` and re-exported. `NodeError` stays in `StorageNode.ts`. `Errors.Failure` is the `failures` element schema. `RelayError.status` and `GatewayError.status` are optional (absent when no HTTP answer arrived); `UnsupportedSystemVersion.version` is a `bigint`; `StatusUnverified.groups[].status` uses `Status.BlobStatusType`.
+
 `InvalidBlobId { input }`, `InvalidMetadata { blobId, reason }`, `InvalidSliver { reason }`, `BlobTooLarge { size, max }`, `BlobNotFound { blobId }`, `BlobBlocked { blobId }`, `InvalidBlob { blobId }` (marked invalid on chain), `InconsistentBlob { blobId }`, `NoMetadata { blobId, failures }`, `NotEnoughSlivers { blobId, weight, required, failures }`, `NotEnoughConfirmations { blobId, weight, required, failures }`, `StatusUnverified { blobId, groups }`, `BehindCurrentEpoch { clientEpoch, certifiedEpoch }`, `CommitteeMismatch { stakingEpoch, systemEpoch, reason }`, `UnsupportedSystemVersion { objectId, version }`, `ResumeMismatch { expected, actual }`, `RegistrationFailed { blobObjectId, reason }`, `CertificateStale { certificateEpoch, epoch }`, `CertificateInvalid { reason }`, `EncoderError { operation, message }`, `RelayError { status, message }`, `TipTooHigh { tip, max }`, `QuiltError { reason }`, `GatewayError { status, message }`. `failures` is always `Schema.Array(Schema.Struct({ node, weight, kind, message }))`: a summary of the quorum's typed failures, never the raw objects.
 
 ## 5. Codegen
@@ -682,7 +705,7 @@ One agent each. "Parallel" lists what can run at the same time.
 
 | # | Scope | Depends on | Files | Acceptance |
 |---|---|---|---|---|
-| W1 | Scaffold and pure core: `BlobId`, `Bft`, `Encoding`, `Merkle`, `Messages`, `Certificate`, `Cost`, `Status`, the pure error classes. | — | `packages/walrus/{package.json,tsconfig.json}`, `src/{BlobId,Bft,Encoding,Merkle,Messages,Certificate,Cost,Status,Errors,index}.ts`, `test/{core,messages,status}.test.ts`, `test/parity.core.test.ts`; root devDependency | Unit and parity tests of §6.1–6.2 for these modules pass; no service in any signature; typecheck clean. |
+| W1 | Scaffold and pure core: `BlobId`, `Bft`, `Encoding`, `Merkle`, `Messages`, `Certificate`, `Cost`, `Status`, the pure error classes. | — | `packages/walrus/{package.json,tsconfig.json}`, `src/{BlobId,Bft,Encoding,Merkle,Messages,Certificate,Cost,Status,Errors,index}.ts`, `test/{core,messages,status}.test.ts`, `test/parity.core.test.ts`, `test/oracle.ts` (typed handles on `@mysten/walrus` internals and a raw-WASM `wasmEncode` for real metadata and slivers; reuse it in later tests); root devDependency | Unit and parity tests of §6.1–6.2 for these modules pass; no service in any signature; typecheck clean. |
 | W2 | Codegen and chain state: config, generated bindings, `Config`, `System`, `Committee`; fixture recorder. | W1 | `sui-codegen.config.ts`, `scripts/{codegen,record-fixtures}.ts`, `src/generated/**`, `src/{Config,System,Committee}.ts`, `test/committee.test.ts`, `test/fixtures/*`, `test/live.chain.test.ts`; generator fixes in `packages/sui-codegen` if needed | Generated schemas decode live testnet System, Staking, both inner states and a `StakingPool`; values equal `@mysten/walrus`'s (live parity); mainnet objects decode too; C5 check passes live; offline fixture tests pass. |
 | W3 | `Encoder`. | W1 | `src/Encoder.ts`, `test/encoder.test.ts`, `test/parity.encoder.test.ts` | §6.1 encoder tests and the encode parity test pass; thrown WASM errors are typed; instances are freed on scope close. |
 | W4 | `StorageNodes`. | W1 | `src/StorageNode.ts`, `test/storage-node.test.ts`, `test/support.ts` (scripted client, fake node) | Every endpoint and every error-mapping row is tested from recorded bodies; live smoke test (`SUI_LIVE=1`) reads a status and a metadata from one node. |
