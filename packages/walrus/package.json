@@ -1,0 +1,18 @@
+{
+  "name": "@unconfirmed/walrus",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@mysten/walrus-wasm": "0.3.1",
+    "@noble/hashes": "^2.3.0",
+    "@unconfirmed/bcs": "workspace:*",
+    "@unconfirmed/sui": "workspace:*",
+    "effect": "4.1.6"
+  }
+}
