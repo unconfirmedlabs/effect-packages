@@ -155,10 +155,14 @@ const checkClientData = (clientDataJson: string, intentMessage: Uint8Array): Sig
     return invalid("clientDataJSON is not JSON")
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return invalid("clientDataJSON is not an object")
-  const { type, challenge, origin } = parsed as Record<string, unknown>
+  const { type, challenge, origin, crossOrigin } = parsed as Record<string, unknown>
   if (type !== "webauthn.get") return invalid(`clientDataJSON type is ${JSON.stringify(type)}, expected "webauthn.get"`)
   if (typeof origin !== "string") return invalid("clientDataJSON has no origin")
   if (typeof challenge !== "string") return invalid("clientDataJSON has no challenge")
+  // WebAuthn's CollectedClientData has `crossOrigin: Option<bool>`; validators refuse anything else.
+  if (crossOrigin !== undefined && crossOrigin !== null && typeof crossOrigin !== "boolean") {
+    return invalid("clientDataJSON crossOrigin is not a boolean")
+  }
   let decoded: Uint8Array
   try {
     decoded = base64urlnopad.decode(challenge)
@@ -223,7 +227,7 @@ const parseDer = (der: Uint8Array) => {
   }
 }
 
-const strictUtf8 = new TextDecoder("utf-8", { fatal: true })
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 
 /** Turn an assertion into a passkey signature body, as `@mysten/sui` does (the signature normalized to low-S). */
 const authenticatorBody = (assertion: Assertion, publicKey: Uint8Array): Effect.Effect<Uint8Array, Signer.SigningError> => {

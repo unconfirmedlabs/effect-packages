@@ -68,21 +68,41 @@ export class ConnectionError extends Schema.TaggedError<ConnectionError>()("Conn
   message: Schema.String
 }) {}
 
+/**
+ * The wallet ran `sui:signAndExecuteTransaction` but what it returned can't be
+ * trusted (missing or undecodable fields, or a digest that isn't the returned
+ * bytes'). The transaction may have executed: check `digest` (if any) on chain
+ * before retrying.
+ */
+export class ExecutionUnconfirmed extends Schema.TaggedError<ExecutionUnconfirmed>()("ExecutionUnconfirmed", {
+  wallet: Schema.String,
+  digest: Schema.optionalKey(Schema.String),
+  message: Schema.String
+}) {}
+
 // -----------------------------------------------------------------------------
 // Failure mapping
 // -----------------------------------------------------------------------------
 
 /** `WalletStandardError` `WALLET_STANDARD_ERROR__USER__REQUEST_REJECTED`. */
 const USER_REJECTED = 4001000
-const REJECTION = /reject|denied|declin|cancel/i
+/**
+ * A user's refusal in words: "User rejected the request", "Rejected by user",
+ * "Request cancelled". Anchored to the user or the start of the message, so
+ * validator and RPC failures ("rejected as invalid by validators",
+ * "cancelled due to congestion", "403 Access denied") don't match.
+ */
+const USER_WORDING =
+  /\buser\b.*\b(reject|denied|declin|cancel)|\b(rejected|denied|declined|cancell?ed) by (the )?user\b|^\s*(the )?(request |transaction |signature )?(rejected|denied|declined|cancell?ed)\b/i
+const REJECTION_NAME = /user.?reject|rejected|cancell?ed/i
 
-/** Did the user refuse? Wallet-standard error code 4001000, EIP-1193's 4001, or a wallet's "rejected" wording. */
+/** Did the user refuse? Wallet-standard code 4001000 or EIP-1193's 4001 first; then a refusal's name or wording. */
 export const isRejection = (e: unknown): boolean => {
-  if (typeof e === "string") return REJECTION.test(e)
+  if (typeof e === "string") return USER_WORDING.test(e)
   if (typeof e !== "object" || e === null) return false
   const x = e as { readonly code?: unknown; readonly context?: { readonly __code?: unknown }; readonly name?: unknown; readonly message?: unknown }
-  return x.context?.__code === USER_REJECTED || x.code === 4001 || x.code === USER_REJECTED ||
-    REJECTION.test(String(x.name ?? "")) || REJECTION.test(String(x.message ?? ""))
+  if (x.context?.__code === USER_REJECTED || x.code === 4001 || x.code === USER_REJECTED) return true
+  return REJECTION_NAME.test(String(x.name ?? "")) || USER_WORDING.test(String(x.message ?? ""))
 }
 
 const describe = (e: unknown) => (e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e) ?? String(e))
@@ -302,7 +322,12 @@ export const signAndExecuteTransaction = (
   tx: T.TransactionData | TransactionJson.Unresolved
 ): Effect.Effect<
   Executed,
-  Signer.SigningError | UnsupportedFeature | UnsupportedChain | AccountNotFound | TransactionJson.UnsupportedTransactionJson
+  | Signer.SigningError
+  | ExecutionUnconfirmed
+  | UnsupportedFeature
+  | UnsupportedChain
+  | AccountNotFound
+  | TransactionJson.UnsupportedTransactionJson
 > =>
   Effect.gen(function*() {
     const feature = features(wallet)[Features.SuiSignAndExecuteTransaction]
@@ -314,14 +339,19 @@ export const signAndExecuteTransaction = (
         feature.signAndExecuteTransaction({ transaction: transactionInput(json), account: a.account, chain: target.chain, signal }),
       catch: signingError(wallet, Features.SuiSignAndExecuteTransaction)
     })
-    const signed = yield* signedOf(wallet, out)
-    const effects = out.effects === "" ? new Uint8Array() : yield* decodeBase64(wallet, "effects", out.effects)
+    // From here the wallet has submitted: a bad answer is not a signing failure.
+    const reported = typeof out?.digest === "string" ? out.digest : undefined
+    const unconfirmed = (message: string) =>
+      new ExecutionUnconfirmed({ wallet: wallet.name, ...(reported !== undefined && { digest: reported }), message })
+    const signed = yield* Effect.mapError(signedOf(wallet, out), (e) => unconfirmed(e.message))
+    const effects = typeof out.effects !== "string"
+      ? yield* unconfirmed(`${wallet.name} returned no effects`)
+      : out.effects === ""
+      ? new Uint8Array()
+      : yield* Effect.mapError(decodeBase64(wallet, "effects", out.effects), (e) => unconfirmed(e.message))
     const digest = Hash.transactionDigest(signed.bytes)
-    if (out.digest !== digest) {
-      return yield* new Signer.SigningError({
-        reason: "failed",
-        message: `${wallet.name} reported digest ${out.digest} for bytes whose digest is ${digest}`
-      })
+    if (reported !== digest) {
+      return yield* unconfirmed(`${wallet.name} reported digest ${reported} for bytes whose digest is ${digest}`)
     }
     return { ...signed, digest, effects }
   })
@@ -343,7 +373,11 @@ export const signPersonalMessage = (
         feature.signPersonalMessage({ message, account: a.account, ...(target.chain !== undefined && { chain: target.chain }) }),
       catch: signingError(wallet, Features.SuiSignPersonalMessage)
     })
-    return yield* signedOf(wallet, out)
+    const signed = yield* signedOf(wallet, out)
+    if (signed.bytes.length !== message.length || !signed.bytes.every((b, i) => b === message[i])) {
+      return yield* new Signer.SigningError({ reason: "failed", message: `${wallet.name} signed a different message than the one requested` })
+    }
+    return signed
   })
 
 // -----------------------------------------------------------------------------
@@ -366,7 +400,7 @@ export interface WalletSigner extends Signer.TransactionSigner {
   ) => Effect.Effect<Signer.Signed, Signer.SigningError | TransactionJson.UnsupportedTransactionJson>
   readonly signAndExecuteTransaction: (
     tx: T.TransactionData | TransactionJson.Unresolved
-  ) => Effect.Effect<Executed, Signer.SigningError | UnsupportedFeature | TransactionJson.UnsupportedTransactionJson>
+  ) => Effect.Effect<Executed, Signer.SigningError | ExecutionUnconfirmed | UnsupportedFeature | TransactionJson.UnsupportedTransactionJson>
   readonly signPersonalMessage: (message: Uint8Array) => Effect.Effect<Signer.Signed, Signer.SigningError | UnsupportedFeature>
 }
 

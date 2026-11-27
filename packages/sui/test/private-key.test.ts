@@ -90,4 +90,19 @@ describe("PrivateKey", () => {
       expect(e.reason).toMatch(reason)
     }
   })
+
+  test("refusals never echo key material", async () => {
+    const sk = new Uint8Array(32).fill(0x5a)
+    const good = await Effect.runPromise(PrivateKey.encode({ flag: 0, secretKey: sk }))
+    const typo = good.slice(0, -1) + (good.endsWith("q") ? "p" : "q")
+    const prefix = good.replace("suiprivkey", "suiprivkex")
+    for (const s of [typo, prefix]) {
+      const e = await Effect.runPromise(Effect.flip(PrivateKey.decode(s)))
+      expect(e.reason).not.toContain(s.slice(12, 40))
+    }
+    const entry = Buffer.from([0, ...sk]).toString("base64")
+    const e = await Effect.runPromise(Effect.flip(PrivateKey.decodeKeystore(`[${entry}]`)))
+    expect(e.reason).not.toContain(entry.slice(0, 20))
+  })
 })
+

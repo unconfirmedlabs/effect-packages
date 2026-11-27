@@ -69,11 +69,32 @@ export class ExecutionFailed extends Schema.TaggedError<ExecutionFailed>()("Exec
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
+ * What a transaction signer may change. Its returned bytes must keep the
+ * sender, the programmable transaction and the gas owner; it may re-pick gas
+ * price, budget, payment and expiration only when no key `Signer` is the gas
+ * owner (a sponsor key never signs gas terms it didn't see).
+ */
+const checkChange = (
+  before: T.TransactionData,
+  after: T.TransactionData,
+  keySigners: ReadonlyArray<Signer>
+): SigningError | undefined => {
+  const refused = (what: string) =>
+    new SigningError({ reason: "failed", message: `a transaction signer changed the transaction's ${what}` })
+  if (after.sender !== before.sender) return refused("sender")
+  if (after.gasData.owner !== before.gasData.owner) return refused("gas owner")
+  const restOf = (d: T.TransactionData) => T.encode({ ...d, gasData: before.gasData, expiration: before.expiration })
+  if (!sameBytes(restOf(after), restOf(before))) return refused("commands or inputs")
+  if (keySigners.some((k) => k.address === before.gasData.owner)) return refused("gas or expiration, which a key signer pays for")
+  return undefined
+}
+
+/**
  * Collect every signature, in the order the signers were given.
  *
- * `TransactionSigner`s (wallets) sign first, one at a time: one may change the
- * transaction (its returned bytes win), but not after another has signed it.
- * Intent-message `Signer`s then sign the final bytes concurrently.
+ * `TransactionSigner`s (wallets) sign first, one at a time. One may change the
+ * gas terms (its returned bytes win, see `checkChange`), but not after another
+ * has signed. Intent-message `Signer`s then sign the final bytes concurrently.
  */
 const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
   let current = data
@@ -94,6 +115,8 @@ const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: Reado
       if (decoded._tag === "Failure") {
         return yield* new SigningError({ reason: "failed", message: `the signer returned bytes that are not TransactionData: ${decoded.failure.message}` })
       }
+      const refused = checkChange(current, decoded.success, signers.filter((x): x is Signer => !isTransactionSigner(x)))
+      if (refused) return yield* refused
       current = decoded.success
       bytes = signed.bytes
     }
@@ -115,8 +138,9 @@ const sign = Effect.fnUntraced(function*(data: T.TransactionData, signers: Reado
 /**
  * Sign and submit; a `Failure` status becomes `ExecutionFailed`.
  *
- * Takes `Signer`s and `TransactionSigner`s (wallets). A wallet may change the
- * transaction; what is submitted is exactly the bytes it signed.
+ * Takes `Signer`s and `TransactionSigner`s (wallets). A wallet may re-pick the
+ * gas terms it pays for, never the sender, commands, inputs or gas owner, and
+ * nothing a key signer pays for; what is submitted is exactly the bytes it signed.
  */
 export const execute = Effect.fn("Tx.execute")(function*(
   data: T.TransactionData,

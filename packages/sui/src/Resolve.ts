@@ -819,10 +819,14 @@ export const reservedBy = (plan: Plan, owner: Address, coinType: string): bigint
   return total
 }
 
+/**
+ * Address-balance gas needs replay protection: a `ValidDuring` window is set
+ * when the caller gave no expiration. An explicit one is kept as given, as
+ * `@mysten/sui` does (validators refuse `None`/`Epoch` with an empty payment,
+ * which is a visible failure rather than a silently widened validity).
+ */
 const keepExpiration = (plan: Plan) =>
-  plan.expiration?._tag === "ValidDuring" || plan.expiration?._tag === "Validity"
-    ? Effect.succeed(plan.expiration)
-    : validDuring()
+  plan.expiration !== undefined ? Effect.succeed(plan.expiration) : validDuring()
 
 const needBudget = (plan: Plan) =>
   plan.gasBudget === undefined

@@ -556,3 +556,56 @@ describe("refusals are typed", () => {
     expect(noSender).toMatchObject({ _tag: "Incomplete", missing: "sender" })
   })
 })
+
+// -----------------------------------------------------------------------------
+// Review regressions
+// -----------------------------------------------------------------------------
+
+describe("ambiguous or inconsistent JSON is refused", () => {
+  test("an object with two enum variants (Mysten takes the first key, a union the first member)", async () => {
+    const json = await baseJson()
+    const cmd = { TransferObjects: json.commands[1].TransferObjects, MoveCall: { package: "0x2", module: "m", function: "f", typeArguments: [], arguments: [] } }
+    expect((await decodeError({ ...json, commands: [json.commands[0], cmd] }))._tag).toBe("InvalidTransactionJson")
+    const input = { ...json.inputs[0], Object: { ImmOrOwnedObject: { objectId: "0x1", version: "1", digest: D(1) } } }
+    expect((await decodeError({ ...json, inputs: [input, ...json.inputs.slice(1)] }))._tag).toBe("InvalidTransactionJson")
+  })
+
+  test("a bad address inside intent data is a typed error, not a defect", async () => {
+    const json = await baseJson()
+    const intent = {
+      $Intent: {
+        name: "AllowanceBalance",
+        inputs: { allowance: { Input: 0 }, clock: { Input: 0 } },
+        data: { objectId: "not-hex", type: "0x2::sui::SUI", amount: "1", outputKind: "coin" }
+      }
+    }
+    expect((await decodeError({ ...json, commands: [...json.commands, intent] }))._tag).toBe("InvalidTransactionJson")
+  })
+
+  test("a nested result past an intent's single value is refused", async () => {
+    const json = await baseJson()
+    const intent = { $Intent: { name: "CoinWithBalance", inputs: {}, data: { type: "gas", balance: "1" } } }
+    const n = json.commands.length
+    const use = { TransferObjects: { objects: [{ NestedResult: [n, 1] }], address: json.commands[1].TransferObjects.address } }
+    expect((await decodeError({ ...json, commands: [...json.commands, intent, use] }))._tag).toBe("InvalidTransactionJson")
+  })
+
+  test("a fully resolved transaction must carry its own digest", async () => {
+    const json = JSON.parse(await Effect.runPromise(TransactionJson.encode(resolved)))
+    await Effect.runPromise(TransactionJson.decode(json))
+    expect((await decodeError({ ...json, digest: D(3) }))._tag).toBe("InvalidTransactionJson")
+  })
+})
+
+test("an explicit expiration survives address-balance gas (as in @mysten/sui)", async () => {
+  const draft = await draftOf(Effect.flatMap(Ptb.address(recipient), (to) => Ptb.transferObjects([], to)))
+  const data = await run(TransactionJson.resolve({
+    sender,
+    draft,
+    gasPrice: 1000n,
+    gasBudget: 1_000_000n,
+    expiration: { _tag: "Epoch", value: 9n }
+  }, { payment: Resolve.unchecked }) as Effect.Effect<T.TransactionData, unknown, Objects.Objects>) // price and budget given: no Chain read
+  expect(data.gasData.payment).toEqual([])
+  expect(data.expiration).toEqual({ _tag: "Epoch", value: 9n })
+})

@@ -91,7 +91,7 @@ export const decode = (encoded: string, expectedFlag?: number): Effect.Effect<Pr
       decoded = bech32.decode(encoded.trim())
       raw = bech32.fromWords(decoded.words)
     } catch (e) {
-      return Effect.fail(new InvalidKey({ scheme: PREFIX, reason: `not bech32: ${e instanceof Error ? e.message : String(e)}` }))
+      return Effect.fail(new InvalidKey({ scheme: PREFIX, reason: "not a valid bech32 string (bad checksum, prefix or characters)" }))
     }
     if (decoded.prefix !== PREFIX) {
       return Effect.fail(new InvalidKey({ scheme: PREFIX, reason: `expected prefix "${PREFIX}", got "${decoded.prefix}"` }))
@@ -116,7 +116,7 @@ export const decodeKeystore = (json: string): Effect.Effect<ReadonlyArray<Privat
     try {
       entries = JSON.parse(json)
     } catch (e) {
-      return Effect.fail(new InvalidKey({ scheme: KEYSTORE, reason: `not JSON: ${e instanceof Error ? e.message : String(e)}` }))
+      return Effect.fail(new InvalidKey({ scheme: KEYSTORE, reason: "not JSON" }))
     }
     if (!Array.isArray(entries)) return Effect.fail(new InvalidKey({ scheme: KEYSTORE, reason: "expected a JSON array" }))
     return Effect.forEach(entries, (entry: unknown, i) => {

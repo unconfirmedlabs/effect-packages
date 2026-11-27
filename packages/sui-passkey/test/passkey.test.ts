@@ -155,6 +155,34 @@ describe("Passkey recovery errors", () => {
 })
 
 describe("Passkey verification rejects tampering", () => {
+  test("a UTF-8 BOM before clientDataJSON (re-encoding a valid signature) is refused", async () => {
+    const { ours } = await setup()
+    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
+    const fields = decode(signature)
+    const bom = reencode({ ...fields, clientDataJson: "\uFEFF" + fields.clientDataJson })
+    expect(bom).not.toEqual(signature)
+    expect((await ourError(msg, bom))._tag).toBe("InvalidSignature")
+  })
+
+  test("a non-canonical ULEB128 length (re-encoding a valid signature) is refused", async () => {
+    const { ours } = await setup()
+    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
+    // authenticatorData's length is the first byte after the flag (< 128): spell it `len|0x80, 0x00`.
+    const len = signature[1]!
+    expect(len).toBeLessThan(0x80)
+    const padded = new Uint8Array([signature[0]!, len | 0x80, 0x00, ...signature.subarray(2)])
+    expect((await ourError(msg, padded))._tag).toBe("InvalidSignature")
+  })
+
+  test("a signed clientDataJSON whose crossOrigin isn't a boolean is refused", async () => {
+    const { ours } = await setup()
+    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
+    const fields = decode(signature)
+    const data = { ...JSON.parse(fields.clientDataJson), crossOrigin: "yes" }
+    const forged = forge(secret, ours.publicKey.bytes, fields.authenticatorData, JSON.stringify(data))
+    expect(((await ourError(msg, forged)) as SignatureScheme.InvalidSignature).reason).toContain("crossOrigin")
+  })
+
   test("a signature over another message (challenge mismatch)", async () => {
     const { ours } = await setup()
     const { signature } = await run(Signer.signPersonalMessage(ours, utf8("other")))

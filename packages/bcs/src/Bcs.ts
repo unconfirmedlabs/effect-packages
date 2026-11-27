@@ -291,10 +291,15 @@ class Reader {
     for (;;) {
       const b = this.u8()
       result += (b & 0x7f) * 2 ** shift
-      if ((b & 0x80) === 0) break
+      if ((b & 0x80) === 0) {
+        // Canonical only, as Rust bcs: no trailing zero groups (`0x80 0x00` is not 0).
+        if (b === 0 && shift > 0) throw new BcsDecodeError({ message: "non-canonical uleb128", offset: this.pos })
+        break
+      }
       shift += 7
       if (shift > 28) throw new BcsDecodeError({ message: "uleb128 overflow", offset: this.pos })
     }
+    if (result > 0xffffffff) throw new BcsDecodeError({ message: "uleb128 overflow", offset: this.pos })
     return result
   }
   raw(n: number) {
@@ -329,7 +334,8 @@ const unhex = (s: string) => {
   return out
 }
 const utf8e = new TextEncoder()
-const utf8d = new TextDecoder("utf-8", { fatal: true })
+// ignoreBOM: keep a leading U+FEFF as data, so decoding never changes the string's bytes.
+const utf8d = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 
 const write = (w: Writer, l: Layout, v: any): void => {
   switch (l._tag) {

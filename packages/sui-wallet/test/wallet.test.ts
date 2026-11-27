@@ -205,11 +205,11 @@ describe("the wallet as a TransactionSigner", () => {
     await Effect.runPromise(Verify.transaction(bytes, signatures[0]!).pipe(Effect.provide(schemes)))
   })
 
-  test("wallet sender + key-signer sponsor: the sponsor signs the wallet's final bytes, signatures keep their order", async () => {
+  test("wallet sender + key-signer sponsor: the sponsor signs the wallet's bytes, signatures keep their order", async () => {
     const rec = recorder()
     const sponsor = await Effect.runPromise(Ed25519.fromSecretKey(new Uint8Array(32).fill(9)))
     await run(Effect.gen(function*() {
-      const { wallet } = yield* connected({ name: "Sponsored", mutate: (tx) => tx.setGasBudget(6_000_000) })
+      const { wallet } = yield* connected({ name: "Sponsored" })
       const signer = yield* Wallet.signer(wallet, { chain })
       const data = yield* resolvedFor(signer.address, sponsor.address)
       yield* Tx.execute(data, [sponsor, signer])
@@ -219,6 +219,27 @@ describe("the wallet as a TransactionSigner", () => {
       Effect.forEach(signatures, (s) => Verify.transaction(bytes, s)).pipe(Effect.provide(schemes))
     )
     expect(who.map((v) => v.address)).toEqual([sponsor.address, A(keypair.toSuiAddress())])
+  })
+
+  test("a wallet may not change gas terms a key-signer sponsor pays for, nor the commands", async () => {
+    const sponsor = await Effect.runPromise(Ed25519.fromSecretKey(new Uint8Array(32).fill(9)))
+    const attempt = (name: string, mutate: (tx: any) => void) => {
+      const rec = recorder()
+      return run(Effect.gen(function*() {
+        const { wallet } = yield* connected({ name, mutate })
+        const signer = yield* Wallet.signer(wallet, { chain })
+        const data = yield* resolvedFor(signer.address, sponsor.address)
+        return yield* Effect.flip(Tx.execute(data, [sponsor, signer]))
+      }).pipe(Effect.provide(rec.layer))).then((e) => ({ e, executed: rec.executed.length }))
+    }
+    const budget = await attempt("Budget", (tx) => tx.setGasBudget(6_000_000))
+    expect(budget.e).toMatchObject({ _tag: "SigningError", reason: "failed" })
+    expect(String(budget.e.message)).toContain("gas or expiration")
+    expect(budget.executed).toBe(0)
+    const drain = await attempt("Drain", (tx) => tx.transferObjects([tx.gas], tx.pure.address(A("0xbad"))))
+    expect(drain.e).toMatchObject({ _tag: "SigningError", reason: "failed" })
+    expect(String(drain.e.message)).toContain("commands or inputs")
+    expect(drain.executed).toBe(0)
   })
 
   test("a second wallet may not change what the first already signed", async () => {
@@ -318,7 +339,22 @@ describe("signAndExecute and personal messages", () => {
       const signer = yield* Wallet.signer(wallet, { chain })
       return yield* Effect.flip(signer.signAndExecuteTransaction(yield* resolvedFor(signer.address)))
     }))
-    expect(e).toMatchObject({ _tag: "SigningError", reason: "failed" })
+    // The wallet already submitted: not a signing failure, and the reported digest is kept for a lookup.
+    expect(e).toMatchObject({ _tag: "ExecutionUnconfirmed", digest: D(1) })
+  })
+
+  test("only a user's refusal reads as rejected; validator and RPC failures don't", () => {
+    for (const m of ["User rejected the request.", "Rejected by user", "Request cancelled", "The user denied the signature"]) {
+      expect(Wallet.isRejection(new Error(m))).toBe(true)
+    }
+    expect(Wallet.isRejection({ code: 4001, message: "nope" })).toBe(true)
+    for (
+      const m of [
+        "Transaction is rejected as invalid by more than 1/3 of validators by stake (non-retriable)",
+        "Transaction execution cancelled due to shared object congestion",
+        "RPC error: 403 Access denied"
+      ]
+    ) expect(Wallet.isRejection(new Error(m))).toBe(false)
   })
 
   test("signPersonalMessage verifies with our registry and with @mysten/sui", async () => {

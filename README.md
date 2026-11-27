@@ -68,7 +68,7 @@ SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, MultiSig.scheme)
 
 **3. Signers are values.** `Signer = { address, publicKey, sign(intentMessage) }`. An in-memory key, a hardware wallet, a KMS and `MultiSig.signer(pk, [a, b])` are all the same type, and anything that takes a `Signer` (`Tx.run`, `Signer.signPersonalMessage`) works with all of them.
 
-A browser wallet never signs raw intent messages: it signs a whole transaction and may change it first (re-resolving gas). That is a `TransactionSigner = { address, signTransaction(data) => { bytes, signature } }`. `Tx.execute` and `Tx.run` take either kind, and submit exactly the bytes the wallet signed. With several signers, wallets sign first; key signers then sign the final bytes.
+A browser wallet never signs raw intent messages: it signs a whole transaction and may change it first (re-resolving gas). That is a `TransactionSigner = { address, signTransaction(data) => { bytes, signature } }`. `Tx.execute` and `Tx.run` take either kind, and submit exactly the bytes the wallet signed. With several signers, wallets sign first; key signers then sign the final bytes. A wallet may re-pick only gas terms it pays for: a changed sender, command, input or gas owner, or changed gas terms a key signer (a sponsor) pays for, is a `SigningError` before any key signs.
 
 **4. Transactions are Effects; resolution is a pipeline of steps.**
 
@@ -143,6 +143,7 @@ const accounts = yield* Wallet.connect(wallet)                   // ConnectionEr
 const signer = yield* Wallet.signer(wallet, { chain: "sui:testnet" })
 yield* Tx.run(recipe, { signer })                                // we resolve, the wallet signs, we execute its bytes
 yield* signer.signAndExecuteTransaction({ draft })               // or: the wallet resolves and submits
+                                                                // (a bad answer after submitting is ExecutionUnconfirmed, with the digest: check before retrying)
 yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
 ```
 

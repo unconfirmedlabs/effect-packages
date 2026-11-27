@@ -503,6 +503,39 @@ const KNOWN_COMMANDS = new Set([
   "$Intent"
 ])
 
+/** Every enum variant key in the v2 schema. */
+const VARIANT_KEYS = new Set([
+  "$Intent", "Balance", "Epoch", "FundsWithdrawal", "GasCoin", "ImmOrOwnedObject", "Input", "MakeMoveVec", "MaxAmountU64",
+  "MergeCoins", "MoveCall", "NestedResult", "None", "Object", "Publish", "Pure", "Receiving", "Result", "Sender",
+  "SenderAllowance", "SharedObject", "SplitCoins", "Sponsor", "TransferObjects", "UnresolvedObject", "UnresolvedPure",
+  "Upgrade", "ValidDuring"
+])
+
+/**
+ * An object carrying two enum variants (`{ "Pure": …, "Object": … }`) reads as
+ * different transactions depending on the parser (Mysten takes `$kind` or the
+ * first key; a schema union takes its first matching member), so it is refused.
+ */
+const ambiguousVariant = (v: unknown, path: string): InvalidTransactionJson | undefined => {
+  if (typeof v !== "object" || v === null) return undefined
+  if (Array.isArray(v)) {
+    for (const [i, x] of v.entries()) {
+      const e = ambiguousVariant(x, `${path}[${i}]`)
+      if (e) return e
+    }
+    return undefined
+  }
+  const variants = Object.keys(v).filter((k) => VARIANT_KEYS.has(k))
+  if (variants.length > 1) {
+    return new InvalidTransactionJson({ issue: `${path || "transaction"} has more than one enum variant: ${variants.join(", ")}` })
+  }
+  for (const [k, x] of Object.entries(v)) {
+    const e = ambiguousVariant(x, path ? `${path}.${k}` : k)
+    if (e) return e
+  }
+  return undefined
+}
+
 const kindOf = (v: unknown): string | undefined => {
   if (typeof v !== "object" || v === null) return undefined
   const k = (v as { $kind?: unknown }).$kind
@@ -547,6 +580,8 @@ export const parse = (input: unknown): Effect.Effect<TransactionJson, InvalidTra
         return Effect.fail(new InvalidTransactionJson({ issue: `not JSON: ${(e as Error).message}` }))
       }
     }
+    const ambiguous = ambiguousVariant(value, "")
+    if (ambiguous) return Effect.fail(ambiguous)
     const r = decodeJsonObject(value)
     if (Result.isSuccess(r)) return Effect.succeed(r.success)
     return Effect.fail(unknownVariant(value) ?? new InvalidTransactionJson({ issue: r.failure.message }))
@@ -563,7 +598,13 @@ const unsupported = (construct: string, reason: string): never => {
 }
 
 const toU64 = (v: string | number): bigint => BigInt(v)
-const toAddress = (s: string): Address.Address => Address.normalize(s)
+const toAddress = (s: string): Address.Address => {
+  try {
+    return Address.normalize(s)
+  } catch {
+    return invalid(`${JSON.stringify(s)} is not an address`)
+  }
+}
 const toTypeTag = (s: string): TypeTag.TypeTag => {
   try {
     return TypeTag.parse(s)
@@ -678,6 +719,10 @@ const toUnresolvedSync = (json: TransactionJson): Unresolved => {
       return { _tag: "Result", value: a.Result }
     }
     if (a.NestedResult[0] >= at) invalid(`command ${at} refers to the result of command ${a.NestedResult[0]}`)
+    // An intent yields one value: only its first nested result exists.
+    if (a.NestedResult[1] > 0 && "$Intent" in json.commands[a.NestedResult[0]]!) {
+      invalid(`command ${at} refers to result ${a.NestedResult[1]} of intent command ${a.NestedResult[0]}, which has one`)
+    }
     return { _tag: "NestedResult", value: [a.NestedResult[0], a.NestedResult[1]] }
   }
 
@@ -858,12 +903,28 @@ const toUnresolvedSync = (json: TransactionJson): Unresolved => {
 /** Schema-valid transaction JSON -> an `Unresolved` transaction. */
 export const toUnresolved = (json: TransactionJson): Effect.Effect<Unresolved, InvalidTransactionJson | UnsupportedTransactionJson> =>
   Effect.suspend(() => {
+    let tx: Unresolved
     try {
-      return Effect.succeed(toUnresolvedSync(json))
+      tx = toUnresolvedSync(json)
     } catch (e) {
       if (e instanceof Fail) return Effect.fail(e.error)
       throw e
     }
+    // A fully resolved transaction's digest must be its own. A digest beside
+    // unresolved inputs or intents describes some other resolution: not checked.
+    const claimed = json.digest
+    const resolved = json.inputs.every((i) => !("UnresolvedPure" in i) && !("UnresolvedObject" in i)) &&
+      json.commands.every((c) => !("$Intent" in c))
+    if (typeof claimed !== "string" || !resolved) return Effect.succeed(tx)
+    return Effect.matchEffect(toTransactionData(tx), {
+      onFailure: () => Effect.succeed(tx),
+      onSuccess: (data) => {
+        const actual = Hash.transactionDigest(T.encode(data))
+        return actual === claimed
+          ? Effect.succeed(tx)
+          : Effect.fail(new InvalidTransactionJson({ issue: `digest ${claimed} is not this transaction's (${actual})` }))
+      }
+    })
   })
 
 /** A JSON string (or parsed value) from `Transaction.toJSON()` -> an `Unresolved` transaction. */
