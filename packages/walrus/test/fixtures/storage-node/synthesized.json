@@ -1,0 +1,83 @@
+{
+  "source": "Responses that cannot be recorded with reads only or on demand (PUTs, blocked blobs, overload). Built from the Rust node's own messages and reasons at MystenLabs/walrus: routes.rs (put_metadata, put_sliver), errors.rs (StoreMetadataError, StoreSliverError, RetrieveSliverError, RetrieveMetadataError, Unavailable), in the recorded N7 envelope.",
+  "responses": {
+    "put-metadata-created": {
+      "method": "PUT",
+      "status": 201,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":201,\"data\":\"metadata successfully stored\"}}"
+    },
+    "put-metadata-already": {
+      "method": "PUT",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":\"metadata already stored\"}}"
+    },
+    "put-metadata-not-registered": {
+      "method": "PUT",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"FAILED_PRECONDITION\",\"code\":400,\"message\":\"the blob has not been registered or has already expired\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"NOT_REGISTERED\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "put-metadata-invalid": {
+      "method": "PUT",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"INVALID_ARGUMENT\",\"code\":400,\"message\":\"the provided metadata failed to verify: the hashes in the metadata do not match the blob ID\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"INVALID_METADATA\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "put-sliver-created": {
+      "method": "PUT",
+      "status": 201,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":201,\"data\":\"sliver stored successfully\"}}"
+    },
+    "put-sliver-already": {
+      "method": "PUT",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":\"sliver already stored\"}}"
+    },
+    "put-sliver-missing-metadata": {
+      "method": "PUT",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"FAILED_PRECONDITION\",\"code\":400,\"message\":\"blob metadata is required but missing\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"METADATA_NOT_FOUND\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "put-sliver-not-registered": {
+      "method": "PUT",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"FAILED_PRECONDITION\",\"code\":400,\"message\":\"the blob has not been registered or has already expired\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"NOT_REGISTERED\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "sliver-forbidden": {
+      "method": "GET",
+      "status": 451,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"UNAVAILABLE_FOR_LEGAL_REASONS\",\"code\":451,\"message\":\"the requested sliver is forbidden\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"FORBIDDEN_BLOB\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "metadata-forbidden": {
+      "method": "GET",
+      "status": 451,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"UNAVAILABLE_FOR_LEGAL_REASONS\",\"code\":451,\"message\":\"the requested metadata is blocked\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"FORBIDDEN_BLOB\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "unavailable": {
+      "method": "GET",
+      "status": 503,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"UNAVAILABLE\",\"code\":503,\"message\":\"the service is currently unavailable\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"UNAVAILABLE\",\"domain\":\"global\",\"metadata\":{}}]}}"
+    },
+    "internal": {
+      "method": "GET",
+      "status": 500,
+      "contentType": "text/plain; charset=utf-8",
+      "body": "Internal Server Error"
+    },
+    "rate-limited": {
+      "method": "GET",
+      "status": 429,
+      "contentType": "text/plain; charset=utf-8",
+      "body": "Too Many Requests! Wait for 1s"
+    }
+  }
+}
