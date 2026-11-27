@@ -20,7 +20,6 @@ export const mystenUtils = (await import(utilsModule)) as {
   toPairIndex: (shardIndex: number, blobId: string, nShards: number) => number
   sliverPairIndexFromSecondarySliverIndex: (sliverIndex: number, nShards: number) => number
   signersToBitmap: (signers: Array<number>, committeeSize: number) => Uint8Array
-  urlSafeBase64: (bytes: Uint8Array) => string
 }
 
 interface MystenBcsType<T = any> {
@@ -33,7 +32,6 @@ export const mystenBcs = (await import(bcsModule)) as {
   SliverData: MystenBcsType
   StorageConfirmation: MystenBcsType
   CertificateBcs: MystenBcsType
-  BlobId: MystenBcsType
   IntentType: { BLOB_CERT_MSG: number }
   blobIdFromBytes: (bytes: Uint8Array) => string
   blobIdFromInt: (n: bigint) => string

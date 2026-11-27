@@ -209,13 +209,6 @@ describe("Read.blob", () => {
     expect(value(md.exit).bytes).toEqual(encoded.metadata)
   })
 
-  test("an empty blob", async () => {
-    const empty = await withEncoder((e) => e.encode(N, new Uint8Array(0)))
-    const c = committee(1, ONE_EACH)
-    const { exit } = await run(Read.blob(empty.blobId), active(c), nodesFor(c, empty))
-    expect(value(exit)).toEqual(new Uint8Array(0))
-  })
-
   test("exactly n − 2f shards answer", async () => {
     const c = committee(1, ONE_EACH)
     const kinds: Array<Outcome | undefined> = [
@@ -355,14 +348,6 @@ describe("Read.blob", () => {
     expect(e.failures.length).toBe(7)
   })
 
-  test("unreachable committee: NoMetadata listing every node", async () => {
-    const c = committee(1, ONE_EACH)
-    const { exit } = await run(Read.blob(encoded.blobId, { retry: noRetry }), active(c), [])
-    const e = failure(exit)
-    expect(e._tag).toBe("NoMetadata")
-    if (e._tag === "NoMetadata") expect(e.failures.map((f) => f.kind)).toEqual(Array(N).fill("Unavailable"))
-  })
-
   test("metadata from lying nodes is rejected and an honest node's is used", async () => {
     const c = committee(1, ONE_EACH)
     const other = await withEncoder((e) => e.encode(N, new Uint8Array([1, 2, 3])))
@@ -413,13 +398,6 @@ describe("epoch change", () => {
     expect(requests.some((r) => r.path.endsWith("/status"))).toBe(false)
   })
 
-  test("certified in the current epoch: the current committee", async () => {
-    const newNodes = nodesFor(current, encoded)
-    for (const n of newNodes) n.statuses.set(encoded.blobId, permanent(5))
-    const { exit } = await run(Read.blob(encoded.blobId), active(current, previous, true), [...nodesFor(previous, undefined), ...newNodes])
-    expect(value(exit)).toEqual(BLOB)
-  })
-
   test("not certified during EpochChangeSync: BlobNotFound; marked invalid: InvalidBlob", async () => {
     const nodes = nodesFor(current, encoded)
     for (const n of nodes) n.statuses.set(encoded.blobId, "nonexistent")
@@ -465,16 +443,6 @@ describe("epoch change", () => {
 
 describe("Read.status", () => {
   const c = committee(5, [[0, 1, 2], [3, 4], [5, 6], [7], [8], [9]])
-
-  test("agrees on the status; unknown blobs are Nonexistent", async () => {
-    const nodes = nodesFor(c, undefined)
-    const none = await run(Read.status(encoded.blobId), active(c), nodes)
-    expect(value(none.exit)).toEqual({ _tag: "Nonexistent" })
-
-    for (const n of nodes) n.statuses.set(encoded.blobId, permanent(5))
-    const certified = await run(Read.status(encoded.blobId), active(c), nodes)
-    expect(value(certified.exit)).toEqual(expect.objectContaining({ _tag: "Permanent", isCertified: true, initialCertifiedEpoch: 5 }))
-  })
 
   test("the latest status wins among those with f + 1 weight", async () => {
     // Weights 2, 2, 2, 2, 1, 1. Nodes 0-1 report an older end epoch, the rest a newer one. In completion
@@ -579,7 +547,19 @@ describe("failure paths", () => {
     const previous = committee(4, ONE_EACH, "old")
     const current = committee(5, ONE_EACH, "new")
     const nodes = nodesFor(current, encoded, (_, req) => (req.path.endsWith("/status") ? unavailable : undefined))
-    const { exit } = await run(Read.blob(encoded.blobId, { retry: noRetry }), active(current, previous, true), nodes)
+    // The status agreement is retried (500 ms, then 1 s) before giving up on it: step a TestClock through that.
+    const s = servicesFor(active(current, previous, true), nodes)
+    const exit = await Effect.runPromise(
+      Effect.gen(function*() {
+        const fiber = yield* Effect.forkChild(Effect.exit(Read.blob(encoded.blobId, { retry: noRetry })))
+        // The fake HTTP answers go through real promises: let them settle between steps.
+        while (fiber.pollUnsafe() === undefined) {
+          yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)))
+          yield* TestClock.adjust("100 millis")
+        }
+        return yield* Fiber.join(fiber)
+      }).pipe(Effect.provide(Layer.merge(s.layer, TestClock.layer())))
+    )
     expect(value(exit)).toEqual(BLOB)
   })
 

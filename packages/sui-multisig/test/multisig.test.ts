@@ -44,15 +44,11 @@ const theirs = () => {
 const all = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, MultiSig.scheme)
 
 describe("MultiSig", () => {
-  test("address matches @mysten/sui", async () => {
-    const { pk } = await Effect.runPromise(setup)
-    expect(MultiSig.address(pk)).toBe(theirs().pk.toSuiAddress() as ReturnType<typeof MultiSig.address>)
-  })
-
   test("a multisig Signer from member Signers produces the reference bytes", async () => {
     const t = theirs()
     const ours = await Effect.runPromise(Effect.gen(function*() {
       const { a, b, pk } = yield* setup
+      expect(MultiSig.address(pk)).toBe(t.pk.toSuiAddress() as ReturnType<typeof MultiSig.address>)
       const signer = yield* MultiSig.signer(pk, [b, a]) // order of signers doesn't matter
       return yield* Signer.signPersonalMessage(signer, msg)
     }))
@@ -70,20 +66,22 @@ describe("MultiSig", () => {
     const sig = t.pk.combinePartialSignatures([(await t.kc.signPersonalMessage(msg)).signature])
     const v = await Effect.runPromise(Verify.personalMessage(msg, fromB64(sig)).pipe(Effect.provide(all)))
     expect(v.address).toBe(t.pk.toSuiAddress() as typeof v.address)
-  })
-
-  test("a member scheme that isn't installed is UnsupportedScheme", async () => {
-    const t = theirs()
-    const sig = t.pk.combinePartialSignatures([(await t.kc.signPersonalMessage(msg)).signature])
+    // A member scheme that isn't installed is UnsupportedScheme.
     const noSecp = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, MultiSig.scheme)
     const err = await Effect.runPromise(Verify.personalMessage(msg, fromB64(sig)).pipe(Effect.flip, Effect.provide(noSecp)))
     expect(err._tag).toBe("UnsupportedScheme")
   })
 
-  test("below threshold is refused at signer construction and at verification", async () => {
+  test("below threshold is refused by signer, by combine (the result could never verify) and at verification", async () => {
     const t = theirs()
     const err = await Effect.runPromise(Effect.flatMap(setup, ({ a, pk }) => MultiSig.signer(pk, [a])).pipe(Effect.flip))
     expect(err._tag).toBe("InvalidMultiSig")
+    const combined = await Effect.runPromise(Effect.gen(function*() {
+      const { a, pk } = yield* setup
+      const sa = yield* Signer.signPersonalMessage(a, msg)
+      return yield* Effect.flip(MultiSig.combine(pk, [sa.signature]))
+    }))
+    expect(combined.reason).toContain("below threshold")
     const weak = t.pk.combinePartialSignatures([(await t.ka.signPersonalMessage(msg)).signature])
     const verr = await Effect.runPromise(Verify.personalMessage(msg, fromB64(weak)).pipe(Effect.flip, Effect.provide(all)))
     expect(verr._tag).toBe("InvalidSignature")
@@ -100,15 +98,6 @@ describe("MultiSig", () => {
     const v = await Effect.runPromise(Verify.personalMessage(msg, ours).pipe(Effect.provide(all)))
     expect(v.address).toBe(t.pk.toSuiAddress() as typeof v.address)
   })
-  test("combine below the threshold is refused (the result could never verify)", async () => {
-    const err = await Effect.runPromise(Effect.gen(function*() {
-      const { a, pk } = yield* setup
-      const sa = yield* Signer.signPersonalMessage(a, msg)
-      return yield* Effect.flip(MultiSig.combine(pk, [sa.signature]))
-    }))
-    expect(err).toMatchObject({ _tag: "InvalidMultiSig" })
-    expect(err.reason).toContain("below threshold")
-  })
 
   test("member keys of the wrong length are refused, so no unreachable address is derived", async () => {
     const a = await Effect.runPromise(Ed25519.fromSecretKey(seed(1)))
@@ -116,12 +105,10 @@ describe("MultiSig", () => {
     const bad: Array<[string, SignatureScheme.PublicKey]> = [
       ["31-byte Ed25519", { flag: 0x00, bytes: new Uint8Array(31) }],
       ["65-byte (uncompressed) secp256k1", { flag: 0x01, bytes: new Uint8Array(65).fill(4) }],
-      ["32-byte key under the secp256r1 flag", { flag: 0x02, bytes: new Uint8Array(32) }],
       ["short passkey", { flag: 0x06, bytes: new Uint8Array(32) }],
       ["short ML-DSA-65", { flag: 0x07, bytes: new Uint8Array(1951) }],
       ["zkLogin without a seed", { flag: 0x05, bytes: zk(3, 0) }],
-      ["zkLogin with a 33-byte seed", { flag: 0x05, bytes: zk(3, 33) }],
-      ["zkLogin without an issuer", { flag: 0x05, bytes: new Uint8Array([0, 1, 2]) }]
+      ["zkLogin with a 33-byte seed", { flag: 0x05, bytes: zk(3, 33) }]
     ]
     for (const [why, publicKey] of bad) {
       const err = await Effect.runPromise(

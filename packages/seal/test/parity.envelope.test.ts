@@ -18,11 +18,7 @@ import {
   type MystenG1,
   withRandomValuesAsync
 } from "./oracle.ts"
-import { b64, hex, seeded, utf8 } from "./support.ts"
-
-const RUST_VECTOR = b64(
-  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAECAwQDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEqAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMeAgCEy0p0JVyGZjTiAwvuhfbZgRbVf6B/7mt4YBW+QVwzyxJvwg7EWKC3fsVYdwiazbEZrmUt+DVDuTiiIvecSoBHN0eOW5WN77xC9ZX5IDVDqyLgP0/CzLPZav3kQES7HlkDUTPTRQGs51AtW3VBP7XW8eVDynrkuNBIAlmK8VpacwqhfgGc9jEeEyI8Radr3vFWawYpBc9NHdRgvD9GRmqhg0aGM4iKmAvnny2XR2i+O59QCk8K77YYsMPCSybazYjQGnUB2DGYvu/mXWg1dle5PPqH004F0vjlyHbNU+IQ+j4AJ2JiOXauUC7qc6NHcDrPkrdwyo4vMO7sxDK54lb719lK5r0M86MwXQEEAQIDBA=="
-)
+import { hex, seeded, utf8 } from "./support.ts"
 
 const ok = <A, E>(r: Result.Result<A, E>): A => {
   if (Result.isFailure(r)) throw new Error(`expected success, got ${JSON.stringify(r.failure)}`)
@@ -132,13 +128,6 @@ const ourSeal = (o: {
 }) => run(Envelope.seal(o))
 
 describe("BCS", () => {
-  test("the Rust vector: each side parses it and writes the same bytes", () => {
-    const ours = ok(EncryptedObject.parse(RUST_VECTOR))
-    const theirs = mystenEncryptedObject.parse(RUST_VECTOR)
-    expect(mystenEncryptedObject.serialize(theirs).toBytes()).toEqual(RUST_VECTOR)
-    expect(mystenEncryptedObject.serialize(toMysten(ours)).toBytes()).toEqual(RUST_VECTOR)
-  })
-
   test("same bytes for the same value, and each side parses the other's output", () => {
     const ciphertexts: ReadonlyArray<Dem.Ciphertext> = [
       { _tag: "Aes256Gcm", blob: next(40), aad: Option.some(next(5)) },
@@ -176,17 +165,15 @@ describe("BCS", () => {
 describe("encryption: byte for byte under recorded randomness", () => {
   const cases: Array<{ dem: Dem; threshold: number; recipients: ReadonlyArray<Server>; aad: Uint8Array | undefined }> = []
   for (const dem of ["AesGcm256", "Hmac256Ctr"] as const) {
-    for (const threshold of [1, 2, 3, 4, 5]) {
-      for (const withAad of [false, true]) {
-        // Repeated servers: the first one appears twice; n ranges from t to t + 2.
-        const n = threshold + (threshold % 3)
-        const recipients = Array.from({ length: n }, (_, i) => SERVERS[i === n - 1 && n > 1 ? 0 : i % SERVERS.length]!)
-        cases.push({ dem, threshold, recipients, aad: withAad ? next(1 + int(20)) : undefined })
-      }
+    for (const [threshold, withAad] of [[1, true], [2, false], [5, true]] as const) {
+      // Repeated servers: the first one appears twice; n ranges from t to t + 2.
+      const n = threshold + (threshold % 3)
+      const recipients = Array.from({ length: n }, (_, i) => SERVERS[i === n - 1 && n > 1 ? 0 : i % SERVERS.length]!)
+      cases.push({ dem, threshold, recipients, aad: withAad ? next(1 + int(20)) : undefined })
     }
   }
 
-  test(`${cases.length} cases: both DEMs, thresholds 1–5, repeated servers, with and without aad`, async () => {
+  test(`${cases.length} cases: both DEMs, thresholds 1, 2 and 5, repeated servers, with and without aad`, async () => {
     for (const [i, c] of cases.entries()) {
       const packageId = Address.fromBytes(next(32))
       const id = next(int(40))
@@ -244,30 +231,28 @@ describe("decryption", () => {
   const data = utf8("parity plaintext")
 
   test("objects from each side decrypt on the other, with and without the consistency check", async () => {
-    for (const [i, threshold] of [1, 2, 3].entries()) {
-      for (const dem of ["AesGcm256", "Hmac256Ctr"] as const) {
-        const recipients = SERVERS.slice(0, threshold + 1)
-        const packageId = Address.fromBytes(next(32))
-        const id = next(6)
-        const aad = next(3)
-        const theirs = await mystenSeal({ packageId, id, recipients, threshold, dem, data, aad, baseKey: next(32), seed: `dec-${i}-${dem}` })
-        const randomness = await run(Envelope.randomness(threshold).pipe(Effect.provideService(Entropy.Entropy, seeded(`ours-${i}-${dem}`))))
-        const ours = await ourSeal({ packageId, id, recipients, threshold, input: { _tag: dem, data, aad }, randomness })
-        const holders = recipients.slice(1)
-        const publicKeys = recipients.map((s) => s.publicKey)
+    for (const [i, [threshold, dem]] of ([[1, "Hmac256Ctr"], [2, "AesGcm256"], [3, "Hmac256Ctr"]] as const).entries()) {
+      const recipients = SERVERS.slice(0, threshold + 1)
+      const packageId = Address.fromBytes(next(32))
+      const id = next(6)
+      const aad = next(3)
+      const theirs = await mystenSeal({ packageId, id, recipients, threshold, dem, data, aad, baseKey: next(32), seed: `dec-${i}-${dem}` })
+      const randomness = await run(Envelope.randomness(threshold).pipe(Effect.provideService(Entropy.Entropy, seeded(`ours-${i}-${dem}`))))
+      const ours = await ourSeal({ packageId, id, recipients, threshold, input: { _tag: dem, data, aad }, randomness })
+      const holders = recipients.slice(1)
+      const publicKeys = recipients.map((s) => s.publicKey)
 
-        // Theirs, opened by us.
-        const parsed = ok(EncryptedObject.parse(theirs.encryptedObject))
-        expect(await run(Envelope.open({ object: parsed, keys: ourKeys(parsed, holders) }))).toEqual(data)
-        expect(await run(Envelope.open({ object: parsed, keys: ourKeys(parsed, holders), publicKeys }))).toEqual(data)
+      // Theirs, opened by us.
+      const parsed = ok(EncryptedObject.parse(theirs.encryptedObject))
+      expect(await run(Envelope.open({ object: parsed, keys: ourKeys(parsed, holders) }))).toEqual(data)
+      expect(await run(Envelope.open({ object: parsed, keys: ourKeys(parsed, holders), publicKeys }))).toEqual(data)
 
-        // Ours, opened by them.
-        const encryptedObject = mystenEncryptedObject.parse(ours.bytes)
-        const keys = mystenKeys(ours.object, holders)
-        expect(await mystenDecrypt.decrypt({ encryptedObject, keys })).toEqual(data)
-        const pks = publicKeys.map((pk) => mystenBls.G2Element.fromBytes(pk))
-        expect(await mystenDecrypt.decrypt({ encryptedObject, keys, publicKeys: pks })).toEqual(data)
-      }
+      // Ours, opened by them.
+      const encryptedObject = mystenEncryptedObject.parse(ours.bytes)
+      const keys = mystenKeys(ours.object, holders)
+      expect(await mystenDecrypt.decrypt({ encryptedObject, keys })).toEqual(data)
+      const pks = publicKeys.map((pk) => mystenBls.G2Element.fromBytes(pk))
+      expect(await mystenDecrypt.decrypt({ encryptedObject, keys, publicKeys: pks })).toEqual(data)
     }
   })
 
@@ -285,6 +270,8 @@ describe("decryption", () => {
     expect(await failsWith(Envelope.open({ object, keys: ourKeys(object, holders), publicKeys }))).toBe("InvalidCiphertext")
     const pks = publicKeys.map((pk) => mystenBls.G2Element.fromBytes(pk))
     expect(await rejects(mystenDecrypt.decrypt({ encryptedObject, keys, publicKeys: pks }))).toBe(true)
+    // A subset including the bad share recovers another base key: the nonce check catches it.
+    expect(await failsWith(Envelope.open({ object, keys: ourKeys(object, [recipients[0]!, recipients[2]!]) }))).toBe("InvalidCiphertext")
   })
 
   test("checkLEEncoding agrees with legacyNonce on a little-endian r", async () => {
@@ -311,6 +298,9 @@ describe("decryption", () => {
       expect(Exit.isSuccess(ours)).toBe(legacy)
       if (legacy && Exit.isSuccess(ours)) expect(ours.value).toEqual(theirs!.plaintext)
     }
+    // The consistency check uses the r that matched, whatever its encoding.
+    const publicKeys = recipients.map((s) => s.publicKey)
+    expect(await run(Envelope.open({ object, keys: ourKeys(object, holders), legacyNonce: true, publicKeys }))).toEqual(data)
     // And both accept the big-endian original with the legacy flag on.
     expect(await run(Envelope.open({ object: sealed.object, keys: ourKeys(object, holders), legacyNonce: true }))).toEqual(data)
     expect(

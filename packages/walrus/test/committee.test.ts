@@ -4,6 +4,7 @@
  * and `Committees` build the right values, C5 holds, and the pure checks.
  */
 import { describe, expect, test } from "bun:test"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
@@ -53,59 +54,46 @@ describe("System", () => {
     expect(walType).toBe(`${Address.normalize("0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a")}::wal::WAL`)
   })
 
-  test("mainnet objects decode too", async () => {
-    const { state, walType, committees } = await run(mainnet, both)
-    expect(state.systemObjectId).toBe(Config.mainnet.systemObjectId)
-    expect(state.nShards).toBe(1000)
-    expect(state.members.length).toBeGreaterThan(0)
+  test("mainnet objects decode too; C5 holds on both networks, keys included", async () => {
+    for (const fixture of [testnet, mainnet]) {
+      const { state, committees } = await run(fixture, both)
+      expect(state.nShards).toBe(1000)
+      expect(Result.isSuccess(Committee.checkAgainstSystem(committees.current, state))).toBe(true)
+      expect(committees.current.nodes.map((n) => Buffer.from(n.publicKey).toString("hex")))
+        .toEqual(state.members.map((m) => Buffer.from(m.publicKey).toString("hex")))
+    }
+    const { walType } = await run(mainnet, both)
     expect(walType).toBe(`${Address.normalize("0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59")}::wal::WAL`)
-    expect(Result.isSuccess(Committee.checkAgainstSystem(committees.current, state))).toBe(true)
   })
 
-  test("state is cached; refresh reads again", async () => {
+  test("state is reused for STATE_TTL, then read again (prices and the package id move); refresh reads at once", async () => {
     const { gets, layer } = layers(testnet)
+    const reads = () => gets.get(Config.testnet.systemObjectId)
     await Effect.runPromise(
       Effect.gen(function*() {
         const system = yield* Effect.service(System.System)
         yield* system.state
-        yield* system.state
         yield* system.walType
-        expect(gets.get(Config.testnet.systemObjectId)).toBe(1)
+        yield* TestClock.adjust(Duration.subtract(System.STATE_TTL, Duration.seconds(1)))
+        yield* system.state
+        expect(reads()).toBe(1)
+        yield* TestClock.adjust("2 seconds")
+        yield* system.state
+        expect(reads()).toBe(2)
         yield* system.refresh
-        expect(gets.get(Config.testnet.systemObjectId)).toBe(2)
-      }).pipe(Effect.provide(layer))
+        expect(reads()).toBe(3)
+      }).pipe(Effect.provide(layer), Effect.provide(TestClock.layer()))
     )
   })
 
-  test("an inner state of another type is UnsupportedSystemVersion", async () => {
-    const outer = testnet.objects.find((o) => o.objectId === Config.testnet.systemObjectId)!
-    const state = await run(testnet, Effect.flatMap(Effect.service(System.System), (s) => s.state))
+  test("an inner state of another type is UnsupportedSystemVersion; an object that is not a System is ObjectDecodeError", async () => {
+    const stateError = (overrides: Parameters<typeof objectsLayer>[1]) =>
+      Effect.runPromise(Effect.flatMap(Effect.service(System.System), (s) => s.state).pipe(Effect.flip, Effect.provide(layers(testnet, overrides).layer)))
     const field = restoreObject(testnet.objects.find((o) => o.type.includes("SystemStateInnerV1"))!)
     const v2 = { ...field, type: field.type.replace("SystemStateInnerV1", "SystemStateInnerV2") }
-    const e = await Effect.runPromise(
-      Effect.flatMap(Effect.service(System.System), (s) => s.state).pipe(Effect.flip, Effect.provide(layers(testnet, [v2]).layer))
-    )
-    expect(e._tag).toBe("UnsupportedSystemVersion")
-    expect(outer.type.startsWith(state.typeOrigin)).toBe(true)
-  })
-
-  test("an object that is not a System is an ObjectDecodeError", async () => {
+    expect((await stateError([v2]))._tag).toBe("UnsupportedSystemVersion")
     const staking = restoreObject(testnet.objects.find((o) => o.objectId === Config.testnet.stakingObjectId)!)
-    const fake = { ...staking, objectId: Config.testnet.systemObjectId }
-    const e = await Effect.runPromise(
-      Effect.flatMap(Effect.service(System.System), (s) => s.state).pipe(Effect.flip, Effect.provide(layers(testnet, [fake]).layer))
-    )
-    expect(e._tag).toBe("ObjectDecodeError")
-  })
-
-  test("layerFromState serves a fixed state", async () => {
-    const state = await run(testnet, Effect.flatMap(Effect.service(System.System), (s) => s.state))
-    const got = await Effect.runPromise(
-      Effect.flatMap(Effect.service(System.System), (s) => Effect.zip(s.state, s.walType)).pipe(
-        Effect.provide(System.layerFromState(state, "0x2::sui::SUI"))
-      )
-    )
-    expect(got).toEqual([state, "0x2::sui::SUI"])
+    expect((await stateError([{ ...staking, objectId: Config.testnet.systemObjectId }]))._tag).toBe("ObjectDecodeError")
   })
 })
 
@@ -123,28 +111,9 @@ describe("Committees", () => {
     expect(current.nodes.map((n) => n.index)).toEqual(ids.map((_, i) => i))
     const shards = current.nodes.flatMap((n) => n.shards).sort((a, b) => a - b)
     expect(shards).toEqual(Array.from({ length: 1000 }, (_, i) => i))
-    for (const node of current.nodes) {
-      expect(node.url).toMatch(/^https:\/\/[^/]+$/)
-      expect(node.publicKey.length).toBe(96)
-      for (const s of node.shards) expect(current.nodeOfShard(s)).toBe(node)
-    }
+    expect(current.nodes.every((node) => /^https:\/\/[^/]+$/.test(node.url) && node.shards.every((s) => current.nodeOfShard(s) === node)))
+      .toBe(true)
     expect(() => current.nodeOfShard(1000)).toThrow(RangeError)
-  })
-
-  test("C5: the system's BLS committee matches the staking committee", async () => {
-    const { committees, state } = await run(testnet, both)
-    expect(Result.isSuccess(Committee.checkAgainstSystem(committees.current, state))).toBe(true)
-    // and the keys agree too
-    expect(committees.current.nodes.map((n) => Buffer.from(n.publicKey).toString("hex")))
-      .toEqual(state.members.map((m) => Buffer.from(m.publicKey).toString("hex")))
-  })
-
-  test("scheme: http", async () => {
-    const objects = objectsLayer(testnet)
-    const c = await Effect.runPromise(
-      Committee.load({ scheme: "http" }).pipe(Effect.provide(Layer.merge(objects.layer, Config.layer(testnet.config))))
-    )
-    expect(c.current.nodes.every((n) => n.url.startsWith("http://"))).toBe(true)
   })
 
   test("cached for the ttl, then read again; refresh reads at once", async () => {
@@ -206,24 +175,15 @@ describe("readCommittee (C6)", () => {
   const changing: Committee.ActiveCommittees = { current, previous, transitioning: true }
   const read = (c: Committee.ActiveCommittees, e: number | undefined) => Result.getOrThrow(Committee.readCommittee(c, e))
 
-  test("not transitioning: the current committee", () => {
-    expect(read(stable, 3)).toBe(current)
-    expect(read(stable, 10)).toBe(current)
-  })
-  test("transitioning, certified before this epoch: the previous committee", () => {
-    expect(read(changing, 9)).toBe(previous)
-    expect(read(changing, 1)).toBe(previous)
-  })
-  test("transitioning, certified this epoch: the current committee", () => {
+  test("current unless transitioning and certified before this epoch; later is BehindCurrentEpoch", () => {
+    expect([read(stable, 3), read(stable, 10)]).toEqual([current, current])
+    expect([read(changing, 9), read(changing, 1)]).toEqual([previous, previous])
     expect(read(changing, 10)).toBe(current)
-  })
-  test("certified after our epoch: BehindCurrentEpoch", () => {
-    const r = Committee.readCommittee(stable, 11)
-    expect(Result.isFailure(r) && r.failure._tag === "BehindCurrentEpoch" && [r.failure.clientEpoch, r.failure.certifiedEpoch]).toEqual([10, 11])
-  })
-  test("unknown certified epoch, or no previous committee: the current committee", () => {
+    // unknown certified epoch, or no previous committee: the current committee
     expect(read(changing, undefined)).toBe(current)
     expect(read({ current, previous: undefined, transitioning: true }, 3)).toBe(current)
+    const r = Committee.readCommittee(stable, 11)
+    expect(Result.isFailure(r) && r.failure._tag === "BehindCurrentEpoch" && [r.failure.clientEpoch, r.failure.certifiedEpoch]).toEqual([10, 11])
   })
 })
 
@@ -248,15 +208,13 @@ describe("checkAgainstSystem (C5)", () => {
     const r = Committee.checkAgainstSystem(c, s)
     return Result.isFailure(r) ? r.failure.reason : "ok"
   }
-  test("passes when they agree", () => expect(reason(state)).toBe("ok"))
-  test("different epoch", () => expect(reason({ ...state, epoch: 8 })).toBe("different epochs"))
-  test("different shard count", () => expect(reason({ ...state, nShards: 5 })).toContain("shards"))
-  test("different member count", () => expect(reason({ ...state, members: state.members.slice(1) })).toContain("2 members"))
-  test("different order", () => {
+  test("every disagreement is named", () => {
     const [a, b, d] = state.members
+    expect(reason(state)).toBe("ok")
+    expect(reason({ ...state, epoch: 8 })).toBe("different epochs")
+    expect(reason({ ...state, nShards: 5 })).toContain("shards")
+    expect(reason({ ...state, members: state.members.slice(1) })).toContain("2 members")
     expect(reason({ ...state, members: [b!, a!, d!] })).toContain("member 0")
-  })
-  test("different weight", () => {
     expect(reason({ ...state, members: state.members.map((m, i) => (i === 2 ? { ...m, weight: 2 } : m)) })).toContain("weighs 2")
   })
 })

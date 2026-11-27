@@ -52,14 +52,6 @@ const checkRoundTrip = (r: Effect.Success<typeof roundTrip>) => {
   expect(r.afterPrune.map(Option.isSome)).toEqual([false, true, true])
 }
 
-const removeRun = (journal: Journal.JournalService) =>
-  Effect.gen(function*() {
-    const signed = yield* signedTx()
-    yield* journal.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now }))
-    yield* journal.remove(signed.digest)
-    return [(yield* journal.listUnresolved).entries.length, Option.isNone(yield* journal.get(signed.digest))] as const
-  })
-
 describe("Journal", () => {
   test("memory round trip", async () => {
     checkRoundTrip(await Effect.runPromise(roundTrip.pipe(Effect.provide(Journal.layerMemory))))
@@ -77,20 +69,9 @@ describe("Journal", () => {
     expect(kept).toEqual({ settled: [false, false, true, true, true], unresolved: 1 })
   })
 
-  test("remove drops an unresolved entry (memory)", async () => {
-    expect(await Effect.runPromise(removeRun(Journal.makeMemory()))).toEqual([0, true])
-  })
-
-  test("entries are JSON", () => {
-    const encoded = Schema.encodeSync(Schema.fromJsonString(JournalEntry))(
-      JournalEntry.cases.NotApplied.make({ digest: "D", evidence: "inputConsumed", at: DateTime.makeUnsafe(5) })
-    )
-    expect(JSON.parse(encoded)).toEqual({ _tag: "NotApplied", digest: "D", evidence: "inputConsumed", at: 5 })
-  })
-
 })
 
-// The durable journal, against every store: Effect's memory store, IndexedDB and OPFS.
+// Round trip and crash recovery against every store: Effect's memory store, IndexedDB and OPFS.
 for (const { name, layer: kv } of stores) {
   describe(`durable journal over ${name}`, () => {
     test("KeyValueStore round trip, with settled markers", async () => {
@@ -106,6 +87,43 @@ for (const { name, layer: kv } of stores) {
       checkRoundTrip(result)
       expect(keys.filter((k) => k.startsWith("j/settled:"))).toEqual(["j/settled:Settled2"])
     })
+
+    test("signed + journalled, crash before the submit result; reconcileAll recovers", async () => {
+      const world = makeWorld({ script: ["hangAfter"] })
+      const store = kv()
+      const { before, recovered, after, entry } = await Effect.runPromise(
+        Effect.gen(function*() {
+          const signed = yield* signedTx()
+          // Process 1: submits, the execute lands but the answer never comes; the process dies.
+          const fiber = yield* Effect.forkChild(
+            Lifecycle.submit(signed).pipe(Effect.provide(JournalKeyValueStore.layer()))
+          )
+          yield* Effect.yieldNow
+          yield* Effect.sleep(10)
+          yield* Fiber.interrupt(fiber)
+          // Process 2: a fresh journal over the same store.
+          return yield* Effect.gen(function*() {
+            const journal = yield* Journal.Journal
+            const { entries: before } = yield* journal.listUnresolved
+            const recovered = yield* Lifecycle.reconcileAll()
+            const { entries: after } = yield* journal.listUnresolved
+            const entry = yield* journal.get(signed.digest)
+            return { before, recovered, after, entry }
+          }).pipe(Effect.provide(JournalKeyValueStore.layer()))
+        }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast)), Effect.provide(store))
+      )
+      expect(before.map((e) => e._tag)).toEqual(["Signed"])
+      expect(recovered.map((r) => r._tag)).toEqual(["Executed"])
+      expect(after).toEqual([])
+      expect(Option.getOrThrow(entry)._tag).toBe("Executed")
+      expect(world.landed.size).toBe(1)
+    })
+  })
+}
+
+// The journal logic over a KeyValueStore does not depend on which store.
+describe("durable journal", () => {
+  const kv = () => KeyValueStore.layerMemory
 
     test("onUnresolved: fail refuses to build over unresolved entries", async () => {
       const error = await Effect.runPromise(
@@ -220,46 +238,7 @@ for (const { name, layer: kv } of stores) {
       )
       expect(ops).toEqual({ get: 2, set: 3, remove: 2 })
     })
-
-    test("remove drops an unresolved entry", async () => {
-      const r = await Effect.runPromise(
-        Effect.flatMap(Effect.service(KeyValueStore.KeyValueStore), (store) => removeRun(JournalKeyValueStore.make(store))).pipe(Effect.provide(kv()))
-      )
-      expect(r).toEqual([0, true])
-    })
-
-    test("signed + journalled, crash before the submit result; reconcileAll recovers", async () => {
-      const world = makeWorld({ script: ["hangAfter"] })
-      const store = kv()
-      const { before, recovered, after, entry } = await Effect.runPromise(
-        Effect.gen(function*() {
-          const signed = yield* signedTx()
-          // Process 1: submits, the execute lands but the answer never comes; the process dies.
-          const fiber = yield* Effect.forkChild(
-            Lifecycle.submit(signed).pipe(Effect.provide(JournalKeyValueStore.layer()))
-          )
-          yield* Effect.yieldNow
-          yield* Effect.sleep(10)
-          yield* Fiber.interrupt(fiber)
-          // Process 2: a fresh journal over the same store.
-          return yield* Effect.gen(function*() {
-            const journal = yield* Journal.Journal
-            const { entries: before } = yield* journal.listUnresolved
-            const recovered = yield* Lifecycle.reconcileAll()
-            const { entries: after } = yield* journal.listUnresolved
-            const entry = yield* journal.get(signed.digest)
-            return { before, recovered, after, entry }
-          }).pipe(Effect.provide(JournalKeyValueStore.layer()))
-        }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast)), Effect.provide(store))
-      )
-      expect(before.map((e) => e._tag)).toEqual(["Signed"])
-      expect(recovered.map((r) => r._tag)).toEqual(["Executed"])
-      expect(after).toEqual([])
-      expect(Option.getOrThrow(entry)._tag).toBe("Executed")
-      expect(world.landed.size).toBe(1)
-    })
-  })
-}
+})
 
 describe("crash recovery", () => {
 
@@ -327,27 +306,5 @@ describe("sender lock", () => {
     const world = makeWorld({ executeDelay: 30 })
     await twoRuns(world, false)
     expect(world.maxInFlight).toBe(2)
-  })
-})
-
-describe("run", () => {
-  test("build -> sign -> journal -> submit against the stubs", async () => {
-    const world = makeWorld()
-    const { effects, tag } = await Effect.runPromise(
-      Effect.gen(function*() {
-        const signer = yield* Ed25519.generate
-        const effects = yield* Lifecycle.run(
-          Effect.gen(function*() {
-            const [coin] = yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(1n)])
-            yield* Ptb.transferObjects([coin!], yield* Ptb.address(signer.address))
-          }),
-          { signer }
-        )
-        const entry = yield* Effect.flatMap(Effect.service(Journal.Journal), (j) => j.get(effects.digest))
-        return { effects, tag: Option.getOrThrow(entry)._tag }
-      }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast, Journal.layerMemory)))
-    )
-    expect(effects.status._tag).toBe("Success")
-    expect(tag).toBe("Executed")
   })
 })

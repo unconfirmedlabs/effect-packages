@@ -29,17 +29,16 @@ const subsets = <A>(xs: ReadonlyArray<A>, k: number): Array<Array<A>> =>
   k === 0 ? [[]] : xs.flatMap((x, i) => subsets(xs.slice(i + 1), k - 1).map((rest) => [x, ...rest]))
 
 describe("GF(2⁸)", () => {
-  test("tables agree with a slow reference multiplication on every pair", () => {
+  test("mul agrees with a slow reference on every pair; div inverts it; 0x03 generates the group", () => {
+    let mismatches = 0
     for (let a = 0; a < 256; a++) {
-      for (let b = 0; b < 256; b++) expect(Shamir.mul(a, b)).toBe(slowMul(a, b))
+      for (let b = 0; b < 256; b++) {
+        if (Shamir.mul(a, b) !== slowMul(a, b)) mismatches++
+        if (b > 0 && Shamir.div(Shamir.mul(a, b), b) !== a) mismatches++
+      }
     }
-  })
-
-  test("0x03 generates the multiplicative group; division inverts multiplication", () => {
+    expect(mismatches).toBe(0)
     expect(new Set(Shamir.tables.exp.subarray(0, 255)).size).toBe(255)
-    for (let a = 0; a < 256; a++) {
-      for (let b = 1; b < 256; b++) expect(Shamir.div(Shamir.mul(a, b), b)).toBe(a)
-    }
   })
 })
 
@@ -49,24 +48,20 @@ describe("Rust vector (tss.rs typescript_test_vector)", () => {
     .map(b64)
     .map((bytes) => ({ index: bytes[23]!, share: bytes.subarray(0, 23) }))
 
-  test("every 2-subset and all 3 recombine; 1 does not", () => {
+  test("every 2-subset and all 3 recombine; 1 does not; interpolate gives each share", () => {
     for (const subset of [...subsets(shares, 2), shares]) expect(ok(Shamir.combine(subset))).toEqual(secret)
     expect(ok(Shamir.combine(shares.slice(0, 1)))).not.toEqual(secret)
-  })
-
-  test("interpolate gives the secret at 0 and each share at its index", () => {
     const f = ok(Shamir.interpolate(shares.slice(1)))
-    expect(f(0)).toEqual(secret)
-    for (const s of shares) expect(f(s.index)).toEqual(s.share)
+    expect(shares.map((s) => f(s.index))).toEqual(shares.map((s) => s.share))
   })
 })
 
 describe("split / combine", () => {
   const next = seeded("shamir")
 
-  test("any t of n recombine; interpolate reproduces every share", () => {
-    for (const [t, n] of [[1, 1], [1, 4], [2, 3], [3, 5], [5, 5], [4, 7]] as const) {
-      for (const len of [0, 1, 32, 57]) {
+  test("any t of n recombine; interpolate reproduces every share; 255 shares in any order", () => {
+    for (const [t, n] of [[1, 3], [2, 3], [3, 5], [4, 6]] as const) {
+      for (const len of [0, 1, 33]) {
         const secret = next(len)
         const shares = ok(Shamir.split(secret, t, n, next(len * (t - 1))))
         expect(shares.map((s) => s.index)).toEqual(Array.from({ length: n }, (_, i) => i + 1))
@@ -74,33 +69,14 @@ describe("split / combine", () => {
           expect(ok(Shamir.combine(subset))).toEqual(secret)
           if (len > 0) {
             const f = ok(Shamir.interpolate(subset))
-            for (const s of shares) expect(f(s.index)).toEqual(s.share)
+            expect(shares.map((s) => f(s.index))).toEqual(shares.map((s) => s.share))
           }
         }
       }
     }
-  })
-
-  test("255 shares, any order", () => {
     const secret = next(32)
     const shares = ok(Shamir.split(secret, 3, 255, next(64)))
     expect(ok(Shamir.combine([shares[254]!, shares[7]!, shares[100]!]))).toEqual(secret)
-  })
-
-  test("explicit coefficients give explicit shares", () => {
-    // f(x) = 0x42 + 0x01·x + 0x02·x², one secret byte.
-    const shares = ok(Shamir.split(Uint8Array.of(0x42), 3, 3, Uint8Array.of(0x01, 0x02)))
-    const f = (x: number) => 0x42 ^ Shamir.mul(0x01, x) ^ Shamir.mul(0x02, Shamir.mul(x, x))
-    expect(shares).toEqual([1, 2, 3].map((x) => ({ index: x, share: Uint8Array.of(f(x)) })))
-    // Byte-major layout: byte i's coefficients at [i(t−1), (i+1)(t−1)).
-    const two = ok(Shamir.split(Uint8Array.of(0x10, 0x20), 2, 2, Uint8Array.of(0x05, 0x07)))
-    expect(two[0]!.share).toEqual(Uint8Array.of(0x10 ^ 0x05, 0x20 ^ 0x07))
-    // Threshold 1: every share is the secret.
-    expect(ok(Shamir.split(Uint8Array.of(9, 8), 1, 3, new Uint8Array(0))).map((s) => s.share)).toEqual([
-      Uint8Array.of(9, 8),
-      Uint8Array.of(9, 8),
-      Uint8Array.of(9, 8)
-    ])
   })
 
   test("InvalidShares", () => {

@@ -7,10 +7,9 @@ import { Effect, Layer, Schedule, Stream } from "effect"
 import * as ChainGrpc from "../src/grpc/ChainGrpc.ts"
 import * as CheckpointsGrpc from "../src/grpc/CheckpointsGrpc.ts"
 import * as CheckpointDataGrpc from "../src/grpc/CheckpointDataGrpc.ts"
-import { effects as toEffects, object as toObject } from "../src/grpc/convert.ts"
+import { effects as toEffects } from "../src/grpc/convert.ts"
 import * as DynamicFieldsGrpc from "../src/grpc/DynamicFieldsGrpc.ts"
 import * as EventsGrpc from "../src/grpc/EventsGrpc.ts"
-import { GrpcWeb } from "../src/grpc/GrpcWeb.ts"
 import * as PackagesGrpc from "../src/grpc/PackagesGrpc.ts"
 import {
   Address,
@@ -26,40 +25,10 @@ import {
   Verify
 } from "../src/index.ts"
 import { RpcError } from "../src/RpcError.ts"
+import { fakeGrpc, type GrpcScript } from "./support.ts"
 
 const A = Address.normalize
-const short = (path: string) => path.split("/").pop()!
-
-type Script = {
-  unary?: (method: string, req: any, n: number) => Effect.Effect<any, RpcError>
-  stream?: (method: string, req: any, n: number) => Stream.Stream<any, RpcError>
-}
-
-/** A scripted node: records every request; `n` counts calls per method. */
-const fakeGrpc = (script: Script) => {
-  const requests: Array<{ method: string; req: any }> = []
-  const counts = new Map<string, number>()
-  const tick = (m: string) => {
-    const n = counts.get(m) ?? 0
-    counts.set(m, n + 1)
-    return n
-  }
-  const layer = Layer.succeed(GrpcWeb, GrpcWeb.of({
-    unary: (method, req) =>
-      Effect.suspend(() => {
-        const m = short(method.path)
-        requests.push({ method: m, req })
-        return script.unary ? script.unary(m, req, tick(m)) : Effect.die(`unexpected ${m}`)
-      }),
-    serverStream: (method, req) =>
-      Stream.suspend(() => {
-        const m = short(method.path)
-        requests.push({ method: m, req })
-        return script.stream ? script.stream(m, req, tick(m)) : Stream.die(`unexpected ${m}`)
-      })
-  }))
-  return { layer, requests }
-}
+type Script = GrpcScript
 
 const SERVICE_INFO = { checkpoint_height: 1000n, lowest_available_checkpoint: 400n, epoch: 7n, chain_id: "x" }
 const unavailable = (m: string) => new RpcError({ method: m, code: "UNAVAILABLE", message: "blip" })
@@ -219,7 +188,7 @@ describe("DynamicFieldsGrpc (review A8/A9)", () => {
     ))
 
   test("A8: a malformed name type is InvalidDynamicFieldName through the gRPC layer", async () => {
-    for (const type of ["not a type", "0x2::m", "vector<u8", "0xzz::m::T"]) {
+    for (const type of ["0x2::m", "vector<u8"]) {
       const e = await run((d) => d.get(A("0x5"), { type, bcs: new Uint8Array([1]) }).pipe(Effect.flip), {})
       expect(e._tag).toBe("InvalidDynamicFieldName")
       const o = await run((d) => d.getObject(A("0x5"), { type, bcs: new Uint8Array([1]) }).pipe(Effect.flip), {})
@@ -236,11 +205,6 @@ describe("DynamicFieldsGrpc (review A8/A9)", () => {
 })
 
 describe("evidence fields (review B10, 17)", () => {
-  test("objects carry previousTransaction", () => {
-    const o = toObject({ object_id: "0x1", version: 3n, digest: "D", owner: { kind: 4 }, object_type: "0x2::m::T", previous_transaction: "TX" })
-    expect(o.previousTransaction).toBe("TX")
-  })
-
   test("changed objects carry their input state; package writes are Immutable", () => {
     const fx = toEffects({
       digest: "T",

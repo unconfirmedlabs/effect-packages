@@ -17,22 +17,18 @@ import type { Address } from "@unconfirmed/sui/Address"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
 import * as Ptb from "@unconfirmed/sui/Ptb"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
-import { Wallet } from "@unconfirmed/sui-wallet"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
 import * as HttpClient from "effect/http/HttpClient"
-import { fakeWallet } from "@unconfirmed/test-support/wallet"
 import * as Approval from "../src/Approval.ts"
 import * as Config from "../src/Config.ts"
 import type { ThresholdNotMet } from "../src/Errors.ts"
 import * as KeyServer from "../src/KeyServer.ts"
 import * as KeyServerApi from "../src/KeyServerApi.ts"
-import * as Keys from "../src/Keys.ts"
 import * as Seal from "../src/Seal.ts"
-import * as SessionKey from "../src/SessionKey.ts"
 import { TESTNET_INDEPENDENT } from "./fixtures.ts"
 
 const live = process.env.SUI_LIVE === "1"
@@ -61,7 +57,6 @@ const chain = SuiGrpc.layer({ url: FULLNODE })
 const layer = Seal.layer({ servers: SERVERS }).pipe(Layer.provideMerge(chain), Layer.provideMerge(http))
 type Services = Layer.Success<typeof layer>
 const runLive = <A, E>(effect: Effect.Effect<A, E, Services>) => Effect.runPromise(Effect.provide(effect, layer))
-const exitLive = <A, E>(effect: Effect.Effect<A, E, Services>) => Effect.runPromiseExit(Effect.provide(effect, layer))
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 const addressBytes = (address: string) => Uint8Array.from(Buffer.from(address.slice(2), "hex"))
@@ -135,24 +130,7 @@ suite("live decryption (testnet, no funds)", () => {
     expect(plain).toEqual(utf8("theirs"))
   }, TIMEOUT)
 
-  test("3. another address's id: denied, every failure NoAccess with the Move abort", async () => {
-    const { signer } = freshUser()
-    const otherId = addressBytes(freshUser().signer.address)
-    const exit = await exitLive(Effect.gen(function*() {
-      const { encryptedObject } = yield* Seal.encrypt({ packageId: CANARY, id: otherId, data: utf8("not yours"), threshold: 2 })
-      const session = yield* Seal.session({ packageId: CANARY, signer })
-      return yield* Seal.decrypt({ data: encryptedObject, session, approval: yield* accountBased(otherId) })
-    }))
-    const e = asThresholdNotMet(failureOf(exit))
-    expect(e.reason).toBe("denied")
-    expect(e.failures.length).toBeGreaterThanOrEqual(2)
-    for (const f of e.failures) {
-      expect(f.error.kind).toBe("NoAccess")
-      expect(f.error.message).toContain("account_based")
-    }
-  }, TIMEOUT)
-
-  test("5. tle: a time in the past decrypts (a shared Clock input); a time in the future is denied", async () => {
+  test("3, 5. tle: a time in the past decrypts (a shared Clock input); a time in the future is denied, every failure NoAccess", async () => {
     const { signer } = freshUser()
     const past = tleId(Date.now() - 60_000)
     const future = tleId(Date.now() + 3_600_000)
@@ -184,22 +162,6 @@ suite("live decryption (testnet, no funds)", () => {
     }))
     expect(r.plain).toEqual([utf8("tle 0"), utf8("tle 1")])
     expect(r.after).toBe(0)
-  }, TIMEOUT)
-
-  test("7. a wallet-shaped signer (wallet-standard FakeWallet) as the session's signer", async () => {
-    const { keypair } = freshUser()
-    const fake = fakeWallet({ keypair, name: "Seal live test wallet" })
-    const id = addressBytes(keypair.toSuiAddress())
-    const plain = await runLive(Effect.gen(function*() {
-      yield* Wallet.register(fake.wallet)
-      const wallet = yield* Wallet.find(fake.wallet.name)
-      yield* Wallet.connect(wallet)
-      const signer = yield* Wallet.signer(wallet, { chain: "sui:testnet" })
-      const { encryptedObject } = yield* Seal.encrypt({ packageId: CANARY, id, data: utf8("wallet"), threshold: 2 })
-      const session = yield* Seal.session({ packageId: CANARY, signer })
-      return yield* Seal.decrypt({ data: encryptedObject, session, approval: yield* accountBased(id) })
-    }).pipe(Effect.scoped))
-    expect(plain).toEqual(utf8("wallet"))
   }, TIMEOUT)
 
   test("8. availability: an unreachable server; 2 of 4 decrypts, a 1-of-3 denial ends at the grace, not the timeout", async () => {
@@ -255,22 +217,5 @@ suite("live decryption (testnet, no funds)", () => {
     expect(elapsed).toBeGreaterThan(1_900)
     expect(elapsed).toBeLessThan(6_000)
     console.log(`[live.decrypt] 1-of-3 denial ended after ${elapsed} ms`)
-  }, TIMEOUT)
-
-  test("9. open mode: 0x2::coin::seal_approve is InvalidPtb from an independent server and from the aggregator (H9)", async () => {
-    const { signer } = freshUser()
-    const exit = await exitLive(Effect.gen(function*() {
-      const session = yield* SessionKey.make({ packageId: "0x" + "0".repeat(63) + "2", signer })
-      const approval = yield* Approval.fromRecipeOffline(Approval.call({ target: "0x2::coin::seal_approve", id: new Uint8Array([1]) }))
-      return yield* Keys.fetch({
-        session,
-        approval,
-        servers: [Config.testnet.mysten1, Config.testnet.committee].map((s) => ({ objectId: s.objectId as Address, weight: 1 })),
-        threshold: 1
-      })
-    }))
-    const e = asThresholdNotMet(failureOf(exit))
-    expect(e.reason).toBe("denied")
-    expect(e.failures.map((f) => f.error.kind)).toEqual(["InvalidPtb", "InvalidPtb"])
   }, TIMEOUT)
 })

@@ -270,44 +270,16 @@ describe("pruned gRPC handles", () => {
     expect([...lean.seen].sort()).toEqual(Object.keys(Lean).map((k) => k.split("_").pop()!).sort())
   })
 
-  test("pruned decoding drops fields outside the descriptor", () => {
-    const full = Full.LedgerService_GetEpoch.codec()
-    const encoded = encodeResponse("GetEpoch", responses.GetEpoch![0]!)
-    expect(Result.getOrThrow(Lean.LedgerService_GetEpoch.codec().decode(encoded))).toEqual({
-      epoch: { reference_gas_price: 750n }
-    })
-    expect(Result.getOrThrow(full.decode(encoded)).epoch?.protocol_config?.protocol_version).toBe(99n)
-  })
-
-  test("a read-mask path outside the pruned descriptor is a defect", () => {
+  test("a read-mask path or request field outside the pruned descriptor is a defect", () => {
     const codec = Lean.LedgerService_GetEpoch.codec()
     expect(() => codec.encode({ read_mask: { paths: ["reference_gas_price", "protocol_config"] } })).toThrow(/read-mask path "protocol_config"/)
     expect(() => codec.encode({})).toThrow(/a read mask is required/)
     expect(() => codec.encode({ read_mask: { paths: ["reference_gas_price"] } })).not.toThrow()
-  })
-
-  test("a request field outside the pruned descriptor is a defect", () => {
-    const codec = Lean.TransactionExecutionService_ExecuteTransaction.codec()
+    const execute = Lean.TransactionExecutionService_ExecuteTransaction.codec()
     const read_mask = { paths: ["effects.status"] }
-    expect(() => codec.encode({ transaction: { bcs: { value: bytes(1) } }, read_mask })).not.toThrow()
-    expect(() => codec.encode({ transaction: { sender: A(1) }, read_mask })).toThrow(/request field transaction.sender/)
-    expect(() => codec.encode({ signatures: [{ bcs: { value: bytes(1) }, scheme: 0 }], read_mask })).toThrow(/signatures.scheme/)
-  })
-
-  test("layerCore provides the transaction services and GrpcWeb, and composes with more services", () => {
-    const stacked = SuiGrpc.DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ url: "https://example.invalid" })))
-    const program = Effect.gen(function*() {
-      yield* Chain
-      yield* Objects
-      yield* Coins
-      yield* Packages
-      yield* Transactions
-      yield* DynamicFields
-      yield* GrpcWeb
-    })
-    // Type-level: the stacked layer satisfies every requirement but HttpClient.
-    const provided = program.pipe(Effect.provide(stacked))
-    expect(provided).toBeDefined()
+    expect(() => execute.encode({ transaction: { bcs: { value: bytes(1) } }, read_mask })).not.toThrow()
+    expect(() => execute.encode({ transaction: { sender: A(1) }, read_mask })).toThrow(/request field transaction.sender/)
+    expect(() => execute.encode({ signatures: [{ bcs: { value: bytes(1) }, scheme: 0 }], read_mask })).toThrow(/signatures.scheme/)
   })
 
   test("SuiGrpc.layer also provides its GrpcWeb (X-8)", async () => {

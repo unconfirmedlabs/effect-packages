@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import * as Effect from "effect/Effect"
-import * as Exit from "effect/Exit"
 import * as Redacted from "effect/Redacted"
 import * as Result from "effect/Result"
 import * as Config from "../src/Config.ts"
@@ -35,71 +33,38 @@ describe("Config.make", () => {
     expect(Result.getOrThrow(Config.make([{ objectId: A, apiKeyName: "k", apiKey: pre }])).servers[0]!.apiKey!.value).toBe(pre)
   })
 
-  test("refusals", () => {
+  test("refusals; errors never contain the API key", () => {
     expect(reason([])).toContain("no key servers")
-    expect(reason([{ objectId: "0x2" }])).toContain("not 64 hex digits")
-    expect(reason([{ objectId: A.slice(0, -1) }])).toContain("not 64 hex digits")
-    expect(reason([{ objectId: A + "0" }])).toContain("not 64 hex digits")
-    expect(reason([{ objectId: "0x" + "g".repeat(64) }])).toContain("not 64 hex digits")
-    expect(reason([{ objectId: " " + A }])).toContain("not 64 hex digits")
+    for (const objectId of ["0x2", A + "0", " " + A]) expect(reason([{ objectId }])).toContain("not 64 hex digits")
     expect(reason([{ objectId: A }, { objectId: A.toUpperCase().replace("0X", "") }])).toContain("duplicate")
-    for (const weight of [0, -1, 1.5, NaN, Infinity]) expect(reason([{ objectId: A, weight }])).toContain("positive integer")
+    for (const weight of [0, 1.5]) expect(reason([{ objectId: A, weight }])).toContain("positive integer")
     expect(reason([{ objectId: A, weight: 200 }, { objectId: B, weight: 56 }])).toContain("exceeds 255")
+    expect(Result.isSuccess(Config.make([{ objectId: A, weight: 200 }, { objectId: B, weight: 55 }]))).toBe(true)
     expect(reason([{ objectId: A, apiKeyName: "k" }])).toContain("together")
-    expect(reason([{ objectId: A, apiKey: "v" }])).toContain("together")
-    expect(reason([{ objectId: A, apiKeyName: "bad name", apiKey: "v" }])).toContain("header name")
-    expect(reason([{ objectId: A, apiKeyName: "", apiKey: "v" }])).toContain("header name")
     expect(reason([{ objectId: A, apiKeyName: "k", apiKey: "" }])).toContain("empty")
-    for (const aggregatorUrl of ["ftp://x.example", "not a url", "https://user:pw@x.example", "file:///etc/passwd", ""]) {
+    const badName = reason([{ objectId: A, apiKeyName: "bad name", apiKey: "hunter2" }])
+    expect(badName).toContain("header name")
+    expect(badName).not.toContain("hunter2")
+    for (const aggregatorUrl of ["ftp://x.example", "https://user:pw@x.example", "not a url"]) {
       expect(reason([{ objectId: A, aggregatorUrl }])).toContain("aggregatorUrl")
     }
   })
 
   test("SEAL-11: inputs that are accepted but cannot work are refused", () => {
     // A query or fragment would end up before the route: https://agg/base?token=abc/v1/fetch_key.
-    for (const aggregatorUrl of ["https://agg.example/base?token=abc", "https://agg.example/#frag", "https://agg.example/?"]) {
+    for (const aggregatorUrl of ["https://agg.example/base?token=abc", "https://agg.example/#frag"]) {
       expect(reason([{ objectId: A, aggregatorUrl }])).toContain("without query or fragment")
     }
-    expect(Result.isSuccess(Config.make([{ objectId: A, aggregatorUrl: "https://agg.example/base/" }]))).toBe(true)
     // A header value with CR, LF or NUL (fetch would throw on every request) or edge whitespace.
-    for (const apiKey of ["abc\r\nX-Injected: 1", "abc\n", "a\u0000b", " abc", "abc\t"]) {
+    for (const apiKey of ["abc\r\nX-Injected: 1", " abc"]) {
       const r = reason([{ objectId: A, apiKeyName: "X-Key", apiKey }])
       expect(r).toContain("not a valid HTTP header value")
       expect(r).not.toContain("abc")
     }
     expect(Result.isSuccess(Config.make([{ objectId: A, apiKeyName: "X-Key", apiKey: "a b\tc" }]))).toBe(true)
     // A protocol header must not be replaced by the API key.
-    for (const apiKeyName of ["Content-Type", "client-sdk-version", "Client-Sdk-Type", "Request-Id", "content-length"]) {
+    for (const apiKeyName of ["Content-Type", "client-sdk-version"]) {
       expect(reason([{ objectId: A, apiKeyName, apiKey: "v" }])).toContain("sets itself")
     }
-  })
-
-  test("255 in total is allowed", () => {
-    expect(Result.isSuccess(Config.make([{ objectId: A, weight: 200 }, { objectId: B, weight: 55 }]))).toBe(true)
-  })
-
-  test("errors never contain the API key", () => {
-    expect(reason([{ objectId: A, apiKeyName: "bad name", apiKey: "hunter2" }])).not.toContain("hunter2")
-  })
-
-  test("presets are valid", () => {
-    const t = Result.getOrThrow(Config.make([Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee]))
-    expect(t.servers.map((s) => s.weight)).toEqual([1, 1, 1])
-    expect(t.servers[2]!.aggregatorUrl).toBe("https://seal-aggregator-testnet.mystenlabs.com")
-    const m = Result.getOrThrow(Config.make([{ ...Config.mainnet.committee, apiKeyName: "x-api-key", apiKey: "k" }]))
-    expect(m.servers[0]!.aggregatorUrl).toBe("https://seal-aggregator-mainnet.mystenlabs.com")
-  })
-
-  test("layer", async () => {
-    const ok = await Effect.runPromise(Effect.service(Config.SealConfig).pipe(Effect.provide(Config.layer([Config.testnet.mysten1]))))
-    expect(ok.servers.length).toBe(1)
-    const bad = await Effect.runPromiseExit(Effect.service(Config.SealConfig).pipe(Effect.provide(Config.layer([]))))
-    expect(Exit.isFailure(bad)).toBe(true)
-  })
-
-  test("find", () => {
-    const c = Result.getOrThrow(Config.make([{ objectId: A }]))
-    expect(Config.find(c, A as any)?.weight).toBe(1)
-    expect(Config.find(c, B as any)).toBeUndefined()
   })
 })

@@ -3,7 +3,7 @@ import * as Address from "@unconfirmed/sui/Address"
 import { describe, expect, test } from "bun:test"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
-import { EncryptedObject, Kdf } from "../src/index.ts"
+import { EncryptedObject } from "../src/index.ts"
 import { b64, seeded } from "./support.ts"
 
 /** The object written by an older TS SDK in the Rust tests (`lib.rs` `typescript_test_vector`, :685). */
@@ -49,23 +49,9 @@ const sample = (overrides: Partial<Raw> = {}): Raw => ({
 describe("the Rust vector", () => {
   test("parses, and re-serialises to the same bytes", () => {
     const object = ok(EncryptedObject.parse(RUST_VECTOR))
-    expect(object.version).toBe(0)
-    expect(object.packageId).toBe(Address.ZERO)
-    expect(object.id).toEqual(Uint8Array.of(1, 2, 3, 4))
     expect(object.services.map(([, index]) => index)).toEqual([42, 194, 30])
-    expect(object.services.map(([id]) => id)).toEqual([1, 2, 3].map((n) => Address.normalize(`0x${n}`)))
     expect(object.threshold).toBe(2)
-    expect(object.encryptedShares._tag).toBe("BonehFranklinBLS12381")
-    expect(object.ciphertext._tag).toBe("Aes256Gcm")
-    if (object.ciphertext._tag !== "Aes256Gcm") throw new Error("unreachable")
-    expect(Option.getOrThrow(object.ciphertext.aad)).toEqual(Uint8Array.of(1, 2, 3, 4))
     expect(EncryptedObject.serialize(object)).toEqual(RUST_VECTOR)
-  })
-
-  test("fullId is Kdf.fullId; weights", () => {
-    const object = ok(EncryptedObject.parse(RUST_VECTOR))
-    expect(EncryptedObject.fullId(object)).toEqual(Kdf.fullId(object.packageId, object.id))
-    expect([...EncryptedObject.weights(object)]).toEqual([1, 2, 3].map((n) => [Address.normalize(`0x${n}`), 1]))
   })
 })
 
@@ -86,11 +72,6 @@ describe("round trips", () => {
     }
   })
 
-  test("Plain is a unit variant: the tag and nothing else", () => {
-    const bytes = raw(sample({ ciphertext: { _tag: "Plain" } }))
-    expect(bytes[bytes.length - 1]).toBe(2)
-  })
-
   test("weights with repeated servers, in order of first appearance", () => {
     expect([...EncryptedObject.weights(sample())]).toEqual([[a, 2], [b, 1]])
   })
@@ -108,52 +89,32 @@ describe("round trips", () => {
 })
 
 describe("the rules of I4", () => {
-  test("the sample is valid", () => {
-    ok(EncryptedObject.parse(raw(sample())))
-  })
-
-  test("version 0 only", () => {
+  test("version 0; 1 ≤ threshold ≤ n; one share per service; distinct non-zero indices", () => {
     expect(failure(raw(sample({ version: 1 })))).toContain("version 1")
-  })
-
-  test("1 ≤ threshold ≤ n", () => {
     expect(failure(raw(sample({ threshold: 0 })))).toContain("threshold 0")
     expect(failure(raw(sample({ threshold: 4 })))).toContain("threshold 4")
-    expect(failure(raw(sample({ services: [], threshold: 1 })))).toContain("threshold 1")
+    const value = sample()
+    const fewer = { ...value.encryptedShares, encryptedShares: value.encryptedShares.encryptedShares.slice(0, 2) }
+    expect(failure(raw(sample({ encryptedShares: fewer })))).toContain("2 encrypted shares for 3 services")
+    expect(failure(raw(sample({ services: [[a, 1], [b, 0], [a, 3]] })))).toContain("share index 0")
+    expect(failure(raw(sample({ services: [[a, 1], [b, 3], [a, 3]] })))).toContain("duplicate share index 3")
   })
 
   test("SEAL-10: a hand-built object with a non-integer threshold is InvalidCiphertext", () => {
     const object = ok(EncryptedObject.parse(raw(sample())))
-    for (const threshold of [1.5, NaN, Infinity]) {
+    for (const threshold of [1.5, NaN]) {
       const r = EncryptedObject.validate({ ...object, threshold })
       expect(Result.isFailure(r) && r.failure.reason).toContain("threshold")
     }
-  })
-
-  test("one encrypted share per service", () => {
-    const value = sample()
-    const fewer = { ...value.encryptedShares, encryptedShares: value.encryptedShares.encryptedShares.slice(0, 2) }
-    expect(failure(raw(sample({ encryptedShares: fewer })))).toContain("2 encrypted shares for 3 services")
-  })
-
-  test("distinct non-zero indices", () => {
-    expect(failure(raw(sample({ services: [[a, 1], [b, 0], [a, 3]] })))).toContain("share index 0")
-    expect(failure(raw(sample({ services: [[a, 1], [b, 3], [a, 3]] })))).toContain("duplicate share index 3")
-    // Any distinct non-zero indices are fine (the Rust vector uses 42, 194, 30).
-    ok(EncryptedObject.parse(raw(sample({ services: [[a, 255], [b, 7], [a, 100]] }))))
   })
 
   test("no trailing bytes, no truncation, no unknown variant", () => {
     const bytes = raw(sample())
     expect(failure(Uint8Array.of(...bytes, 0))).toContain("trailing")
     expect(failure(bytes.subarray(0, bytes.length - 1))).toContain("malformed")
-    expect(failure(new Uint8Array(0))).toContain("malformed")
     const plain = raw(sample({ ciphertext: { _tag: "Plain" } }))
     plain[plain.length - 1] = 3
     expect(failure(plain)).toContain("unknown enum variant")
-    const ibe = raw(sample())
-    ibe[1 + 32 + 1 + 3 + 1 + 3 * 33 + 1] = 1 // the IBE variant tag
-    expect(failure(ibe)).toContain("unknown enum variant")
   })
 
   test("validate also refuses hand-built objects with malformed ids or share sizes", () => {

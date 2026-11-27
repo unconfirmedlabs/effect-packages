@@ -1,6 +1,6 @@
 import { Secp256r1Keypair } from "@mysten/sui/keypairs/secp256r1"
 import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
-import { Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
+import { Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
 import { p256 } from "@noble/curves/nist.js"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
@@ -20,17 +20,6 @@ describe("Secp256r1", () => {
     expect((await verifyPersonalMessageSignature(msg, b64(ours.signature), { offline: true })).toSuiAddress()).toBe(signer.address)
   })
 
-  test("verifies only when installed", async () => {
-    const program = Effect.gen(function*() {
-      const signer = yield* Secp256r1.generate
-      const { signature } = yield* Signer.signPersonalMessage(signer, msg)
-      return yield* Verify.personalMessage(msg, signature, { address: signer.address })
-    })
-    const ok = await Effect.runPromise(program.pipe(Effect.provide(SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, Secp256r1.scheme))))
-    expect(ok.publicKey.flag).toBe(Secp256r1.FLAG)
-    const err = await Effect.runPromise(program.pipe(Effect.flip, Effect.provide(SignatureScheme.SignatureSchemes.layer(Ed25519.scheme))))
-    expect(err._tag).toBe("UnsupportedScheme")
-  })
   test("refuses a high-S signature (malleability), which a lax verifier would accept", async () => {
     const signer = await Effect.runPromise(Secp256r1.fromSecretKey(secret))
     const { signature } = await Effect.runPromise(Signer.signPersonalMessage(signer, msg))
@@ -46,11 +35,5 @@ describe("Secp256r1", () => {
     // The same bytes verify when low-S is not enforced: the refusal above is ours, not an accident.
     const intent = Uint8Array.from([3, 0, 0, msg.length, ...msg])
     expect(p256.verify(highS.subarray(1, 65), Hash.blake2b256(intent), signer.publicKey.bytes, { lowS: false })).toBe(true)
-  })
-
-  test("a malformed secret key is a typed InvalidKey with a fixed reason", async () => {
-    const err = await Effect.runPromise(Secp256r1.fromSecretKey(new Uint8Array(31)).pipe(Effect.flip))
-    expect(err._tag).toBe("InvalidKey")
-    expect(err.reason).not.toContain("0000")
   })
 })

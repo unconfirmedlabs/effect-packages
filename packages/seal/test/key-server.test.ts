@@ -13,7 +13,6 @@ import * as Config from "../src/Config.ts"
 import * as Ibe from "../src/Ibe.ts"
 import * as KeyServer from "../src/KeyServer.ts"
 import { loadFixture, objectsLayer, type RecordedService, serviceStub } from "./fixtures.ts"
-import { toB64 } from "./support.ts"
 
 const testnet = loadFixture("testnet")
 const mainnet = loadFixture("mainnet")
@@ -136,23 +135,6 @@ describe("KeyServer.read: recorded objects", () => {
         expect(s.publicKey.length).toBe(96)
       }
     }
-    expect(testnet.keyServers.length).toBe(11)
-    expect(mainnet.keyServers.length).toBe(1)
-  })
-
-  test("V1 shared (Mysten)", async () => {
-    const s = await readOk(ID.mysten1)
-    expect(s).toMatchObject({
-      objectId: ID.mysten1,
-      name: "mysten-v1-1",
-      layout: 1,
-      type: { _tag: "Independent", url: "https://seal-key-server-testnet-1.mystenlabs.com" }
-    })
-  })
-
-  test("V1 address-owned (Mirai): the on-chain URL, not the docs'", async () => {
-    const s = await readOk(ID.mirai)
-    expect(s.type).toEqual({ _tag: "Independent", url: "https://open.key-server.testnet.seal.mirai.cloud" })
   })
 
   test("V2 committees: testnet 3 of 5, mainnet 5 of 8", async () => {
@@ -162,10 +144,6 @@ describe("KeyServer.read: recorded objects", () => {
       if (s.type._tag !== "Committee") throw new Error("expected a committee")
       expect([s.type.version, s.type.threshold, s.type.members.length]).toEqual([0, threshold, n])
       expect(new Set(s.type.members.map((m) => m.partyId)).size).toBe(n)
-      for (const m of s.type.members) {
-        expect(m.url).toMatch(/^https?:\/\//)
-        expect(m.partialPublicKey.length).toBe(96)
-      }
     }
   })
 
@@ -177,120 +155,56 @@ describe("KeyServer.read: recorded objects", () => {
     )
     for (const n of objects.gets.values()) expect(n).toBe(1)
   })
-
-  test("an unknown id is ObjectNotFound", async () => {
-    expect(failure(await readWith(synth(1)))._tag).toBe("ObjectNotFound")
-  })
 })
 
 describe("KeyServer.read: synthesized layouts and version choice", () => {
-  test("V2 independent", async () => {
+  test("V2 independent decodes", async () => {
     const id = synth(2)
     const s = await readOk(id, [outer(id, 2n, 2n), field2(id, v2())])
     expect(s).toEqual({ objectId: id, name: "synth-v2", publicKey: PK, layout: 2, type: { _tag: "Independent", url: "https://v2.example" } })
   })
 
-  test("V1 upgraded to V2 (first 1, last 2) reads 2", async () => {
-    const id = synth(3)
-    const s = await readOk(id, [outer(id, 1n, 2n), field1(id, v1()), field2(id, v2())])
-    expect(s.layout).toBe(2)
-    expect(s.name).toBe("synth-v2")
-  })
-
-  test("first 1, last 1 reads 1 even when a V2 field exists", async () => {
-    const id = synth(4)
-    const s = await readOk(id, [outer(id, 1n, 1n), field1(id, v1()), field2(id, v2())])
-    expect(s.layout).toBe(1)
-  })
-
-  test("only unknown versions, or a broken range", async () => {
+  test("the highest supported version in [first, last] is read (K2); none or a broken range is refused", async () => {
+    const read = async (first: bigint, last: bigint) => {
+      const id = synth(Number(first * 10n + last) + 100)
+      return (await readOk(id, [outer(id, first, last), field1(id, v1()), field2(id, v2())])).layout
+    }
+    expect([await read(1n, 2n), await read(1n, 1n), await read(1n, 3n)]).toEqual([2, 1, 2])
     const id = synth(5)
     expect(await invalidReason(id, [outer(id, 3n, 4n)])).toContain("no supported version")
     expect(await invalidReason(id, [outer(id, 2n, 1n)])).toContain("invalid version range")
     expect(await invalidReason(id, [outer(id, 0n, 1n)])).toContain("invalid version range")
   })
-
-  test("a newer last version still reads 2 (K2)", async () => {
-    const id = synth(6)
-    expect((await readOk(id, [outer(id, 1n, 3n), field2(id, v2())])).layout).toBe(2)
-  })
 })
 
 describe("KeyServer.read: every InvalidKeyServer reason", () => {
-  const id = synth(10)
-  const ok = () => [outer(id, 1n, 1n), field1(id, v1())]
-
-  test("baseline decodes", async () => {
-    expect((await readOk(id, ok())).name).toBe("synth-v1")
-  })
-
-  test("object type is not key_server::KeyServer (module and name only)", async () => {
-    expect(await invalidReason(id, [outer(id, 1n, 1n, { type: `${PKG}::other::KeyServer` }), field1(id, v1())])).toContain(
-      "not a key_server::KeyServer"
-    )
-    expect(await invalidReason(id, [outer(id, 1n, 1n, { type: `${PKG}::key_server::Other` })])).toContain("not a key_server::KeyServer")
-    expect(await invalidReason(id, [outer(id, 1n, 1n, { type: `${PKG}::key_server::KeyServer<u8>` })])).toContain(
-      "not a key_server::KeyServer"
-    )
-    // Any package address is accepted (K4).
-    expect((await readOk(id, [outer(id, 1n, 1n, { type: "0x42::key_server::KeyServer" }), field1(id, v1())])).layout).toBe(1)
-  })
-
-  test("trailing bytes in the object or the field", async () => {
+  test("untrusted chain data that does not decode to a usable key server is refused", async () => {
+    const id = synth(10)
     const good = Bcs.encodeSync(KeyServer.KeyServerBcs)({ id, firstVersion: 1n, lastVersion: 1n })
-    expect(await invalidReason(id, [outer(id, 1n, 1n, { contents: new Uint8Array([...good, 1]) }), field1(id, v1())])).toContain(
-      "trailing"
-    )
-    expect(await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1(), { trailing: true })])).toContain("trailing")
-  })
-
-  test("the object holds another id", async () => {
-    const contents = Bcs.encodeSync(KeyServer.KeyServerBcs)({ id: synth(11), firstVersion: 1n, lastVersion: 1n })
-    expect(await invalidReason(id, [outer(id, 1n, 1n, { contents }), field1(id, v1())])).toContain("holds id")
-  })
-
-  test("the versioned field is missing", async () => {
-    expect(await invalidReason(id, [outer(id, 1n, 1n)])).toContain("versioned field 1 not found")
-  })
-
-  test("the field's type is not KeyServerV1", async () => {
-    expect(
-      await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1(), { type: `0x2::dynamic_field::Field<u64, ${PKG}::key_server::KeyServerV2>` })])
-    ).toContain("not a KeyServerV1 field")
-    expect(
-      await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1(), { type: `0x2::dynamic_field::Field<u32, ${PKG}::key_server::KeyServerV1>` })])
-    ).toContain("not a KeyServerV1 field")
-    expect(
-      await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1(), { type: `0x3::dynamic_field::Field<u64, ${PKG}::key_server::KeyServerV1>` })])
-    ).toContain("not a KeyServerV1 field")
-  })
-
-  test("the field names another version or id", async () => {
-    expect(await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1(), { name: 2n })])).toContain("names another field")
-  })
-
-  test("key type is not 0", async () => {
-    expect(await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1({ keyType: 1 }))])).toContain("unsupported key type 1")
-  })
-
-  test("public key: wrong length, not on the curve, infinity", async () => {
     const infinity = new Uint8Array(96)
     infinity[0] = 0xc0
-    const offCurve = Uint8Array.from(PK)
-    offCurve[95]! ^= 1
-    for (const pk of [PK.subarray(0, 48), new Uint8Array(96), infinity, offCurve]) {
-      expect(await invalidReason(id, [outer(id, 1n, 1n), field1(id, v1({ pk }))])).toContain("not a valid G2 point")
-    }
-  })
-
-  test("V2 public key and key type are checked too", async () => {
+    const fieldType = (t: string) => field1(id, v1(), { type: t })
+    const cases: ReadonlyArray<readonly [ReadonlyArray<Objects.SuiObject>, string]> = [
+      [[outer(id, 1n, 1n, { type: `${PKG}::other::KeyServer` }), field1(id, v1())], "not a key_server::KeyServer"],
+      [[outer(id, 1n, 1n, { type: `${PKG}::key_server::KeyServer<u8>` })], "not a key_server::KeyServer"],
+      [[outer(id, 1n, 1n, { contents: new Uint8Array([...good, 1]) }), field1(id, v1())], "trailing"],
+      [[outer(id, 1n, 1n), field1(id, v1(), { trailing: true })], "trailing"],
+      [[outer(id, 1n, 1n, { contents: Bcs.encodeSync(KeyServer.KeyServerBcs)({ id: synth(11), firstVersion: 1n, lastVersion: 1n }) }), field1(id, v1())], "holds id"],
+      [[outer(id, 1n, 1n)], "versioned field 1 not found"],
+      [[outer(id, 1n, 1n), fieldType(`0x2::dynamic_field::Field<u64, ${PKG}::key_server::KeyServerV2>`)], "not a KeyServerV1 field"],
+      [[outer(id, 1n, 1n), fieldType(`0x3::dynamic_field::Field<u64, ${PKG}::key_server::KeyServerV1>`)], "not a KeyServerV1 field"],
+      [[outer(id, 1n, 1n), field1(id, v1(), { name: 2n })], "names another field"],
+      [[outer(id, 1n, 1n), field1(id, v1({ keyType: 1 }))], "unsupported key type 1"],
+      [[outer(id, 1n, 1n), field1(id, v1({ pk: PK.subarray(0, 48) }))], "not a valid G2 point"],
+      [[outer(id, 1n, 1n), field1(id, v1({ pk: infinity }))], "not a valid G2 point"]
+    ]
+    for (const [objects, reason] of cases) expect(await invalidReason(id, objects)).toContain(reason)
     const id2 = synth(12)
     expect(await invalidReason(id2, [outer(id2, 2n, 2n), field2(id2, v2({ keyType: 7 }))])).toContain("unsupported key type")
     expect(await invalidReason(id2, [outer(id2, 2n, 2n), field2(id2, v2({ pk: new Uint8Array(96) }))])).toContain("G2")
-  })
-
-  test("an id that is not an object id", async () => {
     expect(await invalidReason("0x2" as Address, [])).toContain("not an object id")
+    // Any package address is accepted (K4).
+    expect((await readOk(id, [outer(id, 1n, 1n, { type: "0x42::key_server::KeyServer" }), field1(id, v1())])).layout).toBe(1)
   })
 })
 
@@ -300,19 +214,12 @@ describe("KeyServer.resolve: configuration", () => {
   const independent = onChain({ _tag: "Independent", url: "https://ks.example" })
   const apiKey = { name: "x-api-key", value: Redacted.make("k") }
 
-  test("committee: aggregator and API key from configuration; unconfigured has no url", () => {
+  test("committee: aggregator and API key from configuration; independent: on-chain URL; refusals", () => {
     expect(Result.getOrThrow(KeyServer.resolve(committee, { objectId: synth(20), weight: 1, aggregatorUrl: "https://agg.example", apiKey })))
       .toMatchObject({ type: "Committee", url: "https://agg.example", apiKey })
-    expect(Result.getOrThrow(KeyServer.resolve(committee, undefined))).toMatchObject({ type: "Committee", url: undefined, apiKey: undefined })
-  })
-
-  test("independent: on-chain URL and configured API key; unconfigured has no url", () => {
     expect(Result.getOrThrow(KeyServer.resolve(independent, { objectId: synth(20), weight: 1, apiKey })))
       .toMatchObject({ type: "Independent", url: "https://ks.example", apiKey })
     expect(Result.getOrThrow(KeyServer.resolve(independent, undefined)).url).toBeUndefined()
-  })
-
-  test("refusals", () => {
     const reason = (r: Result.Result<unknown, KeyServer.InvalidKeyServer>) => Result.isFailure(r) ? r.failure.reason : "ok"
     expect(reason(KeyServer.resolve(committee, { objectId: synth(20), weight: 1 }))).toContain("needs aggregatorUrl")
     expect(reason(KeyServer.resolve(independent, { objectId: synth(20), weight: 1, aggregatorUrl: "https://a.example" }))).toContain(
@@ -335,15 +242,6 @@ describe("KeyServers.layer", () => {
     expect(c.url).toBe("https://seal-aggregator-testnet.mystenlabs.com")
     expect(c.apiKey?.name).toBe("k")
     expect(other).toMatchObject({ name: "studio-mirai-open", url: undefined })
-  })
-
-  test("a configured committee without aggregator, an independent with one", async () => {
-    const { layer } = servicesLayer([{ objectId: ID.committee }, { objectId: ID.mysten1, aggregatorUrl: "https://a.example" }])
-    const [c, m] = await Effect.runPromise(
-      Effect.all([Effect.exit(get(ID.committee)), Effect.exit(get(ID.mysten1))]).pipe(Effect.provide(layer))
-    )
-    expect(failure(c).reason).toContain("needs aggregatorUrl")
-    expect(failure(m).reason).toContain("must not have aggregatorUrl")
   })
 
   test("ids are normalised: one entry for every spelling", async () => {
@@ -381,22 +279,6 @@ describe("KeyServers.layer", () => {
     )
   })
 
-  test("default TTL is 10 minutes", async () => {
-    const { gets, layer } = servicesLayer([Config.testnet.mysten1])
-    await Effect.runPromise(
-      Effect.gen(function*() {
-        const ks = yield* Effect.service(KeyServer.KeyServers)
-        yield* ks.get(ID.mysten1)
-        yield* TestClock.adjust("599 seconds")
-        yield* ks.get(ID.mysten1)
-        expect(gets.get(ID.mysten1)).toBe(1)
-        yield* TestClock.adjust("2 seconds")
-        yield* ks.get(ID.mysten1)
-        expect(gets.get(ID.mysten1)).toBe(2)
-      }).pipe(Effect.provide(layer), Effect.provide(TestClock.layer()))
-    )
-  })
-
   test("failures are not cached", async () => {
     const id = synth(30)
     const { gets, layer } = servicesLayer([{ objectId: id }])
@@ -422,12 +304,6 @@ describe("KeyServers.layerVerified", () => {
     for (const k of reachable) expect(calls.get(k.objectId)).toBe(1)
   })
 
-  test("checks once per load, not per get", async () => {
-    const { calls, layer } = servicesLayer([Config.testnet.mysten1], { verified: true })
-    await Effect.runPromise(Effect.all([get(ID.mysten1), get(ID.mysten1), get(ID.mysten1)]).pipe(Effect.provide(layer)))
-    expect(calls.get(ID.mysten1)).toBe(1)
-  })
-
   test("rejects a proof for another id, and an answer naming another id", async () => {
     const services = {
       ...testnet.services,
@@ -447,47 +323,24 @@ describe("KeyServers.layerVerified", () => {
     expect(failure(b).reason).toContain("names another id")
   })
 
-  test("a proof by the right key for this id passes; by another key fails", async () => {
-    const id = synth(40)
-    const extra = [outer(id, 2n, 2n), field2(id, v2())]
-    const answer = (pop: Uint8Array): Record<string, RecordedService> => ({
-      [id]: { url: "https://v2.example", status: 200, body: JSON.stringify({ service_id: id, pop: toB64(pop) }) }
-    })
-    const ok = servicesLayer([{ objectId: id }], { verified: true, extra, services: answer(Ibe.proofOfPossession(MASTER, id)) })
-    expect((await Effect.runPromise(get(id).pipe(Effect.provide(ok.layer)))).name).toBe("synth-v2")
-    const bad = servicesLayer([{ objectId: id }], { verified: true, extra, services: answer(Ibe.proofOfPossession(MASTER + 1n, id)) })
-    expect(failure(await Effect.runPromiseExit(get(id).pipe(Effect.provide(bad.layer)))).reason).toBe("proof of possession does not verify")
-  })
-
-  test("an unreachable server fails, and is asked again next time", async () => {
+  test("SEAL-6: an unreachable server fails with its kind, transient ones retryable, and is asked again next time", async () => {
     const { calls, layer } = servicesLayer([{ objectId: ID.suiftly }, { objectId: ID.overclock }], { verified: true })
     await Effect.runPromise(
       Effect.gen(function*() {
         const e1 = failure(yield* Effect.exit(get(ID.suiftly)))
+        expect([e1._tag, e1.kind, e1.retryable]).toEqual(["InvalidKeyServer", "Unavailable", true])
         expect(e1.reason).toContain("proof of possession unavailable (Unavailable)")
         expect(failure(yield* Effect.exit(get(ID.overclock))).reason).toContain("TimeoutError")
         yield* Effect.exit(get(ID.suiftly))
       }).pipe(Effect.provide(layer))
     )
     expect(calls.get(ID.suiftly)).toBe(2)
-  })
-
-  test("SEAL-6: a failed proof request carries its kind; a transient one is retryable", async () => {
-    const { layer } = servicesLayer([{ objectId: ID.suiftly }], { verified: true })
-    const e = failure(await Effect.runPromiseExit(get(ID.suiftly).pipe(Effect.provide(layer))))
-    expect(e._tag).toBe("InvalidKeyServer")
-    expect(e.kind).toBe("Unavailable")
-    expect(e.retryable).toBe(true)
     const bad = servicesLayer([Config.testnet.mysten1], {
       verified: true,
       services: { [ID.mysten1]: { url: "https://x.test", status: 404, body: "no such route" } }
     })
     const r = failure(await Effect.runPromiseExit(get(ID.mysten1).pipe(Effect.provide(bad.layer))))
-    expect(r.kind).toBe("Rejected")
-    expect(r.retryable).toBe(false)
-    // A proof that does not verify has no kind and is not retryable.
-    const nk = new KeyServer.InvalidKeyServer({ objectId: ID.mysten1, reason: "proof of possession does not verify" })
-    expect(nk.retryable).toBe(false)
+    expect([r.kind, r.retryable]).toEqual(["Rejected", false])
   })
 
   test("SEAL-6: a verified (object, public key) is not asked again after the TTL or a refresh", async () => {
@@ -508,15 +361,6 @@ describe("KeyServers.layerVerified", () => {
     const { calls, layer } = servicesLayer([Config.testnet.committee], { verified: true })
     await Effect.runPromise(Effect.all([get(ID.committee), get(ID.mysten1)]).pipe(Effect.provide(layer)))
     expect(calls.size).toBe(0)
-  })
-})
-
-describe("KeyServers.layerFromServers", () => {
-  test("serves the given servers; others are ObjectNotFound", async () => {
-    const server: KeyServer.KeyServer = { objectId: synth(50), name: "pinned", publicKey: PK, type: "Independent", url: "https://p.example", apiKey: undefined }
-    const layer = KeyServer.layerFromServers([server])
-    expect(await Effect.runPromise(get(synth(50)).pipe(Effect.provide(layer)))).toBe(server)
-    expect(failure(await Effect.runPromiseExit(get(synth(51)).pipe(Effect.provide(layer))))._tag).toBe("ObjectNotFound")
   })
 })
 

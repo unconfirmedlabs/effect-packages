@@ -713,7 +713,7 @@ As built (W10):
 - **Errors.** A non-2xx answer is `GatewayError { status, message }`, with the message (and `details[].reason`) taken from the daemon's N7 error envelope when it sends one, else the body text. No answer, a timeout or a defect thrown by the `HttpClient` is `GatewayError` without `status`. Quilt reads return the bytes only: the `X-Quilt-Patch-Identifier` header is not surfaced.
 - **Publisher.** The query carries only `epochs`, `permanent=true` and `send_object_to`, each only when given: the daemon's `PublisherQuery` has `deny_unknown_fields`, and blobs are deletable by default since 1.35 (`deletable` is deprecated there). `StoreResult` is `NewlyCreated { blobObject, resourceOperation (passed through), cost, sharedBlobObject } | AlreadyCertified { blobId, endEpoch, event | object } | MarkedInvalid { blobId, event }`. `BlobStoreResult::Error` (`{ error: { blobId, failurePhase, errorMsg } }`) is a `GatewayError`. `eventSeq` is a string. Exported helpers: `parseStoreResult`, `storePath`, `blobIdOf`.
 - **`verified`** derives the id with `Encoder.blobId` (one WASM call, about 2.5 s at `n = 1000`) using `System`'s `nShards`.
-- Tests: `test/gateway.test.ts` (scripted `HttpClient`; bodies from the Walrus docs) and `test/live.gateway.test.ts` (`SUI_LIVE=1`: a recent blob through `Walrus.layer` + `Read.blob` and through the public aggregator with `verified`, byte-equal; a random id is `GatewayError` 404).
+- Tests: `test/gateway.test.ts` (scripted `HttpClient`; bodies from the Walrus docs) and the gateway case in `test/live.read.test.ts` (`SUI_LIVE=1`: a recent blob through `Walrus.layer` + `Read.blob` and through the public aggregator with `verified`, byte-equal; a random id is `GatewayError` 404).
 
 ### 4.11 The one-line layer
 

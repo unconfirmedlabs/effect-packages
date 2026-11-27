@@ -8,13 +8,12 @@ import { SessionKey as MystenSessionKey } from "@mysten/seal"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { Transaction } from "@mysten/sui/transactions"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as Signer from "@unconfirmed/sui/Signer"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import { Approval, SessionKey } from "../src/index.ts"
-import { b64, toB64 } from "./support.ts"
+import { toB64 } from "./support.ts"
 
 const SEED = new Uint8Array(32).fill(5)
 const keypair = Ed25519Keypair.fromSecretKey(SEED)
@@ -79,14 +78,5 @@ describe("session parity with @mysten/seal", () => {
     const approval = Result.getOrThrow(Approval.fromTransactionKindBytes(kind))
     const sig = await run(SessionKey.signRequest(ours, approval.bytes, params.encKeyPk, params.encVerificationKey))
     expect(toB64(sig)).toBe(params.requestSignature)
-  })
-
-  test("a wallet-style signature from @mysten/sui verifies through SessionKey.withSignature + verify", async () => {
-    const s = await run(SessionKey.make({ packageId: PKG, address: keypair.toSuiAddress() }))
-    const { signature } = await keypair.signPersonalMessage(s.personalMessage)
-    const signed = await run(SessionKey.withSignature(s, b64(signature)))
-    const ours = await run(Signer.signPersonalMessage(signer, s.personalMessage))
-    expect(toB64(ours.signature)).toBe(signature)
-    expect((await run(signed.certificate)).signature).toEqual(b64(signature))
   })
 })

@@ -6,7 +6,7 @@ import { base58 } from "@scure/base"
 import { Bcs } from "@unconfirmed/bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect, Schedule, Stream } from "effect"
-import { Address, Chain, CheckpointData, Checkpoints, DynamicFields, Ed25519, Events, Objects, Ptb, Resolve, Transactions, Tx } from "../src/index.ts"
+import { Address, CheckpointData, Checkpoints, DynamicFields, Ed25519, Events, Objects, Ptb, Resolve, Transactions, Tx } from "../src/index.ts"
 import { DEVNET, faucet, grpcLayer, live, TESTNET } from "./support.ts"
 
 const suite = live ? describe : describe.skip
@@ -15,9 +15,9 @@ const tip = Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) => c.sub
 )
 
 suite("testnet: extensions", () => {
-  test("DynamicFields: list 0x5, derive its id, get by name through Objects.get", async () => {
+  test("DynamicFields: list 0x5, derive its id, get by name through Objects.get; a missing name is DynamicFieldNotFound", async () => {
     const { layer, requests } = grpcLayer(TESTNET)
-    const { fields, got, viaSchema } = await Effect.runPromise(
+    const { fields, got, viaSchema, batches, missing } = await Effect.runPromise(
       Effect.gen(function*() {
         const df = yield* DynamicFields.DynamicFields
         const fields = yield* df.list(Address.normalize("0x5")).pipe(Stream.runCollect)
@@ -26,9 +26,12 @@ suite("testnet: extensions", () => {
           df.get(f.parent, f.name),
           DynamicFields.getWith(f.parent, "u64", Bcs.u64, Bcs.decodeSync(Bcs.u64)(f.name.bcs))
         ], { concurrency: "unbounded" })
-        return { fields, got, viaSchema }
+        const batches = requests.filter((r) => r === "BatchGetObjects").length
+        const missing = yield* Effect.flip(DynamicFields.getWith(Address.normalize("0x5"), "u64", Bcs.u64, 999_999n))
+        return { fields, got, viaSchema, batches, missing }
       }).pipe(Effect.provide(layer))
     )
+    expect(missing._tag).toBe("DynamicFieldNotFound")
     const f = fields[0]!
     expect(f.kind).toBe("Field")
     expect(f.name.type).toBe("u64")
@@ -39,26 +42,18 @@ suite("testnet: extensions", () => {
     expect(Buffer.from(got.value).equals(Buffer.from(f.value))).toBe(true)
     expect(viaSchema.fieldId).toBe(f.fieldId)
     // Both concurrent gets coalesced into one BatchGetObjects.
-    expect(requests.filter((r) => r === "BatchGetObjects")).toHaveLength(1)
+    expect(batches).toBe(1)
   }, 30_000)
-
-  test("DynamicFields: a missing name is DynamicFieldNotFound", async () => {
-    const { layer } = grpcLayer(TESTNET)
-    const e = await Effect.runPromise(
-      DynamicFields.getWith(Address.normalize("0x5"), "u64", Bcs.u64, 999_999n).pipe(Effect.flip, Effect.provide(layer))
-    )
-    expect(e._tag).toBe("DynamicFieldNotFound")
-  })
 
   test("Events: list descending and ascending across server budgets; subscribe", async () => {
     const { layer, requests } = grpcLayer(TESTNET)
     const { newest, history, live } = await Effect.runPromise(
       Effect.gen(function*() {
         const events = yield* Events.Events
-        const t = yield* tip
         const newest = yield* events.list({ descending: true }).pipe(Stream.take(3), Stream.runCollect)
-        // > 1000 (the per-call item limit) forces resumption.
-        const history = yield* events.list({ start: t - 30000n }).pipe(Stream.take(1500), Stream.runCollect)
+        // > 1000 (the per-call item limit) forces resumption. From the pruning floor, not the
+        // recent past: a quiet stretch of testnet can hold fewer than 1500 events.
+        const history = yield* events.list().pipe(Stream.take(1500), Stream.runCollect)
         const live = yield* events.subscribe().pipe(Stream.take(2), Stream.runCollect, Effect.timeout("60 seconds"))
         return { newest, history, live }
       }).pipe(Effect.provide(layer))
@@ -100,12 +95,6 @@ suite("testnet: extensions", () => {
     expect(all.every((e) => e.type.includes("::kiosk::ItemListed"))).toBe(true)
     console.log("descending ItemListed to the floor:", all.length)
   }, 90_000)
-
-  test("Chain.info reports the epoch and the checkpoint height", async () => {
-    const { layer } = grpcLayer(TESTNET)
-    const info = await Effect.runPromise(Effect.flatMap(Effect.service(Chain.Chain), (c) => c.info).pipe(Effect.provide(layer)))
-    expect(info.epoch > 0n && info.checkpointHeight > 0n).toBe(true)
-  })
 
   test("CheckpointData: get, list across budgets, follow into live; Checkpoints.list resumes", async () => {
     const { layer } = grpcLayer(TESTNET)

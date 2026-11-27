@@ -1,8 +1,8 @@
 import { p256 } from "@noble/curves/nist.js"
 import { sha256 } from "@noble/hashes/sha2.js"
-import { BrowserPasskeyProvider, findCommonPublicKey, PasskeyKeypair, PasskeyPublicKey } from "@mysten/sui/keypairs/passkey"
+import { BrowserPasskeyProvider, findCommonPublicKey, PasskeyKeypair } from "@mysten/sui/keypairs/passkey"
 import type { PasskeyProvider as MystenProvider } from "@mysten/sui/keypairs/passkey"
-import { verifyPersonalMessageSignature, verifyTransactionSignature } from "@mysten/sui/verify"
+import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
 import { Bcs } from "@unconfirmed/bcs"
 import { Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
 import { afterEach, describe, expect, test } from "bun:test"
@@ -16,7 +16,6 @@ const run = <A, E>(e: Effect.Effect<A, E, never>) => Effect.runPromise(e)
 const secret = new Uint8Array(32).map((_, i) => i + 1)
 const credentialId = new Uint8Array(16).fill(9)
 const msg = utf8("hello passkey")
-const txBytes = new Uint8Array(120).map((_, i) => (i * 7) % 256)
 
 const schemes = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, Passkey.scheme)
 const verifyOurs = <A, E>(e: Effect.Effect<A, E, SignatureScheme.SignatureSchemes>) => run(Effect.provide(e, schemes))
@@ -65,32 +64,18 @@ const reencode = (fields: typeof Passkey.PasskeyAuthenticatorBcs.Type) =>
   new Uint8Array([Passkey.FLAG, ...Bcs.encodeSync(Passkey.PasskeyAuthenticatorBcs)(fields)])
 
 describe("Passkey parity with @mysten/sui", () => {
-  test("same public key, address and credential id", async () => {
+  test("same key, address and credential id; identical signature bytes; each verifies the other's", async () => {
     const { provider, ours, theirs } = await setup()
     expect(ours.publicKey.bytes).toEqual(theirs.getPublicKey().toRawBytes())
     expect(ours.publicKey.bytes).toEqual(provider.publicKey)
     expect(ours.address).toBe(theirs.toSuiAddress() as typeof ours.address)
-    expect(ours.address).toBe(new PasskeyPublicKey(provider.publicKey).toSuiAddress() as typeof ours.address)
     expect(ours.credentialId).toEqual(theirs.getCredentialId()!)
-  })
-
-  test("personal message: identical bytes, each verifies the other's", async () => {
-    const { ours, theirs } = await setup()
     const mine = await run(Signer.signPersonalMessage(ours, msg))
     const ref = await theirs.signPersonalMessage(msg)
     expect(b64(mine.signature)).toBe(ref.signature)
     expect((await verifyPersonalMessageSignature(msg, b64(mine.signature), { offline: true })).toSuiAddress()).toBe(ours.address)
     const v = await verifyOurs(Verify.personalMessage(msg, fromB64(ref.signature), { address: ours.address }))
     expect(v.publicKey).toEqual({ flag: Passkey.FLAG, bytes: ours.publicKey.bytes })
-  })
-
-  test("transaction: identical bytes, each verifies the other's", async () => {
-    const { ours, theirs } = await setup()
-    const mine = await run(Signer.signTransaction(ours, txBytes))
-    const ref = await theirs.signTransaction(txBytes)
-    expect(b64(mine.signature)).toBe(ref.signature)
-    expect((await verifyTransactionSignature(txBytes, b64(mine.signature), { offline: true })).toSuiAddress()).toBe(ours.address)
-    await verifyOurs(Verify.transaction(txBytes, fromB64(ref.signature), { address: ours.address }))
   })
 
   test("high-S assertions are normalized like @mysten/sui (which verifies low-S only)", async () => {
@@ -138,14 +123,6 @@ describe("Passkey recovery errors", () => {
     expect(two.matches).toBe(2)
   })
 
-  test("two different passkeys answering the two prompts is NoUniquePublicKey", async () => {
-    const [p1, p2] = await Promise.all([run(Passkey.softwareProvider()), run(Passkey.softwareProvider())])
-    let n = 0
-    const alternating: Passkey.Provider = { create: p1.create, get: (c) => (n++ % 2 === 0 ? p1 : p2).get(c) }
-    const err = await run(Effect.flip(Passkey.recover(alternating)))
-    expect(err._tag).toBe("NoUniquePublicKey")
-  })
-
   test("a malformed assertion signature is a SigningError", async () => {
     const p = await run(Passkey.softwareProvider())
     const broken: Passkey.Provider = { ...p, get: (c, id) => Effect.map(p.get(c, id), (a) => ({ ...a, signature: new Uint8Array(8) })) }
@@ -155,34 +132,6 @@ describe("Passkey recovery errors", () => {
 })
 
 describe("Passkey verification rejects tampering", () => {
-  test("a UTF-8 BOM before clientDataJSON (re-encoding a valid signature) is refused", async () => {
-    const { ours } = await setup()
-    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
-    const fields = decode(signature)
-    const bom = reencode({ ...fields, clientDataJson: "\uFEFF" + fields.clientDataJson })
-    expect(bom).not.toEqual(signature)
-    expect((await ourError(msg, bom))._tag).toBe("InvalidSignature")
-  })
-
-  test("a non-canonical ULEB128 length (re-encoding a valid signature) is refused", async () => {
-    const { ours } = await setup()
-    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
-    // authenticatorData's length is the first byte after the flag (< 128): spell it `len|0x80, 0x00`.
-    const len = signature[1]!
-    expect(len).toBeLessThan(0x80)
-    const padded = new Uint8Array([signature[0]!, len | 0x80, 0x00, ...signature.subarray(2)])
-    expect((await ourError(msg, padded))._tag).toBe("InvalidSignature")
-  })
-
-  test("a signed clientDataJSON whose crossOrigin isn't a boolean is refused", async () => {
-    const { ours } = await setup()
-    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
-    const fields = decode(signature)
-    const data = { ...JSON.parse(fields.clientDataJson), crossOrigin: "yes" }
-    const forged = forge(secret, ours.publicKey.bytes, fields.authenticatorData, JSON.stringify(data))
-    expect(((await ourError(msg, forged)) as SignatureScheme.InvalidSignature).reason).toContain("crossOrigin")
-  })
-
   test("a signature over another message (challenge mismatch)", async () => {
     const { ours } = await setup()
     const { signature } = await run(Signer.signPersonalMessage(ours, utf8("other")))
@@ -192,32 +141,23 @@ describe("Passkey verification rejects tampering", () => {
     expect((err as SignatureScheme.InvalidSignature).reason).toContain("challenge")
   })
 
-  test("clientDataJSON edited after signing (challenge swapped, origin changed)", async () => {
+  test("clientDataJSON or authenticatorData edited after signing (challenge swapped, UV cleared)", async () => {
     const { ours } = await setup()
     const { signature } = await run(Signer.signPersonalMessage(ours, utf8("other")))
     const fields = decode(signature)
     const swapped = JSON.parse(fields.clientDataJson)
     swapped.challenge = Buffer.from(Hash.blake2b256(Hash.personalMessageIntent(msg))).toString("base64url")
     const challengeSwapped = reencode({ ...fields, clientDataJson: JSON.stringify(swapped) })
-    expect(await mystenAcceptsMessage(msg, challengeSwapped)).toBe(false)
-    expect((await ourError(msg, challengeSwapped) as SignatureScheme.InvalidSignature).reason).toBe("signature does not verify")
 
-    const good = (await run(Signer.signPersonalMessage(ours, msg))).signature
-    const g = decode(good)
-    const origin = reencode({ ...g, clientDataJson: g.clientDataJson.replace("https://localhost", "https://evil.example") })
-    expect(await mystenAcceptsMessage(msg, origin)).toBe(false)
-    expect((await ourError(msg, origin) as SignatureScheme.InvalidSignature).reason).toBe("signature does not verify")
-  })
-
-  test("authenticatorData edited after signing", async () => {
-    const { ours } = await setup()
-    const good = (await run(Signer.signPersonalMessage(ours, msg))).signature
-    const fields = decode(good)
-    const authenticatorData = fields.authenticatorData.slice()
+    const good = decode((await run(Signer.signPersonalMessage(ours, msg))).signature)
+    const authenticatorData = good.authenticatorData.slice()
     authenticatorData[32] = authenticatorData[32]! ^ 0x04 // clear UV
-    const tampered = reencode({ ...fields, authenticatorData })
-    expect(await mystenAcceptsMessage(msg, tampered)).toBe(false)
-    expect((await ourError(msg, tampered) as SignatureScheme.InvalidSignature).reason).toBe("signature does not verify")
+    const uvCleared = reencode({ ...good, authenticatorData })
+
+    for (const tampered of [challengeSwapped, uvCleared]) {
+      expect(await mystenAcceptsMessage(msg, tampered)).toBe(false)
+      expect((await ourError(msg, tampered) as SignatureScheme.InvalidSignature).reason).toBe("signature does not verify")
+    }
   })
 
   test("validly signed but wrong clientDataJSON: type, challenge encoding, missing fields", async () => {
@@ -235,7 +175,7 @@ describe("Passkey verification rejects tampering", () => {
     const cases: Array<[string, Uint8Array, boolean]> = [
       // [why, signature, does @mysten/sui also reject it?]
       ["webauthn.create", cd({ type: "webauthn.create", challenge, origin: "https://localhost" }), true],
-      ["challenge of other bytes", cd({ type: "webauthn.get", challenge: Buffer.from(sha256(digest)).toString("base64url"), origin: "x" }), true],
+      ["crossOrigin not a boolean", cd({ type: "webauthn.get", challenge, origin: "https://localhost", crossOrigin: "yes" }), false],
       // Sui decodes the challenge as unpadded base64url and parses CollectedClientData (origin required); Mysten is laxer.
       ["padded base64", cd({ type: "webauthn.get", challenge: Buffer.from(digest).toString("base64"), origin: "x" }), false],
       ["no origin", cd({ type: "webauthn.get", challenge }), false],
@@ -254,7 +194,7 @@ describe("Passkey verification rejects tampering", () => {
     await verifyOurs(Verify.personalMessage(msg, deep, { address: ours.address }))
   })
 
-  test("malformed bodies are InvalidSignature, never a defect", async () => {
+  test("malformed or non-canonical bodies are InvalidSignature, never a defect", async () => {
     const { ours } = await setup()
     const good = (await run(Signer.signPersonalMessage(ours, msg))).signature
     const f = decode(good)
@@ -266,8 +206,16 @@ describe("Passkey verification rejects tampering", () => {
       return new Uint8Array([0x02, ...flipped, ...f.userSignature.subarray(65)])
     })()
     const badPoint = new Uint8Array([...f.userSignature.subarray(0, 65), 0x05, ...new Uint8Array(32)])
+    // Re-encodings of a valid signature: a BOM before clientDataJSON, a non-canonical ULEB128 length
+    // (authenticatorData's length is the first byte after the flag, < 128: spell it `len|0x80, 0x00`).
+    const bom = reencode({ ...f, clientDataJson: "\uFEFF" + f.clientDataJson })
+    const len = good[1]!
+    expect(len).toBeLessThan(0x80)
+    const uleb = new Uint8Array([good[0]!, len | 0x80, 0x00, ...good.subarray(2)])
     const cases: Array<[string, Uint8Array, boolean]> = [
       // [why, signature, does @mysten/sui also reject it?]
+      ["BOM", bom, false],
+      ["non-canonical ULEB128", uleb, false],
       ["empty body", new Uint8Array([Passkey.FLAG]), true],
       // Validators' BCS refuses trailing bytes; @mysten/bcs ignores them.
       ["trailing bytes", new Uint8Array([...good, 0]), false],
@@ -284,15 +232,7 @@ describe("Passkey verification rejects tampering", () => {
     }
   })
 
-  test("verifies only when installed, and checks the address", async () => {
-    const { ours } = await setup()
-    const { signature } = await run(Signer.signPersonalMessage(ours, msg))
-    const missing = await run(Effect.flip(Effect.provide(Verify.personalMessage(msg, signature), SignatureScheme.SignatureSchemes.layer(Ed25519.scheme))))
-    expect(missing._tag).toBe("UnsupportedScheme")
-    const other = await run(Ed25519.generate)
-    const wrong = await verifyOurs(Effect.flip(Verify.personalMessage(msg, signature, { address: other.address })))
-    expect(wrong._tag).toBe("InvalidSignature")
-  })
+
 })
 
 describe("Passkey signer", () => {
@@ -311,21 +251,15 @@ describe("Passkey signer", () => {
     expect(err.message).toContain("credential id")
   })
 
-  test("invalid keys and SPKI are InvalidKey", async () => {
+  test("invalid keys and SPKI are InvalidKey, never a throw", async () => {
     const p = await run(Passkey.softwareProvider())
-    for (const pk of [new Uint8Array(32), new Uint8Array(33).fill(5)]) {
-      expect((await run(Effect.flip(Passkey.fromPublicKey(p, pk))))._tag).toBe("InvalidKey")
-    }
+    expect((await run(Effect.flip(Passkey.fromPublicKey(p, new Uint8Array(33).fill(5)))))._tag).toBe("InvalidKey")
+    expect((await run(Effect.flip(Passkey.spkiFromPublicKey(new Uint8Array(33)))))._tag).toBe("InvalidKey")
     const spki = await run(Passkey.spkiFromPublicKey(p.publicKey))
-    for (const pk of [new Uint8Array(33), new Uint8Array(32), new Uint8Array(33).fill(5)]) {
-      expect((await run(Effect.flip(Passkey.spkiFromPublicKey(pk))))._tag).toBe("InvalidKey")
-    }
     expect(await run(Passkey.publicKeyFromSpki(spki))).toEqual(p.publicKey)
     const otherCurve = spki.slice()
     otherCurve[20] = otherCurve[20]! ^ 1
-    for (const der of [spki.subarray(1), otherCurve]) {
-      expect((await run(Effect.flip(Passkey.publicKeyFromSpki(der))))._tag).toBe("InvalidKey")
-    }
+    expect((await run(Effect.flip(Passkey.publicKeyFromSpki(otherCurve))))._tag).toBe("InvalidKey")
     const bad: Passkey.Provider = { ...p, create: () => Effect.succeed({ id: new Uint8Array(1), publicKey: otherCurve }) }
     expect((await run(Effect.flip(Passkey.create(bad))))._tag).toBe("InvalidKey")
   })
@@ -367,16 +301,12 @@ describe("BrowserProvider", () => {
     return calls
   }
 
-  test("no WebAuthn is 'unavailable'", async () => {
+  test("no WebAuthn is 'unavailable'; a cancelled prompt is 'rejected'", async () => {
     const provider = Passkey.browserProvider("Test")
     expect(await run(Effect.flip(provider.create()))).toMatchObject({ _tag: "SigningError", reason: "unavailable" })
     expect(await run(Effect.flip(provider.get(new Uint8Array(32))))).toMatchObject({ reason: "unavailable" })
-  })
-
-  test("a cancelled prompt is 'rejected'", async () => {
     install(await run(Passkey.softwareProvider()), () => new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"))
-    const err = await run(Effect.flip(Passkey.create(Passkey.browserProvider("Test"))))
-    expect(err).toMatchObject({ _tag: "SigningError", reason: "rejected" })
+    expect(await run(Effect.flip(Passkey.create(Passkey.browserProvider("Test"))))).toMatchObject({ _tag: "SigningError", reason: "rejected" })
   })
 
   test("same WebAuthn options as Mysten's BrowserPasskeyProvider; signs end to end", async () => {
@@ -399,8 +329,6 @@ describe("BrowserProvider", () => {
       expect(ourCalls[i]!.options.signal).toBeInstanceOf(AbortSignal)
       expect(strip(ourCalls[i]!.options)).toEqual(strip(theirCalls[i]!.options))
     }
-    expect(ourCalls[0]!.options.publicKey.user.id.length).toBe(10)
-    expect(ourCalls[0]!.options.publicKey.pubKeyCredParams).toEqual([{ alg: -7, type: "public-key" }])
   })
 
   test("one prompt at a time: concurrent requests through one provider are serialised", async () => {

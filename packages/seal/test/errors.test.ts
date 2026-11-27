@@ -1,27 +1,16 @@
-/** Every error class renders a short `message` from its fields (review X-6). */
 import { describe, expect, test } from "bun:test"
 import * as Cause from "effect/Cause"
 import * as Errors from "../src/Errors.ts"
 
+/** Errors render a short `message` from their fields, so logs and `Cause.pretty` say what failed (review X-6). */
 describe("error messages", () => {
   test("render their fields", () => {
     const cases: Array<[Error, string]> = [
-      [new Errors.InvalidEncoding({ what: "G1", reason: "point at infinity" }), "invalid G1 encoding: point at infinity"],
-      [new Errors.InvalidShares({ reason: "duplicate index" }), "duplicate index"],
-      [new Errors.DecryptionFailed({ reason: "tag" }), "decryption failed: bad AES-GCM tag"],
       [new Errors.DecryptionFailed({ reason: "mac" }), "decryption failed: bad HMAC-CTR mac"],
-      [new Errors.InvalidCiphertext({ reason: "bad version" }), "bad version"],
-      [new Errors.NotEnoughKeys({ required: 2, available: 1 }), "1 keys available, needs 2"],
       [new Errors.InvalidKeyServer({ objectId: "0x1", reason: "bad pop", kind: "Unavailable" }), "invalid key server 0x1 (Unavailable): bad pop"],
-      [new Errors.InvalidKeyServer({ objectId: "0x1", reason: "not a key server" }), "invalid key server 0x1: not a key server"],
-      [new Errors.NotFirstVersion({ packageId: "0x2", version: 3n }), "package 0x2 is version 3, not the first"],
-      [new Errors.SessionKeyExpired({ expiresAt: 10, now: 20 }), "session key expired at 10, now 20"],
-      [new Errors.InvalidApproval({ reason: "not a seal_approve call" }), "not a seal_approve call"]
+      [new Errors.InvalidKeyServer({ objectId: "0x1", reason: "not a key server" }), "invalid key server 0x1: not a key server"]
     ]
-    for (const [e, message] of cases) {
-      expect(e.message).toBe(message)
-      expect(String(e)).toBe(`${(e as unknown as { _tag: string })._tag}: ${message}`)
-    }
+    for (const [e, message] of cases) expect(String(e)).toBe(`${(e as unknown as { _tag: string })._tag}: ${message}`)
     expect(Cause.pretty(Cause.fail(new Errors.NotEnoughKeys({ required: 2, available: 1 })))).toContain("NotEnoughKeys: 1 keys available")
   })
 

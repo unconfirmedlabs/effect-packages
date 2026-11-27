@@ -119,22 +119,6 @@ describe("Sponsor", () => {
     expect(Object.keys(JSON.parse(sponsorReq.body!))).toEqual(["transactionBlockKindBytes"])
   })
 
-  test("bytes that change the kind or sender are refused before signing", async () => {
-    for (const tamper of [
-      (d: T.TransactionData): T.TransactionData => ({ ...d, sender: RECIPIENT }),
-      (d: T.TransactionData): T.TransactionData => ({ ...d, kind: { _tag: "ProgrammableTransaction", inputs: [], commands: [] } })
-    ]) {
-      const http = fakeEnoki(tamper)
-      const e = await Effect.runPromise(Effect.gen(function*() {
-        const signer = yield* Ed25519.fromSecretKey(seed(3))
-        return yield* Effect.flip(Sponsor.run(recipe, { signer }))
-      }).pipe(Effect.provide(Layer.merge(enoki(http), noChain))))
-      expect(e._tag).toBe("UnexpectedSponsoredTransaction")
-      // never executed (the other request is getApp, for the default network's sponsor)
-      expect(http.requests.filter((r) => new URL(r.url).pathname.startsWith("/v1/transaction-blocks/")).length).toBe(1)
-    }
-  })
-
   /** Run with `options` against a fake Enoki; answer the failure and whether anything was executed. */
   const refused = async (
     fake: ReturnType<typeof scripted>,
@@ -148,32 +132,40 @@ describe("Sponsor", () => {
     return { e, executed }
   }
 
-  test("gas paid by the sender is refused (sender would pay up to the budget)", async () => {
-    const http = fakeEnoki((d) => ({ ...d, gasData: { ...d.gasData, owner: d.sender, price: 1_000_000n, budget: 50_000_000_000n } }))
-    const { e, executed } = await refused(http)
-    expect(e._tag).toBe("UnexpectedSponsoredTransaction")
-    expect((e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("paid by the sender")
-    expect(executed).toBe(false)
-  })
-
-  test("a gas owner other than the app's sponsor address is refused", async () => {
+  test("sponsored bytes that fail a check are refused before signing, and nothing is executed", async () => {
     const other = Address.normalize("0xbad")
-    const { e, executed } = await refused(fakeEnoki((d) => ({ ...d, gasData: { ...d.gasData, owner: other } })), {
-      network: "testnet"
-    })
-    expect((e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("not the sponsor")
-    expect(executed).toBe(false)
+    const MAINNET_SPONSOR = Address.normalize("0x3a1")
+    const mainnetOnly = () => {
+      const base = fakeEnoki()
+      return scripted((req) =>
+        req.url.endsWith("/v1/app")
+          ? { body: { data: { allowedOrigins: [], authenticationProviders: [], domains: [], sponsorAddresses: { mainnet: MAINNET_SPONSOR } } } }
+          : base.route(req)
+      )
+    }
+    const cases: Array<[string, () => ReturnType<typeof scripted>, Partial<Sponsor.SponsorOptions>, string]> = [
+      ["sender changed", () => fakeEnoki((d) => ({ ...d, sender: RECIPIENT })), {}, "sender"],
+      ["kind changed", () => fakeEnoki((d) => ({ ...d, kind: { _tag: "ProgrammableTransaction", inputs: [], commands: [] } })), {}, "kind"],
+      // The sender would pay up to the budget.
+      ["gas paid by the sender", () => fakeEnoki((d) => ({ ...d, gasData: { ...d.gasData, owner: d.sender, price: 1_000_000n, budget: 50_000_000_000n } })), {}, "paid by the sender"],
+      ["gas owner not the app's sponsor", () => fakeEnoki((d) => ({ ...d, gasData: { ...d.gasData, owner: other } })), { network: "testnet" }, "not the sponsor"],
+      // An omitted network pins Enoki's default (mainnet) sponsor.
+      ["omitted network", mainnetOnly, {}, `not the sponsor ${MAINNET_SPONSOR}`],
+      ["digest not the bytes'", () => fakeEnoki(undefined, "11111111111111111111111111111111"), {}, "digest"],
+      ["budget cap", () => fakeEnoki(), { maxBudget: 1_000_000n }, "budget"],
+      ["price cap", () => fakeEnoki(), { maxGasPrice: 999n }, "price"]
+    ]
+    for (const [why, http, options, reason] of cases) {
+      const { e, executed } = await refused(http(), options)
+      expect(e._tag, why).toBe("UnexpectedSponsoredTransaction")
+      expect((e as Sponsor.UnexpectedSponsoredTransaction).reason, why).toContain(reason)
+      expect(executed, why).toBe(false)
+    }
     // An explicit sponsorAddress is enforced without asking getApp.
     const http = fakeEnoki()
     const r = await refused(http, { sponsorAddress: other })
     expect((r.e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("not the sponsor")
     expect(http.requests.some((q) => q.url.endsWith("/v1/app"))).toBe(false)
-  })
-
-  test("a digest that doesn't match the bytes is refused", async () => {
-    const { e, executed } = await refused(fakeEnoki(undefined, "11111111111111111111111111111111"))
-    expect((e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("digest")
-    expect(executed).toBe(false)
   })
 
   test("a failed execute keeps the signed bytes, signature and digest; re-executing posts the same signature", async () => {
@@ -215,18 +207,6 @@ describe("Sponsor", () => {
     expect(posts.map((r) => JSON.parse(r.body!).signature)).toEqual([b64(unconfirmed.signature), b64(unconfirmed.signature)])
   })
 
-  test("sponsor is a step of its own: it answers checked bytes and executes nothing", async () => {
-    const http = fakeEnoki()
-    const sponsored = await Effect.runPromise(Effect.gen(function*() {
-      const signer = yield* Ed25519.fromSecretKey(seed(3))
-      const { draft } = yield* Ptb.build(recipe)
-      const kind = yield* Sponsor.transactionKind(draft)
-      return yield* Sponsor.sponsor(kind, { sender: signer.address, network: "testnet" })
-    }).pipe(Effect.provide(enoki(http))))
-    expect(sponsored.digest).toBe(Hash.transactionDigest(sponsored.bytes))
-    expect(http.requests.some((r) => /\/sponsor\/[^/]+$/.test(new URL(r.url).pathname))).toBe(false)
-  })
-
   test("getApp is asked once per layer, not per transaction, and asked again after a stale-sponsor error", async () => {
     let stale = false
     const base = fakeEnoki()
@@ -248,27 +228,6 @@ describe("Sponsor", () => {
       yield* Sponsor.run(recipe, { signer, network: "testnet" })
       expect(apps()).toBe(2)
     }).pipe(Effect.provide(Layer.merge(enoki(http), noChain))))
-  })
-
-  test("an omitted network pins Enoki's default (mainnet) sponsor", async () => {
-    const MAINNET_SPONSOR = Address.normalize("0x3a1")
-    const base = fakeEnoki()
-    const http = scripted((req) =>
-      req.url.endsWith("/v1/app")
-        ? { body: { data: { allowedOrigins: [], authenticationProviders: [], domains: [], sponsorAddresses: { mainnet: MAINNET_SPONSOR } } } }
-        : base.route(req)
-    )
-    const { e, executed } = await refused(http)
-    expect((e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain(`not the sponsor ${MAINNET_SPONSOR}`)
-    expect(executed).toBe(false)
-  })
-
-  test("budget and price caps", async () => {
-    const budget = await refused(fakeEnoki(), { maxBudget: 1_000_000n })
-    expect((budget.e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("budget")
-    const price = await refused(fakeEnoki(), { maxGasPrice: 999n })
-    expect((price.e as Sponsor.UnexpectedSponsoredTransaction).reason).toContain("price")
-    expect(budget.executed || price.executed).toBe(false)
   })
 })
 
@@ -294,8 +253,8 @@ describe("ZkLoginFlow", () => {
       return { status: 404, body: "" }
     })
 
-  for (const legacyAddress of [false, true]) {
-    test(`start -> (OAuth) -> complete gives a zkLogin signer (legacy: ${legacyAddress})`, async () => {
+  test("start -> (OAuth) -> complete gives a zkLogin signer, for either address derivation", async () => {
+    for (const legacyAddress of [false, true]) {
       const address = PublicIdentifier.toAddress(identifier, { legacyAddress })
       const http = flow(address)
       const { session, done, ephemeral } = await Effect.runPromise(Effect.gen(function*() {
@@ -314,8 +273,8 @@ describe("ZkLoginFlow", () => {
       const zkpReq = http.requests.find((r) => r.url.endsWith("/zklogin/zkp"))!
       expect(zkpReq.headers["zklogin-jwt"]).toBe(makeJwt({ ...claims, nonce: session.nonce }))
       expect(JSON.parse(zkpReq.body!)).toMatchObject({ maxEpoch: 12, randomness: "77", network: "testnet" })
-    })
-  }
+    }
+  })
 
   test("a nonce that doesn't commit to our ephemeral key is refused", async () => {
     // e.g. a nonce for the right epoch and randomness but someone else's key

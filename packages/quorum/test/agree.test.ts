@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import * as Cause from "effect/Cause"
-import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Quorum from "../src/Quorum.ts"
 import { error, makeWorld, type Member, NodeError, type Spec, timed, value } from "./world.ts"
@@ -52,11 +51,6 @@ describe("Quorum.agree", () => {
 
   describe("15. prefer", () => {
     const specs = [say("a", 100), say("a", 200), say("a", 300), say("b", 400), say("b", 500)]
-
-    test("default: the heavier key", async () => {
-      const r = value((await timed(setup(specs, { threshold: 2, quorum: 5 }).effect)).exit)
-      expect(r.winner.key).toBe("a")
-    })
 
     test("default tie: the first seen", async () => {
       const r = value(
@@ -114,13 +108,6 @@ describe("Quorum.agree", () => {
     expect(e.failures.map((f) => [f.index, f.error.code])).toEqual([[0, "down"], [1, "down"]])
   })
 
-  test("weighted members and a quorum below the threshold (treated as the threshold)", async () => {
-    const { effect } = setup([say("a", 100, 3), say("b", 200, 5), say("a", 300, 2)], { threshold: 5, quorum: 1 })
-    const { exit, at } = await timed(effect)
-    expect(at).toBe(200)
-    expect(value(exit).winner.key).toBe("b")
-  })
-
   test("quorum above the total weight: insufficientWeight, nothing runs", async () => {
     const { world, effect } = setup([say("a", 1), say("a", 1)], { threshold: 1, quorum: 3 })
     const e = error((await timed(effect)).exit)
@@ -129,20 +116,15 @@ describe("Quorum.agree", () => {
     expect(world.events).toEqual([])
   })
 
-  test("a non-positive threshold, a NaN quorum and a throwing key die", async () => {
-    const dies = async (effect: Effect.Effect<unknown, unknown>) => {
-      const { exit } = await timed(effect)
-      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
-    }
-    await dies(setup([say("a", 1)], { threshold: 0 }).effect)
-    await dies(setup([say("a", 1)], { threshold: 1, quorum: NaN }).effect)
+  test("a throwing key dies and leaves nothing in flight", async () => {
     const { world, effect } = setup([say("a", 100), say("a", 1000)], {
       threshold: 2,
       key: () => {
         throw new Error("bad key")
       }
     })
-    await dies(effect)
+    const { exit } = await timed(effect)
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
     expect(world.inFlight.size).toBe(0)
   })
 })

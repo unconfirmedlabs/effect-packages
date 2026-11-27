@@ -7,16 +7,14 @@
  *   that implement the REST API (§1.3) with the bodies real nodes send, so
  *   read and write flows can run end to end against `StorageNode.layer`.
  * - `recorded` / `synthesized`: the fixture bodies under `fixtures/storage-node/`.
- * - `live`, `committeeNodes`, `recentCertified`: testnet helpers for `SUI_LIVE=1`
- *   tests (a stop-gap prefix parse until `Committee` lands).
+ * - `live`, `suiLayer`, `readableCandidates`: testnet helpers for `SUI_LIVE=1`
+ *   tests.
  *
  * Everything here is synchronous apart from `"hang"`, which never answers
  * (drive it with `TestClock` to exercise timeouts).
  */
 import * as Address from "@unconfirmed/sui/Address"
-import * as DynamicFields from "@unconfirmed/sui/DynamicFields"
 import * as Events from "@unconfirmed/sui/Events"
-import * as Objects from "@unconfirmed/sui/Objects"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -329,16 +327,8 @@ export const fakeNodes = (nodes: ReadonlyArray<FakeNode>, options?: StorageNode.
 // -----------------------------------------------------------------------------
 
 export const live = process.env.SUI_LIVE === "1"
-export const TESTNET_STAKING = Address.normalize("0xbe46180321c30aab2f8b3501e24048377287fa708018a5b7c2792b35fe339ee3")
-export const TESTNET_TYPE_ORIGIN = "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66"
+const TESTNET_TYPE_ORIGIN = "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66"
 export const TESTNET_FULLNODE = process.env.SUI_TESTNET_URL ?? "https://fullnode.testnet.sui.io:443"
-
-export interface LiveNode {
-  readonly nodeId: string
-  readonly name: string
-  readonly url: string
-  readonly shards: ReadonlyArray<number>
-}
 
 class Reader {
   pos = 0
@@ -349,87 +339,15 @@ class Reader {
   u8() {
     return this.bytes[this.pos++]!
   }
-  u16() {
-    const v = this.bytes[this.pos]! | (this.bytes[this.pos + 1]! << 8)
-    this.pos += 2
-    return v
-  }
-  u64() {
-    const v = new DataView(this.bytes.buffer, this.bytes.byteOffset + this.pos, 8).getBigUint64(0, true)
-    this.pos += 8
-    return v
-  }
-  uleb() {
-    let v = 0
-    let shift = 0
-    for (;;) {
-      const b = this.u8()
-      v += (b & 0x7f) * 2 ** shift
-      if ((b & 0x80) === 0) return v
-      shift += 7
-    }
-  }
   address() {
     const hex = Array.from(this.bytes.subarray(this.pos, this.pos + 32), (b) => b.toString(16).padStart(2, "0")).join("")
     this.pos += 32
     return `0x${hex}`
   }
-  string() {
-    const n = this.uleb()
-    const s = new TextDecoder().decode(this.bytes.subarray(this.pos, this.pos + n))
-    this.pos += n
-    return s
-  }
-  committee() {
-    const out: Array<{ nodeId: string; shards: Array<number> }> = []
-    const n = this.uleb()
-    for (let i = 0; i < n; i++) {
-      const nodeId = this.address()
-      const m = this.uleb()
-      const shards: Array<number> = []
-      for (let j = 0; j < m; j++) shards.push(this.u16())
-      out.push({ nodeId, shards })
-    }
-    return out
-  }
 }
-
-const u64le = (v: bigint) => {
-  const out = new Uint8Array(8)
-  new DataView(out.buffer).setBigUint64(0, v, true)
-  return out
-}
-
-/** The current committee with each node's URL, from the staking object. */
-export const committeeNodes: Effect.Effect<ReadonlyArray<LiveNode>, unknown, Objects.Objects> = Effect.gen(function*() {
-  const objects = yield* Objects.Objects
-  const staking = yield* objects.get(TESTNET_STAKING)
-  const version = new Reader(staking.contents)
-  version.skip(32)
-  const inner = yield* objects.get(DynamicFields.deriveId(TESTNET_STAKING, "u64", u64le(version.u64())))
-  // Field<u64, StakingInnerV1>: id, name, then n_shards, epoch_duration, first_epoch_start,
-  // pools (ObjectTable: id, size), epoch, active_set (ExtendedField: id), next_committee: Option<Committee>, committee.
-  const r = new Reader(inner.contents)
-  r.skip(32 + 8 + 2 + 8 + 8 + 40 + 4 + 32)
-  if (r.u8() === 1) r.committee()
-  const committee = r.committee()
-  return yield* Effect.forEach(committee, ({ nodeId, shards }) =>
-    Effect.map(objects.get(Address.normalize(nodeId)), (pool) => {
-      // StakingPool: id, state (PoolState: Active | Withdrawing(u32) | Withdrawn), voting_params (3 × u64),
-      // node_info { name, node_id, network_address, … }.
-      const p = new Reader(pool.contents)
-      p.skip(32)
-      if (p.uleb() === 1) p.skip(4)
-      p.skip(24)
-      const name = p.string()
-      p.skip(32)
-      return { nodeId, name, url: `https://${p.string()}`, shards }
-    }), { concurrency: "unbounded" })
-})
 
 export const suiLayer = SuiGrpc.layer({ url: TESTNET_FULLNODE }).pipe(Layer.provide(FetchHttpClient.layer))
 
-/** The newest `BlobCertified` events (blob id, end epoch, deletable, object id), newest first. */
 /**
  * A failed read in one line, with the kinds and weights of its failures: what a live test prints for a
  * candidate it skips, so that the next flaky run says why.
@@ -450,7 +368,8 @@ export const describeReadFailure = (e: { readonly _tag: string }): string => {
 export const readableCandidates = (currentEpoch: number, count = 200) =>
   Effect.map(recentCertified(count), (all) => all.filter((c) => !c.isExtension && !c.deletable && c.endEpoch >= currentEpoch + 2))
 
-export const recentCertified = (count: number) =>
+/** The newest `BlobCertified` events (blob id, end epoch, deletable, object id), newest first. */
+const recentCertified = (count: number) =>
   Effect.flatMap(Effect.service(Events.Events), (events) =>
     events.list({ filter: Events.eventType(`${TESTNET_TYPE_ORIGIN}::events::BlobCertified`), descending: true }).pipe(
       Stream.take(count),

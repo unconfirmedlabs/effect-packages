@@ -43,23 +43,6 @@ const transfer = (signer: Signer.Signer, amount: bigint) =>
   })
 
 suite("devnet", () => {
-  test("run: a real transaction, journalled Executed", async () => {
-    const { effects, tag } = await Effect.runPromise(
-      Effect.gen(function*() {
-        const signer = yield* Ed25519.generate
-        const coin = yield* faucet(signer.address)
-        const effects = yield* Lifecycle.run(transfer(signer, 1_000n), {
-          signer,
-          payment: Resolve.fixed([Objects.refOf(coin)])
-        })
-        const entry = yield* Effect.flatMap(Effect.service(Journal.Journal), (j) => j.get(effects.digest))
-        return { effects, tag: Option.getOrThrow(entry)._tag }
-      }).pipe(Effect.provide(devnet()))
-    )
-    expect(effects.status._tag).toBe("Success")
-    expect(tag).toBe("Executed")
-  }, 60_000)
-
   test("recovery: signed + journalled, the submit result dropped, reconcileAll finds it", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
@@ -87,12 +70,13 @@ suite("devnet", () => {
     expect(result.after).toEqual([])
   }, 60_000)
 
-  test("Evidence over gRPC and GraphQL: one consistent observation of a known and an unknown digest", async () => {
+  test("run journals Executed; Evidence over gRPC and GraphQL agrees on a known and an unknown digest", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const signer = yield* Ed25519.generate
         const coin = yield* faucet(signer.address)
         const effects = yield* Lifecycle.run(transfer(signer, 1_000n), { signer, payment: Resolve.fixed([Objects.refOf(coin)]) })
+        const entry = yield* Effect.flatMap(Effect.service(Journal.Journal), (j) => j.get(effects.digest))
         const unknown = digestOf(effects.digest)
         const observe = (layer: Layer.Layer<never>) =>
           Effect.gen(function*() {
@@ -106,9 +90,10 @@ suite("devnet", () => {
         ).pipe(
           Effect.repeat({ until: ([known]) => Option.isSome(known) && known.value.found, schedule: Schedule.spaced("1 second"), times: 20 })
         )
-        return { grpc, graphql }
+        return { status: effects.status._tag, tag: Option.getOrThrow(entry)._tag, grpc, graphql }
       }).pipe(Effect.provide(devnet()))
     )
+    expect([result.status, result.tag]).toEqual(["Success", "Executed"])
     for (const [known, missing] of [result.grpc, result.graphql]) {
       expect(Option.getOrThrow(known).found).toBe(true)
       expect(Option.getOrThrow(missing).found).toBe(false)

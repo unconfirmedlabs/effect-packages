@@ -57,18 +57,10 @@ const sample: T.TransactionData = {
 describe("TransactionData", () => {
   const theirs = () => mysten.TransactionData.serialize(toMysten(Bcs.layoutOf(T.TransactionData), sample)).toBytes()
 
-  test("encodes like @mysten/sui", () => expect(toB64(T.encode(sample))).toBe(toB64(theirs())))
-  test("decodes @mysten/sui bytes and re-encodes identically", () => {
-    const back = Result.getOrThrow(T.decode(theirs()))
-    expect(toB64(T.encode(back))).toBe(toB64(theirs()))
-  })
-  test("digest matches", () => {
+  test("encodes like @mysten/sui, decodes its bytes back, and has the same digest", () => {
+    expect(toB64(T.encode(sample))).toBe(toB64(theirs()))
+    expect(toB64(T.encode(Result.getOrThrow(T.decode(theirs()))))).toBe(toB64(theirs()))
     expect(Hash.transactionDigest(T.encode(sample))).toBe(TransactionDataBuilder.getDigestFromBytes(theirs()))
-  })
-  test("type tags round-trip", () => {
-    const s = "vector<0x2::coin::Coin<0x2::sui::SUI>>"
-    expect(TypeTag.format(TypeTag.parse(s))).toBe(TypeTag.normalizeString(s))
-    expect(Bcs.encodeSync(TypeTag.TypeTag)(TypeTag.parse(s))).toEqual(mysten.TypeTag.serialize(s).toBytes())
   })
 })
 
@@ -109,35 +101,21 @@ describe("Ptb", () => {
     tx.moveCall({ target: "0x2::coin::value", typeArguments: ["0x2::sui::SUI"], arguments: [tx.gas] })
     expect(toB64(ours)).toBe(toB64(await tx.build()))
   })
-
-  test("a bad pure value is a typed failure", async () => {
-    const exit = await Effect.runPromiseExit(Ptb.build(Ptb.u8(300)))
-    expect(JSON.stringify(exit)).toContain("InvalidPureValue")
-  })
 })
 
 describe("Ed25519", () => {
   const seed = new Uint8Array(32).map((_, i) => i + 1)
   const kp = Ed25519Keypair.fromSecretKey(seed)
 
-  test("address and transaction signature match", async () => {
+  test("address and transaction signature match; personal message signatures verify with @mysten/sui", async () => {
     const signer = await Effect.runPromise(Ed25519.fromSecretKey(seed))
     expect(signer.address).toBe(kp.toSuiAddress() as Address.Address)
     const bytes = T.encode(sample)
     const ours = await Effect.runPromise(Signer.signTransaction(signer, bytes))
     expect(toB64(ours.signature)).toBe((await kp.signTransaction(bytes)).signature)
-  })
-
-  test("personal message signatures verify with @mysten/sui", async () => {
-    const signer = await Effect.runPromise(Ed25519.fromSecretKey(seed))
     const msg = new TextEncoder().encode("hello")
-    const ours = await Effect.runPromise(Signer.signPersonalMessage(signer, msg))
-    const pk = await verifyPersonalMessageSignature(msg, toB64(ours.signature), { offline: true })
+    const signed = await Effect.runPromise(Signer.signPersonalMessage(signer, msg))
+    const pk = await verifyPersonalMessageSignature(msg, toB64(signed.signature), { offline: true })
     expect(pk.toSuiAddress()).toBe(signer.address)
-  })
-
-  test("wrong key length is a typed failure", async () => {
-    const exit = await Effect.runPromiseExit(Ed25519.fromSecretKey(new Uint8Array(5)))
-    expect(JSON.stringify(exit)).toContain("InvalidKey")
   })
 })

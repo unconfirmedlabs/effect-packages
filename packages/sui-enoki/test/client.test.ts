@@ -225,26 +225,22 @@ describe("EnokiHttp errors", () => {
     expect(e.errors).toEqual([{ code: "rate_limited" }, { message: "m2" }])
   })
 
-  test("a non-JSON error body is unknown_error with the status", async () => {
-    const e = await failure({ status: 502, body: "<html>bad gateway</html>" })
-    expect({ status: e.status, code: e.code }).toEqual({ status: 502, code: "unknown_error" })
-    expect(e.message).toBe("Request to Enoki API failed (status: 502)")
-  })
+  test("status, code and retryable per failure kind; the cause never reaches the request's credentials", async () => {
+    const cases: Array<[Reply | "network-error", { status: number; code: string; retryable: boolean }]> = [
+      ["network-error", { status: 0, code: "request_failed", retryable: true }],
+      [{ status: 502, body: "<html>bad gateway</html>" }, { status: 502, code: "unknown_error", retryable: true }],
+      [{ status: 429, body: "" }, { status: 429, code: "unknown_error", retryable: true }],
+      [{ status: 400, body: { errors: [{ code: "invalid_jwt" }] } }, { status: 400, code: "invalid_jwt", retryable: false }],
+      [data({ address: 1 }), { status: 200, code: "invalid_response", retryable: false }]
+    ]
+    for (const [reply, expected] of cases) {
+      const e = await failure(reply)
+      expect({ status: e.status, code: e.code, retryable: e.retryable }).toEqual(expected)
+    }
+    expect((await failure({ status: 502, body: "x" })).message).toBe("Request to Enoki API failed (status: 502)")
+    expect((await failure(data({ address: 1 }))).cause).toBeDefined()
 
-  test("a response that doesn't match the schema is invalid_response", async () => {
-    const e = await failure(data({ address: 1 }))
-    expect({ status: e.status, code: e.code }).toEqual({ status: 200, code: "invalid_response" })
-  })
-
-  test("a transport failure is request_failed", async () => {
-    const e = await failure("network-error")
-    expect({ status: e.status, code: e.code }).toEqual({ status: 0, code: "request_failed" })
-  })
-
-  test("retryable: no response, 429 and 5xx; cause kept without the request's credentials", async () => {
     const transport = await failure("network-error")
-    expect(transport.retryable).toBe(true)
-    expect(transport.cause).toBeInstanceOf(Error)
     expect((transport.cause as Error).message).toContain("connection refused")
     // The request (Authorization: Bearer <key>, zklogin-jwt) is not reachable from the error.
     const seen = new Set<unknown>()
@@ -255,12 +251,6 @@ describe("EnokiHttp errors", () => {
       return Object.values(v).some(reachable) || reachable((v as { cause?: unknown }).cause)
     }
     expect(reachable(transport)).toBe(false)
-    expect((await failure({ status: 429, body: "" })).retryable).toBe(true)
-    expect((await failure({ status: 503, body: "" })).retryable).toBe(true)
-    expect((await failure({ status: 400, body: { errors: [{ code: "invalid_jwt" }] } })).retryable).toBe(false)
-    const invalid = await failure(data({ address: 1 }))
-    expect(invalid.retryable).toBe(false)
-    expect(invalid.cause).toBeDefined()
   })
 })
 

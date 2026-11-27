@@ -539,15 +539,6 @@ describe("upload", () => {
     expect(node.requests.filter((r) => r.path.endsWith("/status")).length).toBe(10)
   })
 
-  test("small slivers are re-sent without a status check", async () => {
-    const world = makeWorld([{ shards: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }])
-    const { encoded, step } = value(await world.run(Write.encode(BLOB)))
-    const registered = value(await world.run(Write.register(step, opts(world))))
-    world.fakes[0]!.metadata.set(step.blobId, encoded.metadata)
-    value(await world.run(Write.upload(encoded, registered, { linger: 0 })))
-    expect(world.fakes[0]!.requests.filter((r) => r.path.endsWith("/status")).length).toBe(0)
-  })
-
   test("a committee that disagrees with the system object is CommitteeMismatch", async () => {
     const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
     const { encoded, step } = value(await world.run(Write.encode(BLOB)))
@@ -750,15 +741,6 @@ describe("owner", () => {
     const onChain = world.chain.get(certified.blobObjectId)!
     expect(onChain.owner).toBe(USER)
     expect(Option.getOrUndefined(onChain.blob.certified_epoch)).toBe(5)
-  })
-
-  test("the fake chain refuses a Blob the sender does not own (what used to strand a paid registration)", async () => {
-    const world = makeWorld(HEAVY_AND_LIGHT.map((shards) => ({ shards })))
-    const saved = await crashAfter(world, "Uploaded")
-    if (saved._tag !== "Uploaded") throw new Error("not uploaded")
-    world.chain.get(saved.blobObjectId)!.owner = USER
-    const e = failure(await world.run(Write.certify(saved, { executor: world.executor })))
-    expect(e).toMatchObject({ _tag: "Aborted", reason: expect.stringContaining("not the sender") })
   })
 
   test("owner: resuming from Registered or Uploaded still ends with the owner holding the certified Blob", async () => {

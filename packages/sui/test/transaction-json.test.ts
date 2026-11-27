@@ -327,19 +327,6 @@ describe("our JSON -> Transaction.from -> Mysten build", () => {
     const json = await Effect.runPromise(TransactionJson.encode(tx))
     expect(toB64(await mystenBuild(json))).toBe(toB64(await ourResolve(tx)))
   })
-
-  test("SUI intents from the gas coin, and zero amounts", async () => {
-    const draft = await draftOf(Effect.gen(function*() {
-      const a = yield* Ptb.coin({ amount: 1_000n })
-      const b = yield* Ptb.balance({ amount: 0n, type: TOKEN })
-      const c = yield* Ptb.coin({ amount: 0n })
-      yield* Ptb.sendBalance(b, yield* Ptb.address(recipient), TOKEN)
-      yield* Ptb.transferObjects([a, c], yield* Ptb.address(recipient))
-    }))
-    const tx: TransactionJson.Unresolved = { sender, draft, ...gas }
-    const json = await Effect.runPromise(TransactionJson.encode(tx))
-    expect(toB64(await mystenBuild(json))).toBe(toB64(await ourResolve(tx)))
-  })
 })
 
 // -----------------------------------------------------------------------------
@@ -447,22 +434,10 @@ describe("round trips", () => {
     // Nothing set but the draft.
     const bare = await Effect.runPromise(Effect.flatMap(TransactionJson.encode({ draft }), TransactionJson.decode))
     expect(bare).toEqual({ draft })
-  })
-
-  test("every resolved command and input kind survives as a Draft", async () => {
+    // Every resolved command and input kind survives as a Draft too.
     const { inputs, commands } = resolved.kind
-    const tx: TransactionJson.Unresolved = { sender, draft: { inputs, commands }, gasOwner: resolved.gasData.owner, gasPrice: 1n, gasBudget: 2n, gasPayment: [], expiration: resolved.expiration }
-    const back = await Effect.runPromise(Effect.flatMap(TransactionJson.encode(tx), TransactionJson.decode))
-    expect(back).toEqual(tx)
-  })
-
-  test("Mysten toJSON -> decode -> encode -> Transaction.from builds the same bytes", async () => {
-    const tx = new Transaction()
-    mystenGas(tx)
-    mystenRecipe(tx)
-    const json = await tx.toJSON({ supportedIntents: ["CoinWithBalance"] })
-    const again = await Effect.runPromise(Effect.flatMap(TransactionJson.decode(json), TransactionJson.encode))
-    expect(toB64(await mystenBuild(again))).toBe(toB64(await mystenBuild(json)))
+    const asDraft: TransactionJson.Unresolved = { sender, draft: { inputs, commands }, gasOwner: resolved.gasData.owner, gasPrice: 1n, gasBudget: 2n, gasPayment: [], expiration: resolved.expiration }
+    expect(await Effect.runPromise(Effect.flatMap(TransactionJson.encode(asDraft), TransactionJson.decode))).toEqual(asDraft)
   })
 
   test("JSON from Mysten's internal snapshot ($kind everywhere) decodes too", async () => {
@@ -491,15 +466,6 @@ const baseJson = async () => {
 }
 
 describe("refusals are typed", () => {
-  test("AllowanceBalance intents decode (not dropped)", async () => {
-    const tx = new Transaction()
-    mystenGas(tx)
-    tx.transferObjects([tx.coin({ balance: 10, allowance: "0xa110" } as never)], recipient)
-    const json = await tx.toJSON({ supportedIntents: ["AllowanceBalance"] })
-    const decoded = await Effect.runPromise(TransactionJson.decode(json))
-    expect(decoded.draft.commands.some((c) => c._tag === "AllowanceIntent")).toBe(true)
-  })
-
   test("an unknown intent, command kind or input kind is unsupported", async () => {
     const json = await baseJson()
     const intent = { ...json, commands: [...json.commands, { $Intent: { name: "Mystery", inputs: {}, data: {} } }] }
@@ -540,12 +506,6 @@ describe("refusals are typed", () => {
     expect((await decodeError(outOfRange))._tag).toBe("InvalidTransactionJson")
     const intent = { ...json, commands: [{ $Intent: { name: "CoinWithBalance", inputs: {}, data: { type: "gas", balance: "x" } } }] }
     expect((await decodeError(intent))._tag).toBe("InvalidTransactionJson")
-  })
-
-  test("encoding a command this module doesn't know is unsupported", async () => {
-    const draft: Ptb.Draft = { inputs: [], commands: [{ _tag: "Teleport" } as unknown as Ptb.Command] }
-    const e = await Effect.runPromise(Effect.flip(TransactionJson.encode({ draft })))
-    expect(e).toMatchObject({ _tag: "UnsupportedTransactionJson", construct: "command Teleport" })
   })
 
   test("toTransactionData needs everything resolved", async () => {

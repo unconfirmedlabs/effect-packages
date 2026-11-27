@@ -9,38 +9,18 @@ const { SignatureSchemes } = SignatureScheme
 const msg = new TextEncoder().encode("hi")
 
 describe("SignatureSchemes", () => {
-  test("verifies an installed scheme and names the signer", async () => {
-    const result = await Effect.runPromise(
+  test("only installed schemes verify: names the signer; uninstalled is UnsupportedScheme; tampered is InvalidSignature", async () => {
+    const r = await Effect.runPromise(
       Effect.gen(function*() {
         const s = yield* Ed25519.generate
         const { signature } = yield* Signer.signPersonalMessage(s, msg)
         const v = yield* Verify.personalMessage(msg, signature, { address: s.address })
-        return v.address === s.address
+        const tampered = yield* Effect.flip(Verify.personalMessage(new TextEncoder().encode("ho"), signature))
+        const uninstalled = yield* Effect.flip(Verify.personalMessage(msg, signature).pipe(Effect.provide(SignatureSchemes.layer())))
+        return { named: v.address === s.address, tampered: tampered._tag, uninstalled: uninstalled._tag }
       }).pipe(Effect.provide(SignatureSchemes.layer(Ed25519.scheme)))
     )
-    expect(result).toBe(true)
-  })
-
-  test("an uninstalled scheme is UnsupportedScheme", async () => {
-    const error = await Effect.runPromise(
-      Effect.gen(function*() {
-        const s = yield* Ed25519.generate
-        const { signature } = yield* Signer.signPersonalMessage(s, msg)
-        return yield* Verify.personalMessage(msg, signature)
-      }).pipe(Effect.flip, Effect.provide(SignatureSchemes.layer()))
-    )
-    expect(error._tag).toBe("UnsupportedScheme")
-  })
-
-  test("a tampered message is InvalidSignature", async () => {
-    const error = await Effect.runPromise(
-      Effect.gen(function*() {
-        const s = yield* Ed25519.generate
-        const { signature } = yield* Signer.signPersonalMessage(s, msg)
-        return yield* Verify.personalMessage(new TextEncoder().encode("ho"), signature)
-      }).pipe(Effect.flip, Effect.provide(SignatureSchemes.layer(Ed25519.scheme)))
-    )
-    expect(error._tag).toBe("InvalidSignature")
+    expect(r).toEqual({ named: true, tampered: "InvalidSignature", uninstalled: "UnsupportedScheme" })
   })
 
   test("a scheme's requirements become the layer's requirements", async () => {

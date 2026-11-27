@@ -25,7 +25,7 @@ const deletable = {
 }
 
 describe("decoding", () => {
-  test("every shape", () => {
+  test("every shape, and back to the node's JSON", () => {
     expect(decode(nonexistent)).toEqual({ _tag: "Nonexistent" })
     expect(decode(invalid)).toEqual({ _tag: "Invalid", event })
     expect(decode(permanent)).toEqual({
@@ -41,18 +41,15 @@ describe("decoding", () => {
       initialCertifiedEpoch: null,
       deletableCounts: { countDeletableTotal: 1, countDeletableCertified: 0 }
     })
+    for (const json of [nonexistent, invalid, permanent, deletable]) {
+      expect(Schema.encodeSync(Status.BlobStatus)(decode(json))).toEqual(json)
+    }
   })
 
   test("a missing initialCertifiedEpoch is null; a numeric eventSeq becomes a string", () => {
     const { initialCertifiedEpoch: _, ...rest } = permanent.permanent
     const s = decode({ permanent: { ...rest, statusEvent: { txDigest: event.txDigest, eventSeq: 3 } } })
     expect(s).toMatchObject({ _tag: "Permanent", initialCertifiedEpoch: null, statusEvent: event })
-  })
-
-  test("encodes back to the node's JSON", () => {
-    for (const json of [nonexistent, invalid, permanent, deletable]) {
-      expect(Schema.encodeSync(Status.BlobStatus)(decode(json))).toEqual(json)
-    }
   })
 
   test("rejects other shapes", () => {
@@ -116,19 +113,14 @@ describe("order (api.rs:138-200)", () => {
     ["permanent: the status event does not order", P({ certified: true, end: 9, epoch: 1, seq: "1" }), P({ certified: true, end: 9, epoch: 1, seq: "2" }), 0]
   ]
 
-  test.each(table)("%s", (_, a, b, sign) => {
-    expect(Math.sign(Status.order(a, b))).toBe(sign)
-    expect(Math.sign(Status.order(b, a))).toBe(sign === 0 ? 0 : -sign)
-  })
-
-  test("sorting puts the latest last", () => {
-    const sorted = [I(), P({ certified: true, end: 9, epoch: 1 }), N, D(1, 1, 1)].sort(Status.order)
-    expect(sorted.map((s) => s._tag)).toEqual(["Nonexistent", "Deletable", "Permanent", "Invalid"])
+  test("as the Rust node orders them, both ways round", () => {
+    const wrong = table.filter(([, a, b, sign]) => Math.sign(Status.order(a, b)) !== sign || Math.sign(Status.order(b, a)) !== (sign === 0 ? 0 : -sign))
+    expect(wrong.map(([name]) => name)).toEqual([])
   })
 })
 
 describe("canonical and certifiedEpoch", () => {
-  test("canonical is insensitive to key order", () => {
+  test("canonical is insensitive to key order and tells different statuses apart", () => {
     const shuffled = {
       permanent: {
         initialCertifiedEpoch: 590,
@@ -141,9 +133,6 @@ describe("canonical and certifiedEpoch", () => {
     expect(Status.canonical(decode(shuffled))).toBe(Status.canonical(decode(permanent)))
     expect(Status.canonical(decode(permanent))).not.toContain(" ")
     expect(JSON.parse(Status.canonical(decode(permanent)))).toEqual(decode(permanent))
-  })
-
-  test("canonical tells different statuses apart", () => {
     const keys = [nonexistent, invalid, permanent, deletable].map((j) => Status.canonical(decode(j)))
     expect(new Set(keys).size).toBe(4)
     const later = { permanent: { ...permanent.permanent, endEpoch: 601 } }

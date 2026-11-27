@@ -115,7 +115,7 @@ Unweighted objects are unchanged.
 
 **Effort.** S.
 
-**Resolution.** Fixed. `Envelope` decodes each distinct public key once; `Ibe.encryptShares` / `decryptAllShares` pair each distinct point once; `open` does `Ibe.decap` once per server and `Ibe.unmask` per share, with `gid` once. Bytes unchanged: all parity tests pass. Measured on bun (before → after): 3 × weight 5, t = 10: `seal` 127 → 31 ms, `open` 89 → 19 ms, `open` + consistency 230 → 49 ms; 2 × weight 2 + 1, t = 3: 40 → 30, 26 → 18, 66 → 52 ms; unweighted unchanged. `Ibe.decap` / `unmask` exported and tested against `decryptShare`.
+**Resolution.** Fixed. `Envelope` decodes each distinct public key once; `Ibe.encryptShares` / `decryptAllShares` pair each distinct point once; `open` does `Ibe.decap` once per server and `Ibe.unmask` per share, with `gid` once. Bytes unchanged: all parity tests pass. Measured on bun (before → after): 3 × weight 5, t = 10: `seal` 127 → 31 ms, `open` 89 → 19 ms, `open` + consistency 230 → 49 ms; 2 × weight 2 + 1, t = 3: 40 → 30, 26 → 18, 66 → 52 ms; unweighted unchanged. `Ibe.decap` / `unmask` exported; `Envelope.open` uses them, so the envelope parity tests (objects from `@mysten/seal`) cover them.
 
 ### SEAL-6: `layerVerified` turns a transient `/v1/service` failure into a permanent one
 low · correctness · CONFIRMED · `packages/seal/src/KeyServer.ts:294-312`, `:342-345`, `:371-380`, `packages/seal/src/Keys.ts:230-236`

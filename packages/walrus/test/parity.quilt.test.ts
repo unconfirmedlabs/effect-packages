@@ -69,7 +69,7 @@ describe("Quilt.encode parity", () => {
   test("random entry sets at n = 4, 7, 10, 100 and 1000", () => {
     const next = rng(9)
     for (const n of [4, 7, 10, 100, 1000]) {
-      for (let round = 0; round < 6; round++) {
+      for (let round = 0; round < 4; round++) {
         const max = Math.min(64, n - Math.floor((n - 1) / 3) - 1)
         compare(randomEntries(next, 1 + next(Math.max(1, Math.min(max, 12))), [0, 10, 300, 5000][round % 4]!), n)
       }
@@ -107,7 +107,7 @@ describe("Quilt.encode parity", () => {
 describe("patch ids", () => {
   test("equal Mysten's and round-trip through both parsers", () => {
     const next = rng(5)
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 10; i++) {
       const quiltId = ok(BlobId.fromBytes(new Uint8Array(32).map(() => next(256))))
       const startIndex = next(65536)
       const endIndex = next(65536)

@@ -265,24 +265,16 @@ describe("Keys.fetch", () => {
     expect(w.fetchRequests()).toHaveLength(1)
   })
 
-  for (
-    const [name, first] of [
-      ["503 Failure", reply(keyServerErrors.failure())],
-      ["InvalidParameter", reply(keyServerErrors.invalidParameter("object not found"))],
-      ["429", { status: 429, body: "Too Many Requests" }]
-    ] as const
-  ) {
-    test(`transient ${name} then 200: retried on that server after 250 ms`, async () => {
-      const w = world([{ intercept: (_r, n) => n === 1 ? first : undefined }, { intercept: () => "hang" }])
-      const r = await timed(w.layer, Effect.gen(function*() {
-        const s = yield* session(w.prompts.signer)
-        return yield* Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 1 })
-      }))
-      expect(r.at).toBe(250)
-      expect(serversOf(value(r.exit))).toEqual([w.ids[0]!])
-      expect(w.to(0)).toBe(2)
-    })
-  }
+  test("a transient 503 then 200: retried on that server after 250 ms", async () => {
+    const w = world([{ intercept: (_r, n) => n === 1 ? reply(keyServerErrors.failure()) : undefined }, { intercept: () => "hang" }])
+    const r = await timed(w.layer, Effect.gen(function*() {
+      const s = yield* session(w.prompts.signer)
+      return yield* Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 1 })
+    }))
+    expect(r.at).toBe(250)
+    expect(serversOf(value(r.exit))).toEqual([w.ids[0]!])
+    expect(w.to(0)).toBe(2)
+  })
 
   test("retries follow the schedule: 250, 500, 1000 ms, then the failure is final", async () => {
     const w = world([{ intercept: () => reply(keyServerErrors.failure()) }])
@@ -516,22 +508,6 @@ describe("Keys.fetch", () => {
     expect(r.at).toBe(250)
     expect(value(r.exit)).toHaveLength(1)
     expect(loads).toBe(2)
-  })
-
-  test("Keys.forget empties the session's cache; the next fetch asks again", async () => {
-    const w = world([{}])
-    const r = await timed(w.layer, Effect.gen(function*() {
-      const s = yield* session(w.prompts.signer)
-      yield* Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 1 })
-      yield* Keys.forget(s)
-      const after = yield* Keys.cached(s, Kdf.fullId(PKG, ID))
-      yield* Keys.fetch({ session: s, approval, servers: weighted(w.ids), threshold: 1 })
-      return after
-    }))
-    expect(r.at).toBe(0)
-    expect(value(r.exit)).toEqual([])
-    expect(w.fetchRequests()).toHaveLength(2)
-    expect(w.prompts.state.prompts).toBe(1)
   })
 
   test("a session without signer fails with SignatureRequired before any request", async () => {

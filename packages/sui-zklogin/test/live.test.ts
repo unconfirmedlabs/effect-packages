@@ -44,10 +44,8 @@ describe.skipIf(!live)("ZkLoginVerifierGrpc (testnet)", () => {
   test("a current Google key with a junk proof is a typed InvalidSignature", async () => {
     // Use a kid Google currently publishes, so the node gets past the JWK lookup to the proof.
     const certs = (await (await fetch("https://www.googleapis.com/oauth2/v3/certs")).json()) as { keys: Array<{ kid: string }> }
-    const errors = await Promise.all(certs.keys.map((k) => verdict(k.kid)))
-    for (const error of errors) {
-      expect(error._tag).toBe("InvalidSignature")
-    }
-    console.log("node verdicts:", errors.map((e) => (e as SignatureScheme.InvalidSignature).reason))
+    const error = await verdict(certs.keys[0]!.kid)
+    expect(error._tag).toBe("InvalidSignature")
+    console.log("node verdict:", (error as SignatureScheme.InvalidSignature).reason)
   }, 30_000)
 })

@@ -617,16 +617,3 @@ export const fakeKeyServers = (options: ReadonlyArray<FakeKeyServerOptions>, wor
     api: (apiOptions?: KeyServerApi.KeyServerApiOptions) => KeyServerApi.layer(apiOptions).pipe(Layer.provide(layer))
   }
 }
-
-/** Open a `fetch_key` answer: ElGamal-decrypt each key and check it against the server's public key (C3, C16). */
-export const openKeys = (
-  keys: ReadonlyArray<KeyServerApi.EncryptedKey>,
-  enc: ElGamal.KeyPair,
-  publicKey: Uint8Array
-): ReadonlyArray<{ readonly fullId: Uint8Array; readonly valid: boolean }> => {
-  const pk = Result.getOrThrow(Bls.g2FromBytes(publicKey))
-  return keys.map((k) => {
-    const usk = ElGamal.decrypt(enc.secret, k.ciphertext)
-    return { fullId: k.fullId, valid: Result.isSuccess(usk) && Ibe.verifyUserSecretKey(usk.success, k.fullId, pk) }
-  })
-}

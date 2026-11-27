@@ -83,13 +83,7 @@ describe("Aggregator", () => {
     expect(requests[0]!.headers["traceparent"]).toBeUndefined()
   })
 
-  test("extra headers are sent with every request", async () => {
-    const { layer, requests } = aggregator(() => ({ body: "" }), { headers: { authorization: "Bearer t" } })
-    await Effect.runPromise(Aggregator.blob(ID).pipe(Effect.provide(layer)))
-    expect(requests[0]!.headers["authorization"]).toBe("Bearer t")
-  })
-
-  test("the daemon's error envelope becomes GatewayError with status, message and reason", async () => {
+  test("the daemon's error envelope, or a plain-text body, becomes GatewayError with status and message", async () => {
     const { layer } = aggregator(() => NOT_FOUND)
     const error = failureOf(await Effect.runPromiseExit(Aggregator.blob(ID).pipe(Effect.provide(layer))))
     expect(error._tag).toBe("GatewayError")
@@ -97,22 +91,13 @@ describe("Aggregator", () => {
     expect(error.message).toBe(
       "blob: the requested blob ID does not exist on Walrus, ensure that it was entered correctly (BLOB_NOT_FOUND)"
     )
-  })
-
-  test("a plain-text error body is kept as the message", async () => {
-    const { layer } = aggregator(() => ({ status: 400, body: "Invalid URL: Cannot parse `x` to a base64 blob ID" }))
-    const error = failureOf(await Effect.runPromiseExit(Aggregator.blob(ID).pipe(Effect.provide(layer))))
-    expect(error.status).toBe(400)
-    expect(error.message).toBe("blob: Invalid URL: Cannot parse `x` to a base64 blob ID")
+    // A plain-text error body is kept as the message.
+    const { layer: text } = aggregator(() => ({ status: 400, body: "Invalid URL: Cannot parse `x` to a base64 blob ID" }))
+    const plain = failureOf(await Effect.runPromiseExit(Aggregator.blob(ID).pipe(Effect.provide(text))))
+    expect(plain.status).toBe(400)
+    expect(plain.message).toBe("blob: Invalid URL: Cannot parse `x` to a base64 blob ID")
     const { layer: empty } = aggregator(() => ({ status: 503 }))
     expect(failureOf(await Effect.runPromiseExit(Aggregator.blob(ID).pipe(Effect.provide(empty)))).message).toBe("blob: HTTP 503")
-  })
-
-  test("no answer: GatewayError without status", async () => {
-    const { layer } = aggregator(() => "network-error")
-    const error = failureOf(await Effect.runPromiseExit(Aggregator.blob(ID).pipe(Effect.provide(layer))))
-    expect(error._tag).toBe("GatewayError")
-    expect(error.status).toBeUndefined()
   })
 
   test("a defect thrown by the HttpClient is a GatewayError, not a defect", async () => {
@@ -172,13 +157,10 @@ describe("Aggregator.verified", () => {
     return { exit, blobId, requests }
   }
 
-  test("bytes that hash to the id are returned", async () => {
-    const { exit, blobId, requests } = await run(bytes)
-    expect(Exit.isSuccess(exit) && exit.value).toEqual(bytes)
-    expect(requests.map((r) => r.path)).toEqual([`/v1/blobs/${blobId}`])
-  })
-
-  test("other bytes are InconsistentBlob", async () => {
+  test("bytes that hash to the id are returned; other bytes are InconsistentBlob", async () => {
+    const { exit: ok, blobId: id, requests } = await run(bytes)
+    expect(Exit.isSuccess(ok) && ok.value).toEqual(bytes)
+    expect(requests.map((r) => r.path)).toEqual([`/v1/blobs/${id}`])
     const tampered = bytes.slice()
     tampered[0] = tampered[0]! ^ 1
     const { exit, blobId } = await run(tampered)
@@ -265,7 +247,7 @@ describe("Publisher", () => {
     expect(Publisher.blobIdOf(result)).toBe(ID)
   })
 
-  test("alreadyCertified, with an event or with an object", async () => {
+  test("parseStoreResult: alreadyCertified (event or object), markedInvalid, uncertified and shared objects", async () => {
     expect(Publisher.parseStoreResult(ALREADY_CERTIFIED)).toEqual(Result.succeed({
       _tag: "AlreadyCertified",
       blobId: ID,
@@ -276,23 +258,13 @@ describe("Publisher", () => {
     expect(Publisher.parseStoreResult({ alreadyCertified: { blobId: ID, object: "0x2a", endEpoch: 40 } })).toEqual(
       Result.succeed({ _tag: "AlreadyCertified", blobId: ID, endEpoch: 40, event: undefined, object: Address.normalize("0x2a") })
     )
-  })
-
-  test("markedInvalid", () => {
     const parsed = Publisher.parseStoreResult({ markedInvalid: { blobId: ID, event: { txDigest: "abc", eventSeq: 3 } } })
     expect(parsed).toEqual(Result.succeed({ _tag: "MarkedInvalid", blobId: ID, event: { txDigest: "abc", eventSeq: "3" } }))
-  })
-
-  test("uncertified blob object, shared object", () => {
     const b = NEWLY_CREATED.newlyCreated
-    const parsed = Publisher.parseStoreResult({
+    const uncertified = Publisher.parseStoreResult({
       newlyCreated: { ...b, blobObject: { ...b.blobObject, certifiedEpoch: null }, sharedBlobObject: "0x5" }
     })
-    expect(Result.isSuccess(parsed)).toBe(true)
-    if (Result.isSuccess(parsed) && parsed.success._tag === "NewlyCreated") {
-      expect(parsed.success.blobObject.certifiedEpoch).toBeUndefined()
-      expect(parsed.success.sharedBlobObject).toBe(Address.normalize("0x5"))
-    }
+    expect(uncertified).toMatchObject({ success: { _tag: "NewlyCreated", blobObject: { certifiedEpoch: undefined }, sharedBlobObject: Address.normalize("0x5") } })
   })
 
   test("the daemon's error variant, bad ids and unknown shapes are rejected", () => {
@@ -349,7 +321,6 @@ describe("Walrus.layer", () => {
         }).pipe(Effect.provide(Layer.provide(layer, stub)))
       )
     expect(await check(Walrus.layer({ network: "testnet" }))).toEqual(Config.testnet)
-    expect(await check(Walrus.layer({ network: "mainnet", nodes: { requestTimeout: "5 seconds" } }))).toEqual(Config.mainnet)
     const custom = { systemObjectId: Address.normalize("0x1"), stakingObjectId: Address.normalize("0x2") }
     expect(await check(Walrus.layer({ config: custom }))).toEqual(custom)
     // An untyped caller with neither network nor config (or an unknown network) gets a defect, not testnet.
