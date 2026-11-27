@@ -555,6 +555,17 @@ const executor = { sender: signer.address, execute: (recipe) => Lifecycle.run(re
 yield* Write.run(bytes, { epochs: 5, deletable: false, executor, resume: yield* store.load(id), onStep: (s) => store.save(id, s) })
 ```
 
+As built (W7), differences from the above:
+
+- **Retries are per request, not per member.** Each node call (`putMetadata`, every `putSliver`, `confirmation`) is retried with `retry` while `StorageNode.retryable`; the `Quorum.run` itself has no `schedule`, so a member is one attempt that already retried its own requests. Retrying the whole member would resend every sliver of a heavy node after one failed `PUT`. This is what the Rust client does (backoff on every node call).
+- **Keys.** Confirmations are verified against the system object's BLS key for that member (`state.members[node.index].publicKey`, the key `certify_blob` aggregates), falling back to the staking pool's key; `checkAgainstSystem` has already matched ids and weights.
+- **`certifiedEpoch`** is the certificate's epoch, not read back: `certify_blob` sets `certified_epoch` to the current epoch, which it has just checked equals the certificate's (M4). A blob found already certified reports its on-chain `certified_epoch`.
+- **Resuming** from `Encoded`, `Registered` or `Uploaded` encodes again (one WASM call) and compares the id; `Uploaded` needs the slivers anyway if the certificate turns out stale. A resumed `Certified` is checked with `Encoder.blobId` only. `run` and `stream` share one state machine; a stale certificate re-uploads at most twice, then `CertificateStale`.
+- **Epoch moved during upload**: a confirmation for a newer epoch counts as an `InvalidSignature` failure; if the quorum then fails, both caches are refreshed and the upload runs once more; a second time it is `NotEnoughConfirmations` with a failure of kind `"EpochMoved"`. A committee whose `nShards` differs from the encoding's is `NotEnoughConfirmations` (weight 0); `run` does not re-encode in that case.
+- **Register** reads the created `Blob` (retrying `ObjectNotFound` for up to 10 s) to fill `endEpoch`. Reuse depends on the owner index (`listOwned`); right after a register a fullnode may not list it yet (live case 2 waits for it, as a restarted process would).
+- `viaTx(signer, { gasBudget?, gasPrice? })` takes optional gas terms; the automatic budget works for both transactions (live). `via: "relay"` is not in W7 (W8 adds it). Exported extras: `defaultLinger`, `defaultRetry`, `findRegistration`, `PER_NODE_CONCURRENCY`, `STATUS_CHECK_MIN_BYTES`, `DEFAULT_MAX_IN_FLIGHT_BYTES`, the step types `Encoded | Registered | Uploaded | Certified`.
+- Live case 1 reads the blob back from the nodes directly (a sliver quorum and `f + 1` shards reporting it certified) instead of `Read.blob`/`Read.status`, which W5 was building in parallel; switch to `Read` once merged.
+
 ### 4.8 Upload relay
 
 ```ts
