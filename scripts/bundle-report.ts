@@ -97,6 +97,34 @@ const programs: Record<string, string> = {
       const signer = yield* Ed25519.generate
       return yield* Write.run(new Uint8Array(32), { epochs: 1, deletable: true, executor: Write.viaTx(signer), via: "relay" })
     }).pipe(Effect.provide(layer))).then(console.log)`,
+  "seal: parse an encrypted object": `
+    ${I("@unconfirmed/seal", "EncryptedObject")}
+    console.log(EncryptedObject.parse(new Uint8Array(process.argv.length)))`,
+  "seal: encrypt with pinned keys": `
+    ${E("Effect")}
+    ${I("@unconfirmed/seal", "Envelope")}
+    const objectId = "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75"
+    const publicKey = new Uint8Array(96)
+    Effect.runPromise(Effect.flatMap(Envelope.randomness(1), (randomness) => Envelope.seal({
+      packageId: objectId, id: new Uint8Array([1]), recipients: [{ objectId, publicKey }], threshold: 1,
+      input: { _tag: "AesGcm256", data: new Uint8Array(32) }, randomness
+    }))).then(console.log)`,
+  "seal: encrypt + decrypt": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519")}
+    ${I("@unconfirmed/seal", "Approval", "Config", "Seal")}
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const packageId = "0x58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2"
+    const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provideMerge(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      const id = new Uint8Array(32)
+      const { encryptedObject } = yield* Seal.encrypt({ packageId, id, data: new Uint8Array(32), threshold: 2 })
+      const session = yield* Seal.session({ packageId, signer })
+      const approval = yield* Approval.fromRecipe(Approval.call({ target: packageId + "::account_based::seal_approve", id }))
+      return yield* Seal.decrypt({ data: encryptedObject, session, approval })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
   "mysten: verify a signature": `
     import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
     verifyPersonalMessageSignature(new Uint8Array([1]), "AA==", { offline: true }).then(console.log)`,
@@ -121,20 +149,58 @@ const programs: Record<string, string> = {
     import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
     import { walrus } from "@mysten/walrus"
     const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" }).$extend(walrus())
-    client.walrus.writeBlob({ blob: new Uint8Array(32), deletable: true, epochs: 1, signer: Ed25519Keypair.generate() }).then(console.log)`
+    client.walrus.writeBlob({ blob: new Uint8Array(32), deletable: true, epochs: 1, signer: Ed25519Keypair.generate() }).then(console.log)`,
+  "mysten: seal encrypt + decrypt": `
+    import { SealClient, SessionKey } from "@mysten/seal"
+    import { SuiGrpcClient } from "@mysten/sui/grpc"
+    import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
+    import { Transaction } from "@mysten/sui/transactions"
+    const packageId = "0x58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2"
+    const suiClient = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
+    const client = new SealClient({ suiClient, serverConfigs: [
+      { objectId: "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75", weight: 1 },
+      { objectId: "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8", weight: 1 },
+      { objectId: "0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98", weight: 1, aggregatorUrl: "https://seal-aggregator-testnet.mystenlabs.com" }
+    ] })
+    ;(async () => {
+      const signer = Ed25519Keypair.generate()
+      const { encryptedObject } = await client.encrypt({ threshold: 2, packageId, id: "00".repeat(32), data: new Uint8Array(32) })
+      const sessionKey = await SessionKey.create({ address: signer.toSuiAddress(), packageId, ttlMin: 10, signer, suiClient })
+      const tx = new Transaction()
+      tx.moveCall({ target: packageId + "::account_based::seal_approve", arguments: [tx.pure.vector("u8", new Uint8Array(32))] })
+      const txBytes = await tx.build({ client: suiClient, onlyTransactionKind: true })
+      console.log(await client.decrypt({ data: encryptedObject, sessionKey, txBytes }))
+    })()`
 }
 
 /** What a Walrus program must or must not ship: the WASM glue and the quorum code (§3). */
 const markers = (code: string) =>
   [code.includes("walrus_wasm_bg.wasm") ? "wasm glue" : "", code.includes("QuorumFailed") ? "quorum" : ""].filter(Boolean).join(" + ") || "neither"
 
+/** What a Seal program ships (seal.md §6.5): BLS12-381 (noble's hash-to-curve DST), the quorum code, the HTTP client. */
+const sealMarkers = (code: string) =>
+  [
+    code.includes("BLS12381G1_XMD") ? "bls12-381" : "",
+    code.includes("QuorumFailed") ? "quorum" : "",
+    code.includes("effect/HttpClient") ? "HttpClient" : ""
+  ].filter(Boolean).join(" + ") || "none of bls12-381, quorum, HttpClient"
+
+/** Acceptance (seal.md §6.5): what each Seal program must not contain, under every bundler. */
+const sealForbidden: Record<string, ReadonlyArray<string>> = {
+  "seal: parse an encrypted object": ["bls12-381", "quorum"],
+  "seal: encrypt with pinned keys": ["HttpClient", "quorum"]
+}
+const violations: Array<string> = []
+
 const bucket = (path: string) => {
   if (/[/\\]effect@|node_modules[/\\]effect[/\\]/.test(path)) return "effect"
+  if (/@noble[/\\]curves[/\\](bls12-381|abstract[/\\](bls|tower|hash-to-curve))/.test(path)) return "noble bls12-381"
   if (/@noble[/\\]curves[/\\](abstract[/\\]weierstrass|secp256k1|nist)/.test(path)) return "secp curves"
   if (/@noble|@scure/.test(path)) return "noble/scure"
   if (/walrus-wasm/.test(path)) return "walrus-wasm glue"
   if (/packages[/\\]walrus[/\\]src[/\\]generated/.test(path)) return "walrus generated"
   if (/packages[/\\]walrus/.test(path)) return "walrus"
+  if (/packages[/\\]seal/.test(path)) return "seal"
   if (/packages[/\\]quorum/.test(path)) return "quorum"
   if (/packages[/\\]sui-multisig/.test(path)) return "sui-multisig"
   if (/packages[/\\]sui-secp/.test(path)) return "sui-secp*"
@@ -156,10 +222,11 @@ for (const [name, source] of Object.entries(programs)) {
   await Bun.write(entry, source)
 
   const bun = await Bun.build({ entrypoints: [entry], minify: true, target: "browser" })
-  const bunCode = await bun.outputs[0]!.text()
+  // Every JS output counts (Bun only splits when asked to, but sum them anyway).
+  const bunCode = (await Promise.all(bun.outputs.filter((o) => o.kind === "entry-point" || o.kind === "chunk").map((o) => o.text()))).join("\n")
 
   const es = await esbuild.build({ entryPoints: [entry], bundle: true, minify: true, platform: "browser", format: "esm", write: false, logLevel: "silent" })
-  const esCode = es.outputFiles[0]!.text
+  const esCode = es.outputFiles.map((f) => f.text).join("\n")
 
   const rd = await rolldown({ input: entry, platform: "browser", logLevel: "silent" })
   const { output } = await rd.generate({ format: "esm", minify: true })
@@ -168,7 +235,16 @@ for (const [name, source] of Object.entries(programs)) {
   const rdCode = chunks.map((c) => c.code).join("\n")
 
   const cell = (code: string) => `${kb(code.length)}/${kb(gzipSync(code).length)}`.padStart(14)
-  const ships = name.startsWith("walrus") ? [...new Set([bunCode, esCode, rdCode].map(markers))].join(" | ") : ""
+  const ships = name.startsWith("walrus")
+    ? [...new Set([bunCode, esCode, rdCode].map(markers))].join(" | ")
+    : name.includes("seal")
+    ? [...new Set([bunCode, esCode, rdCode].map(sealMarkers))].join(" | ")
+    : ""
+  for (const [bundler, code] of [["bun", bunCode], ["esbuild", esCode], ["rolldown", rdCode]] as const) {
+    for (const marker of sealForbidden[name] ?? []) {
+      if (sealMarkers(code).split(" + ").includes(marker)) violations.push(`${name} (${bundler}) contains ${marker}`)
+    }
+  }
   console.log(`${name.padEnd(44)} ${cell(bunCode)} ${cell(esCode)} ${cell(rdCode)}  ${ships}`)
 
   if (detail) {
@@ -185,3 +261,9 @@ await Bun.$`rm -rf ${dir}`
 console.log("\nKB minified / KB minified+gzip, JS only (all chunks)")
 const wasm = Bun.file(`${import.meta.dir}/../node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm`)
 if (await wasm.exists()) console.log(`Walrus programs that encode, decode or verify also load the WASM asset: ${kb(wasm.size)} KB (web/walrus_wasm_bg.wasm), not counted above`)
+if (violations.length > 0) {
+  console.error(`\nSeal containment checks failed:\n${violations.map((v) => `  ${v}`).join("\n")}`)
+  process.exitCode = 1
+} else {
+  console.log("Seal containment checks (seal.md §6.5): passed under all three bundlers")
+}

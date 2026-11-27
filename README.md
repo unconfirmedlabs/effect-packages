@@ -23,8 +23,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order, an optional linger window and an optional early give-up. Knows nothing about Sui; used by Walrus and Seal | — |
 | `@unconfirmed/sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/bcs` and `@unconfirmed/sui` (runtime: `@unconfirmed/sui/Move`) | — (dev-time) |
 | `@unconfirmed/walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@mysten/walrus-wasm`, loaded on first use | `@mysten/walrus-wasm`, `@noble/hashes` |
-
-Next: Seal.
+| `@unconfirmed/seal` | Seal: threshold identity-based encryption to key servers registered on Sui (independent and committee), session keys (key or wallet signer, one prompt), `seal_approve` approvals, key fetching over `Quorum` with every key verified, decryption. The crypto core (BLS12-381, Shamir, KDF, DEMs, the encrypted object) is pure and usable offline | `@noble/curves`, `@noble/hashes`, `@scure/base` |
 
 ### Passkeys
 
@@ -134,6 +133,38 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 | Browser, esbuild / Rolldown / Bun | Serve `node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm` (358 KB) and pass its URL: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm" })` (or `Encoder.layer({ wasmUrl })`). |
 
 **Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That uses the Sui CLI's active address (`~/.sui/sui_config`): direct, resumed and relay writes of 32-byte blobs, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
+
+### Seal
+
+```ts
+import * as Approval from "@unconfirmed/seal/Approval"
+import * as Config from "@unconfirmed/seal/Config"
+import * as Seal from "@unconfirmed/seal/Seal"
+import * as SuiGrpc from "@unconfirmed/sui/grpc"
+
+// Configuration, key servers read from chain, and the key server HTTP client; needs an HttpClient and a Sui client.
+const layer = Seal.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee] }).pipe(
+  Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })),
+  Layer.provideMerge(FetchHttpClient.layer)
+)
+
+const id = Bcs.encodeSync(Bcs.Address)(signer.address)                       // account_based: the id is the user's address
+const { encryptedObject } = yield* Seal.encrypt({ packageId, id, data, threshold: 2 })   // or dem: "Hmac256Ctr", aad
+
+const session = yield* Seal.session({ packageId, signer })                   // a key Signer or a wallet's WalletSigner
+const approval = yield* Approval.fromRecipe(Approval.call({ target: `${packageId}::account_based::seal_approve`, id }))
+const plaintext = yield* Seal.decrypt({ data: encryptedObject, session, approval })      // one prompt, one round of requests
+```
+
+- **Weights come from the ciphertext.** `decrypt` asks the servers the object names that are also configured, each counting for its number of shares in the object. `@mysten/seal` requires the client's configured weights to equal the object's. Servers the object names but the configuration lacks are never contacted: their URLs come from objects anyone can create, and a request tells the server who is asking for what. Their public keys are still read from chain when `checkShareConsistency: true`.
+- **Strict ids.** Package, server and user ids are `0x` + 64 hex digits. A short or unprefixed id is refused up front; `@mysten/seal` signs it as given and every server then rejects the session. `decrypt` checks that the object, the session and the approval belong together (`ApprovalMismatch`) before sending anything. `Seal.session` checks that the package is a first version, which `SessionKey.make` doesn't.
+- **One wallet prompt per session.** Concurrent callers share the prompt; a rejected prompt isn't remembered. `@mysten/seal` prompts once per concurrent call.
+- **The derived-key cache belongs to the session** and is checked after the session's expiry. `@mysten/seal` keeps one unbounded cache per client and returns from it before looking at the session, so an expired session, or another user's session on the same client, decrypts from it. `Seal.fetchKeys({ objects, session, approval })` fetches keys for many objects in one round; after that, `decrypt` sends nothing. Every key is verified against the server's on-chain public key before it is cached or used.
+- **`ThresholdNotMet` lists every server's failure**, each a typed `KeyServerError` (`NoAccess` with the Move abort, `InvalidPtb`, `Timeout`, `RateLimited`, ...), plus `reason: "denied" | "unreachable" | "insufficientWeight"`. `@mysten/seal` throws one "majority" error, or `undefined` when servers answer with unusable keys. Transient failures are retried per server.
+- **Early stop.** Once refusals of the request itself weigh the threshold, the call waits `denialGrace` (2 s) and gives up, rather than waiting for a dead server's 10 s timeout. Under a low threshold (1 of 3), a user who isn't allowed finds out in about 2 s. An approval that arrives inside the window still wins.
+- `Seal.derivedKeys` gives verified keys for on-chain decryption. Committee (MPC) servers go through their aggregator (`aggregatorUrl`, `apiKeyName` / `apiKey` on mainnet). With pinned public keys, `Envelope.seal` / `Envelope.open` encrypt and decrypt with no service at all. Design and every difference from `@mysten/seal`: [docs/design/seal.md](docs/design/seal.md) §1.7 and §2.
+
+**Live tests.** `SUI_LIVE=1 bun test packages/seal` runs against testnet without spending anything: key server objects and proofs, and decryption with fresh in-memory keys under Mysten's canary policies (`account_based`, `tle`). That covers interop with `@mysten/seal`, a denial, `fetchKeys`, a wallet signer, an unreachable server and open-mode errors. Add `SEAL_LIVE=1` to also run the owned-object policy (`private_data`) with the Sui CLI's active address (`~/.sui/sui_config`). That creates one small object per run, about 0.003 SUI, not refundable.
 
 ## How it composes
 
@@ -361,8 +392,12 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
 | Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |
 | Walrus: write a blob through the nodes | 453 / 136 | 447 / 135 | 455 / 130 | 455 / 128 (`writeBlob`) |
 | Walrus: write a blob through the relay | 458 / 137 | 452 / 137 | 460 / 132 | — |
+| Seal: parse an encrypted object | 91 / 31 | 90 / 31 | 97 / 31 | — |
+| Seal: encrypt with pinned keys (`Envelope.seal`) | 177 / 63 | 175 / 63 | 183 / 62 | — |
+| Seal: encrypt + decrypt (the layer, gRPC, `FetchHttpClient`) | 487 / 150 | 481 / 150 | 490 / 145 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
 
 - **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
+- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program is 20 KB larger than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (9 KB gzip, Rolldown).
 - **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.
