@@ -27,6 +27,10 @@ const programs: Record<string, string> = {
     ${I("effect/http", "FetchHttpClient", "HttpClient")}
     const S = Schema.Struct({ a: Schema.BigInt })
     Effect.runPromise(Effect.flatMap(Effect.service(HttpClient.HttpClient), (h) => h.get("https://x")).pipe(Effect.map(() => Schema.decodeUnknownSync(S)({ a: 1n })), Effect.provide(FetchHttpClient.layer))).then(console.log)`,
+  "ours: Quorum.run over three members": `
+    ${E("Effect")}
+    ${style === "named" ? `import { Quorum } from "@unconfirmed/quorum"` : `import * as Quorum from "@unconfirmed/quorum/Quorum"`}
+    Effect.runPromise(Quorum.run([1, 2, 3], { weight: () => 1, threshold: 2, run: (n) => Effect.succeed(n) })).then(console.log)`,
   "ours: verify, Ed25519 only": `
     ${E("Effect")}
     ${I("@unconfirmed/sui", "Ed25519", "SignatureScheme", "Verify")}
@@ -75,6 +79,7 @@ const bucket = (path: string) => {
   if (/[/\\]effect@|node_modules[/\\]effect[/\\]/.test(path)) return "effect"
   if (/@noble[/\\]curves[/\\](abstract[/\\]weierstrass|secp256k1|nist)/.test(path)) return "secp curves"
   if (/@noble|@scure/.test(path)) return "noble/scure"
+  if (/packages[/\\]quorum/.test(path)) return "quorum"
   if (/packages[/\\]sui-multisig/.test(path)) return "sui-multisig"
   if (/packages[/\\]sui-secp/.test(path)) return "sui-secp*"
   if (/packages[/\\]sui[/\\]src[/\\]grpc/.test(path)) return "sui/grpc"
