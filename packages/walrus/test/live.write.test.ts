@@ -63,7 +63,6 @@ import * as Address from "@unconfirmed/sui/Address"
 import * as Coins from "@unconfirmed/sui/Coins"
 import * as Objects from "@unconfirmed/sui/Objects"
 import type * as Signer from "@unconfirmed/sui/Signer"
-import type * as Transactions from "@unconfirmed/sui/Transactions"
 import * as Tx from "@unconfirmed/sui/Tx"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
 import { loadLiveSigner } from "@unconfirmed/test-support/funded"
@@ -122,7 +121,6 @@ const balances = (owner: Address.Address) =>
     return { sui: sui.total, wal: wal.total }
   })
 
-const gasOf = (e: Transactions.Effects) => e.gasUsed.computationCost + e.gasUsed.storageCost - e.gasUsed.storageRebate
 
 const burn = (signer: Signer.Signer, blobObjectId: Address.Address) =>
   Tx.run(Recipes.burnBlob(blobObjectId), { signer })
