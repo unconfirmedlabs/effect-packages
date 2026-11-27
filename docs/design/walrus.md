@@ -118,11 +118,12 @@ The two `count_deletable_*` fields are snake_case (`api.rs:111-116` has no renam
 | # | Fact | Source |
 |---|---|---|
 | W1 | Exports: `BlobEncoder(nShards)` with `encode`, `compute_metadata`, `decode`; `bls12381_min_pk_verify`, `bls12381_min_pk_aggregate`, `bls12381_min_pk_verify_aggregate`; default export `init`. RS2 only. Nothing verifies a single sliver or recovers one. | `walrus-wasm/src/encoder.rs`, `src/bls12381.rs`, `index.d.mts` |
-| W2 | On Node and Bun the module loads synchronously and `init` is a no-op. The `browser` export condition needs `init({ module_or_path })` with the `.wasm` URL (358 KB). | `walrus-wasm/package.json`, `index.mjs`, `web/walrus_wasm.d.ts` |
+| W2 | On Node and Bun the module loads synchronously **at import time** (`readFileSync(__dirname + "/walrus_wasm_bg.wasm")`, then `new WebAssembly.Module`) and `init` is a no-op. The `browser` export condition needs `init({ module_or_path })`; without an argument it fetches `new URL("walrus_wasm_bg.wasm", import.meta.url)`, the web build's own 358 KB file (not the Node one). Bundled (tested with Bun 1.4.4, esbuild 0.28.2, Rolldown 1.3.4): Bun's bundler hard-codes the build machine's absolute `__dirname`, so the bundle runs only where it was built; esbuild's ESM output fails (`__dirname` is undefined); Rolldown and esbuild CJS look for the `.wasm` next to the bundle; for browsers none of the three emits the `.wasm` asset, so it must be copied next to the chunk or passed as `module_or_path` (Vite and webpack 5 do handle `new URL(…, import.meta.url)`). | `walrus-wasm/package.json`, `index.mjs`, `nodejs/walrus_wasm.js:554-557`, `web/walrus_wasm.js:599-622`; local test |
 | W3 | `encode(data, primary[n], secondary[n])` writes BCS `SliverData` into caller-allocated buffers whose sizes must be exact: `uleb128(len) + len + 4`. It returns `[{ blob_id: number[], metadata: { V1: { encoding_type: "RS2", unencoded_length: number, hashes: [{ primary_hash: { Digest: number[] }, secondary_hash: {…} }] } } }, { Digest: number[] }]`. Buffer `k` of `secondary` carries sliver index `n − 1 − k`. | `encoder.rs:38-85`, `:158-177`; `walrus/dist/wasm.mjs:9-23`, `:61-84`; local test |
 | W4 | `decode` needs at least `n − 2f` distinct, well-formed primary slivers and throws on fewer or on duplicates; all `n` is fine. It ignores its blob id argument and verifies nothing. | `encoder.rs:120-156`; local test |
 | W5 | **Every call takes about 2.5 s at `n = 1000` whatever the blob size up to 5 MB** (Bun 1.4.4, x64: encode 2.6 s, `compute_metadata` 2.5 s, decode 2.3 s), synchronously on the calling thread. Beyond that it grows by about 0.07 s per MiB (20 MiB: 3.5 s; 60 MiB: 6.9 s), and `encode` peaks at about 10× the blob size in memory (60 MiB: 665 MB RSS). | local test |
 | W6 | **A sliver can be verified with stock `encode`.** Stack up to `n − 2f` fetched primary slivers as the rows of a crafted blob of exactly `primary × secondary × symbolSize` bytes; `encode` then returns each sliver's own Merkle root as `hashes[row].primary_hash`. Likewise place up to `n − f` secondary slivers as columns; column `c` comes back as `hashes[n − 1 − c].secondary_hash`. Both hold for repair slivers too (E8). Tested with corrupted slivers at symbol sizes 2 and 14: exactly the corrupted ones mismatch. | local test, follows from E3 and E8 |
+| W7 | **`n < 4` traps** (`unreachable`, a Rust panic) in `encode` and `compute_metadata`; `new BlobEncoder(n)` itself succeeds. A trap leaves that `BlobEncoder` marked as borrowed: every later call on it, and `free`, throws "attempted to take ownership of Rust value while it was borrowed". Other instances, and the module, keep working. | local test |
 
 ### 1.8 Where the Rust client and `@mysten/walrus` disagree
 
@@ -171,6 +172,7 @@ packages/walrus/
   package.json     @unconfirmed/walrus; exports { ".": "./src/index.ts", "./*": "./src/*.ts" }
                    dependencies: effect 4.1.6, @unconfirmed/bcs, @unconfirmed/sui, @unconfirmed/quorum (workspace:*; added by W5, it does not exist yet at W1),
                                  @mysten/walrus-wasm 0.3.1 (exact), @noble/hashes ^2.3.0
+                   devDependencies: @noble/curves ^2.3.0 (tests sign as fake nodes; added by W3)
   sui-codegen.config.ts, scripts/codegen.ts
   src/
     BlobId.ts  Bft.ts  Encoding.ts  Merkle.ts  Messages.ts  Certificate.ts  Cost.ts  Status.ts  Errors.ts   pure
@@ -331,25 +333,42 @@ export interface EncodedBlob {
   readonly blobId: BlobId; readonly rootHash: Uint8Array; readonly unencodedLength: number; readonly nShards: number
   readonly metadata: Uint8Array                       // BCS BlobMetadata, the PUT body
   readonly primary: ReadonlyArray<Uint8Array>         // BCS SliverData, by pair index
-  readonly secondary: ReadonlyArray<Uint8Array>       // BCS SliverData, by pair index
+  readonly secondary: ReadonlyArray<Uint8Array>       // BCS SliverData, by pair index (entry p carries sliver index n − 1 − p)
 }
-export class Encoder extends Context.Service<Encoder, {
+export const MIN_SHARDS = 4                           // W7; nShards outside [4, 65535] is an EncoderError before any WASM call
+export type Axis = "primary" | "secondary"
+export interface EncoderService {
   readonly encode: (nShards: number, blob: Uint8Array) => Effect.Effect<EncodedBlob, EncoderError>
   readonly blobId: (nShards: number, blob: Uint8Array) => Effect.Effect<{ readonly blobId: BlobId; readonly rootHash: Uint8Array }, EncoderError>
   /** From >= n - 2f distinct BCS primary slivers. Verifies nothing (W4). */
   readonly decode: (nShards: number, unencodedLength: number, primarySlivers: ReadonlyArray<Uint8Array>) => Effect.Effect<Uint8Array, EncoderError>
-  /** The Merkle root of each given sliver, by the crafted-blob method (W6). At most n - 2f primary or n - f secondary per call. */
-  readonly sliverRoots: (nShards: number, axis: "primary" | "secondary", symbolSize: number, slivers: ReadonlyArray<Uint8Array>)
+  /** The Merkle root of each given BCS SliverData, in order, by the crafted-blob method (W6). At most n - 2f primary or n - f secondary per call;
+   *  each must carry `symbolSize` and the axis' symbol count, else EncoderError (run `Messages.checkSliver` first to blame a node). One WASM call. */
+  readonly sliverRoots: (nShards: number, axis: Axis, symbolSize: number, slivers: ReadonlyArray<Uint8Array>)
     => Effect.Effect<ReadonlyArray<Uint8Array>, EncoderError>
+  /** A malformed key or signature is an EncoderError (the WASM throws), not `false`. */
   readonly blsVerify: (signature: Uint8Array, publicKey: Uint8Array, message: Uint8Array) => Effect.Effect<boolean, EncoderError>
   readonly blsAggregate: (signatures: ReadonlyArray<Uint8Array>) => Effect.Effect<Uint8Array, EncoderError>
   readonly blsVerifyAggregate: (publicKeys: ReadonlyArray<Uint8Array>, message: Uint8Array, signature: Uint8Array) => Effect.Effect<boolean, EncoderError>
-}>()("@unconfirmed/walrus/Encoder") {}
-/** Initialises the module once; frees `BlobEncoder` instances when the layer's scope closes. `wasmUrl` is needed in browsers only (W2). */
-export const layer: (options?: { readonly wasmUrl?: string | URL }) => Layer.Layer<Encoder, EncoderError>
+}
+export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/walrus/Encoder") {}
+export interface EncoderOptions { readonly wasmUrl?: string | URL }
+/** The in-thread service; its `BlobEncoder`s are freed when the scope closes, and later calls fail with EncoderError. */
+export const make: (options?: EncoderOptions) => Effect.Effect<EncoderService, EncoderError, Scope.Scope>
+/** Initialises the module once per build; frees `BlobEncoder` instances when the layer's scope closes. `wasmUrl` is needed in browsers only (W2). */
+export const layer: (options?: EncoderOptions) => Layer.Layer<Encoder, EncoderError>
 ```
 
-Every WASM call sits in `Effect.try`, so a thrown `JsError` is a typed `EncoderError { operation, message }`, never a defect. One `BlobEncoder` per `nShards` is kept in the service. All calls are synchronous and slow (W5); the service boundary is what lets a worker-backed layer replace this one later (open question 5).
+Every WASM call sits in `Effect.try`, so a thrown `JsError` (or a trap) is a typed `EncoderError { operation, message }`, never a defect; a failed load is `EncoderError { operation: "init" }`. Arguments that would trap or throw `RangeError` (`nShards` outside `[4, 65535]`, a length above `maxBlobSize`) are rejected before the call. One `BlobEncoder` per `nShards` is kept in the service; one that traps is dropped from the cache (W7). All calls are synchronous and slow (W5); the service passes only numbers and `Uint8Array`s, so a worker-backed layer can replace this one later (open question 5).
+
+`@mysten/walrus-wasm` is imported with a dynamic `import()` when the layer is built, not at module load, so importing `Encoder.ts` or the package index reads no `.wasm` until an `Encoder` is needed, and bundlers split the glue (about 17–23 KB) into its own chunk. What an app must do (W2):
+
+| Runtime | What to do |
+|---|---|
+| Bun, Node, unbundled | Nothing. |
+| Server bundle (any bundler) | Keep `@mysten/walrus-wasm` external, or copy `node_modules/@mysten/walrus-wasm/nodejs/walrus_wasm_bg.wasm` next to the output and emit CJS (esbuild's ESM output has no `__dirname`). A Bun bundle runs only on the machine that built it. |
+| Browser, Vite / webpack 5 | Nothing, or pass `wasmUrl` from `import url from "@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url"` (Vite). |
+| Browser, esbuild / Rolldown / Bun | Serve `web/walrus_wasm_bg.wasm` and pass its URL as `wasmUrl`, or copy it next to the chunk that holds the glue. |
 
 ### 4.4 Storage nodes
 
@@ -628,7 +647,7 @@ Conventions as in the other packages: `bun:test`; offline tests always run; live
 | `core.test.ts` | `Bft` tables for `n ∈ {1, 4, 5, 6, 7, 10, 100, 1000}` including the T4 cases; `Encoding` size formulas at boundaries (0, 1, one symbol, `maxBlobSize`, one over); `BlobId` round trips and rejections; `Merkle.root` for 0, 1, 2, 3 and 1000 leaves; `signersBitmap`; `Cost`. |
 | `messages.test.ts` | `verifyMetadata` accepts a real metadata fixture and rejects a flipped hash, a wrong id, a wrong hash count, encoding type 0, an oversized length; `checkSliver`; `confirmationMessage` equals the live sample in M1. |
 | `status.test.ts` | Decoding every `BlobStatus` shape including snake_case counts; `order` against a table transcribed from `api.rs:138-200`; `canonical` is insensitive to key order. |
-| `encoder.test.ts` | Round trip for lengths 0, 1, 32, 100 kB; `decode` with too few or duplicate slivers is a typed `EncoderError`; `sliverRoots` equals the metadata hashes for random primary and secondary slivers (systematic and repair) and differs exactly for corrupted ones; BLS verify with 48- and 96-byte keys; aggregate equals `@noble/curves`. Slow (about 2.5 s per WASM call): keep `n = 1000` cases few and use `n = 10` elsewhere. |
+| `encoder.test.ts` | Round trip for lengths 0, 1, 32, 100 kB (and `n` 4 and 7); `nShards` below 4 and lengths above the maximum rejected before the WASM; a trapped instance is replaced; every `BlobEncoder` freed on scope close; `decode` with too few or duplicate slivers is a typed `EncoderError`; `sliverRoots` equals the metadata hashes for random primary and secondary slivers (systematic and repair) and differs exactly for corrupted ones; BLS verify with 48- and 96-byte keys; aggregate equals `@noble/curves`. Slow (about 2.5 s per WASM call): keep `n = 1000` cases few and use `n = 10` elsewhere. |
 | `storage-node.test.ts` | A scripted `HttpClient` (pattern of `packages/sui-enoki/test/support.ts`): request method, path, headers and body for every endpoint; every row of the error mapping in §4.4 from recorded bodies; timeout → `Timeout`. |
 | `committee.test.ts` | Building committees from recorded testnet objects (fixtures under `test/fixtures/`, written by `scripts/record-fixtures.ts`); `readCommittee` for the four cases of C6; `checkAgainstSystem` mismatches; cache and `refresh`. |
 | `read.test.ts` | An in-memory network of fake nodes over a small committee (`n = 10`, real WASM): happy path; exactly `n − 2f` nodes answer; one node returns a corrupted sliver → blamed, replaced, read succeeds; a wrongly encoded blob → `InconsistentBlob`; quorum of 404 → `BlobNotFound`; quorum of 451 → `BlobBlocked`; mixed failures → `NotEnoughSlivers` with every node's failure; metadata from a lying node is rejected and another node's is used; previous committee during `EpochChangeSync`; `maxSize`. With `TestClock`: a hung node does not delay the result; retries follow the schedule. |
