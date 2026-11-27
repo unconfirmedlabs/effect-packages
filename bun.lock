@@ -14,6 +14,7 @@
         "@unconfirmed/sui-graphql": "workspace:*",
         "@unconfirmed/sui-lifecycle": "workspace:*",
         "@unconfirmed/sui-multisig": "workspace:*",
+        "@unconfirmed/sui-passkey": "workspace:*",
         "@unconfirmed/sui-secp256k1": "workspace:*",
         "@unconfirmed/sui-secp256r1": "workspace:*",
         "@unconfirmed/sui-zklogin": "workspace:*",
@@ -80,6 +81,18 @@
       },
       "devDependencies": {
         "@unconfirmed/sui-secp256k1": "workspace:*",
+      },
+    },
+    "packages/sui-passkey": {
+      "name": "@unconfirmed/sui-passkey",
+      "version": "0.0.0",
+      "dependencies": {
+        "@noble/curves": "^2.3.0",
+        "@noble/hashes": "^2.3.0",
+        "@scure/base": "^2.3.0",
+        "@unconfirmed/bcs": "workspace:*",
+        "@unconfirmed/sui": "workspace:*",
+        "effect": "4.1.6",
       },
     },
     "packages/sui-secp256k1": {
@@ -263,6 +276,8 @@
     "@unconfirmed/sui-lifecycle": ["@unconfirmed/sui-lifecycle@workspace:packages/sui-lifecycle"],
 
     "@unconfirmed/sui-multisig": ["@unconfirmed/sui-multisig@workspace:packages/sui-multisig"],
+
+    "@unconfirmed/sui-passkey": ["@unconfirmed/sui-passkey@workspace:packages/sui-passkey"],
 
     "@unconfirmed/sui-secp256k1": ["@unconfirmed/sui-secp256k1@workspace:packages/sui-secp256k1"],
 

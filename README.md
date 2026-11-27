@@ -14,10 +14,26 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-secp256k1` | Secp256k1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-multisig` | Multisig scheme, `signer`, `combine` | — |
+| `@unconfirmed/sui-passkey` | Passkey (WebAuthn) scheme (also as a multisig member), signer over a pluggable authenticator (browser `navigator.credentials`, or in-memory for tests and servers), public-key recovery for returning users | `@noble/curves` |
 | `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite` |
 | `@unconfirmed/sui-enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
 
-Next: passkey, mnemonics/keystore, Move codegen, ML-DSA-65, then `quorum`, Seal and Walrus.
+Next: mnemonics/keystore, Move codegen, ML-DSA-65, then `quorum`, Seal and Walrus.
+
+### Passkeys
+
+```ts
+import * as Passkey from "@unconfirmed/sui-passkey"
+
+const provider = Passkey.browserProvider("My app", { rp: { id: location.hostname } })
+const signer = yield* Passkey.create(provider)    // first visit: creates a passkey; store signer.publicKey.bytes
+const again = yield* Passkey.recover(provider)    // returning user: two prompts, the public key common to both
+yield* Tx.run(recipe, { signer })                 // a passkey signer is just a Signer (also inside MultiSig.signer)
+
+SignatureSchemes.layer(Ed25519.scheme, Passkey.scheme, MultiSig.scheme)   // verify passkeys, alone or as members
+```
+
+A cancelled prompt is `SigningError` with reason `"rejected"`, no WebAuthn is `"unavailable"`. `Passkey.softwareProvider()` is an in-memory authenticator with the same interface, for tests and non-browser runtimes.
 
 ## How it composes
 
