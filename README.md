@@ -145,7 +145,7 @@ Node, `n = 10` and `100`, and the sizes are in `packages/walrus-wasm/README.md` 
 | Browser, Vite / webpack 5 | Nothing (they emit both `.wasm` builds; one is fetched), or pass `wasmUrl` / `wasmFallbackUrl` from `import wasmUrl from "@unconfirmed/walrus-wasm/web/walrus_wasm_bg.wasm?url"` and `…/web/walrus_wasm_nosimd_bg.wasm?url` (Vite). |
 | Browser, esbuild / Rolldown / Bun | Serve `packages/walrus-wasm/web/walrus_wasm_bg.wasm` (261 KB, 98 KB gzip) and, for engines without WebAssembly SIMD, `walrus_wasm_nosimd_bg.wasm` (248 KB), and pass their URLs: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm", wasmFallbackUrl: "/walrus_wasm_nosimd_bg.wasm" })` (or `Encoder.layer({ … })`). The fallback is picked with `WebAssembly.validate`; every current browser takes the SIMD build. |
 
-**Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That uses the Sui CLI's active address (`~/.sui/sui_config`): direct, resumed and relay writes of 32-byte blobs and one 445 KB quilt, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
+**Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That signs with `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key of a funded testnet account holding SUI and WAL): direct, resumed and relay writes of 32-byte blobs and one 445 KB quilt, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
 
 ### Seal
 
@@ -180,7 +180,7 @@ const plaintext = yield* Seal.decrypt({ data: encryptedObject, session, approval
 - **Early stop.** Once refusals of the request itself weigh the threshold, the call waits `denialGrace` (2 s) and gives up, rather than waiting for a dead server's 10 s timeout. Under a low threshold (1 of 3), a user who isn't allowed finds out in about 2 s. An approval that arrives inside the window still wins.
 - `Seal.derivedKeys` gives verified keys for on-chain decryption. Committee (MPC) servers go through their aggregator (`aggregatorUrl`, `apiKeyName` / `apiKey` on mainnet). With pinned public keys, `Envelope.seal` / `Envelope.open` encrypt and decrypt with no service at all. Design and every difference from `@mysten/seal`: [docs/design/seal.md](docs/design/seal.md) §1.7 and §2.
 
-**Live tests.** `SUI_LIVE=1 bun test packages/seal` runs against testnet without spending anything: key server objects and proofs, and decryption with fresh in-memory keys under Mysten's canary policies (`account_based`, `tle`). That covers interop with `@mysten/seal`, a denial, `fetchKeys`, a wallet signer, an unreachable server and open-mode errors. Add `SEAL_LIVE=1` to also run the owned-object policy (`private_data`) with the Sui CLI's active address (`~/.sui/sui_config`). That creates one small object per run, about 0.003 SUI, not refundable.
+**Live tests.** `SUI_LIVE=1 bun test packages/seal` runs against testnet without spending anything: key server objects and proofs, and decryption with fresh in-memory keys under Mysten's canary policies (`account_based`, `tle`). That covers interop with `@mysten/seal`, a denial, `fetchKeys`, a wallet signer, an unreachable server and open-mode errors. Add `SEAL_LIVE=1` to also run the owned-object policy (`private_data`) signed with `SUI_LIVE_PRIVATE_KEY` (a funded testnet key). That creates one small object per run, about 0.003 SUI, not refundable.
 
 ## How it composes
 
@@ -514,6 +514,16 @@ bun run test          # offline: parity with @mysten/sui (BCS, built tx bytes, s
 bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multisig / wallet-standard executions
 bun run codegen       # protoc -> descriptor chunks + types from packages/sui/proto/src (sui-apis)
 ```
+
+Tests read their settings from environment variables only; nothing reads the Sui CLI's config:
+
+| Variable | Effect |
+|---|---|
+| `SUI_LIVE=1` | Live tests that read testnet and execute on devnet with faucet funds (`bun run test:live`) |
+| `SUI_FUNDED_ADDRESS` | A testnet address holding SUI, for live tests that only build (nothing is signed); they skip without it. Also the sender for `packages/sui/bench/build-vs-mysten.ts` |
+| `WALRUS_LIVE=1`, `SEAL_LIVE=1` | With `SUI_LIVE=1`, the funded Walrus writes and the Seal owned-object test. These spend testnet SUI and WAL |
+| `SUI_LIVE_PRIVATE_KEY` | The `suiprivkey1…` key those funded tests sign with. Never printed or logged; a missing or bad key fails with a fixed message |
+| `SUI_BROWSER=1` | The optional real-browser smoke test for the lifecycle's browser stores (Playwright, browsers already installed) |
 
 `@mysten/sui` and `@mysten/codegen` are dev dependencies, used only as reference implementations in parity tests. After changing the codegen fixture, `bun packages/sui-codegen/scripts/fixtures.ts` regenerates its summaries and the golden output.
 

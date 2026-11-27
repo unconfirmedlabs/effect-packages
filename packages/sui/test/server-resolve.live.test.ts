@@ -8,11 +8,14 @@ import * as Effect from "effect/Effect"
 import * as Schedule from "effect/Schedule"
 import { Address, CoinReservation, Ed25519, Ptb, Resolve, Tx } from "../src/index.ts"
 import type * as T from "../src/TransactionData.ts"
+import { fundedAddress } from "@unconfirmed/test-support/funded"
 import { DEVNET, faucet, grpcLayer, live, TESTNET } from "./support.ts"
 
 const suite = live ? describe : describe.skip
-/** A testnet address that holds SUI (coins and an address balance). */
-const FUNDED = Address.normalize("0xa7183179d9add5002bae12bcefd3268e3f4f3f8c1f064898951a5d80b1db78f4")
+/** A testnet address that holds SUI (`SUI_FUNDED_ADDRESS`); the build-only suite skips without one. */
+const funded = fundedAddress()
+const buildSuite = live && funded !== undefined ? describe : describe.skip
+const FUNDED = Address.normalize(funded ?? "0x0")
 
 const split = (to: Address.Address) =>
   Effect.gen(function*() {
@@ -28,7 +31,7 @@ const runOn = <A, E>(url: string, f: (requests: Array<string>) => Effect.Effect<
   return Effect.runPromise(Effect.provide(f(requests), layer) as Effect.Effect<A, E>)
 }
 
-suite("server-side resolution on testnet (build only)", () => {
+buildSuite("server-side resolution on testnet (build only)", () => {
   test("split from gas + transfer: one SimulateTransaction, nothing else", async () => {
     const { data, requests } = await runOn(TESTNET, (requests) =>
       Effect.map(Tx.build(split(FUNDED), { sender: FUNDED }), (data) => ({ data, requests: [...requests] })))

@@ -894,7 +894,7 @@ Budget: about 25 `fetch_key` requests per run, spaced to stay under Mysten's 10 
 
 ### 6.4 Live, with funds (`SEAL_LIVE=1` in addition to `SUI_LIVE=1`)
 
-`live.owned.test.ts`. The signer is the Sui CLI's active address, loaded exactly as `packages/walrus/test/live.write.test.ts` does (`client.yaml` for the address, `PrivateKey.decodeKeystore` on `sui.keystore`, the scheme's `fromSecretKey`); any error while loading becomes one fixed message; the key is never printed, logged or written. The test reads the balance first and skips below 0.05 SUI.
+`live.owned.test.ts`. The signer is `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key, decoded with `PrivateKey.decode` and the scheme's `fromSecretKey` by `@unconfirmed/test-support/funded`, as in `packages/walrus/test/live.write.test.ts`); any error while loading becomes one fixed message; the key is never printed, logged or written. The test reads the balance first and skips below 0.05 SUI.
 
 1. `private_data::store_entry(nonce, data)` on the canary package creates an object owned by the wallet whose key id is `bcs(sender) ‖ nonce` (`move/patterns/sources/private_data.move:30-34`; the on-chain module has the same functions, but confirm the id format with the first run). Encrypt 32 bytes under that id, then at once decrypt with `private_data::seal_approve(id, &PrivateData)`: an owned-object input, the wallet's key signing the session's personal message, and, because the object is seconds old, the `InvalidParameter`-then-success path on servers whose fullnode lags.
 

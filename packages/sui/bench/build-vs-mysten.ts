@@ -1,5 +1,5 @@
 // Head-to-head on testnet, build only: ours (server default, and client path) vs @mysten/sui 3.0.1. Interleaved, median of RUNS.
-// Reads only; nothing is signed. The sender must hold testnet SUI: BENCH_SENDER, else the Sui CLI's active address.
+// Reads only; nothing is signed. The sender must hold testnet SUI: set SUI_FUNDED_ADDRESS.
 //   bun packages/sui/bench/build-vs-mysten.ts [runs]
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -10,12 +10,10 @@ import * as Ptb from "@unconfirmed/sui/Ptb"
 import * as Tx from "@unconfirmed/sui/Tx"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Transaction } from "@mysten/sui/transactions"
-import { readFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { fundedAddress } from "@unconfirmed/test-support/funded"
 
 const URL = "https://fullnode.testnet.sui.io:443"
-const S = process.env.BENCH_SENDER ??
-  /active_address:\s*"?(0x[0-9a-fA-F]{64})/.exec(readFileSync(`${homedir()}/.sui/sui_config/client.yaml`, "utf-8"))![1]!
+const S = fundedAddress() ?? (() => { throw new Error("set SUI_FUNDED_ADDRESS to a testnet address holding SUI") })()
 const OTHER = "0x048c21fd5a2ac1a5f7b4dd2fda964ae84d08440d161b61cbb71de353abc06490" // sponsored sender (no funds)
 const RUNS = Number(process.argv[2] ?? 7)
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!

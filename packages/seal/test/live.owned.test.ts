@@ -3,10 +3,10 @@
  * SUI.** Opt in with SUI_LIVE=1 and SEAL_LIVE=1; with SUI_LIVE=1 alone this
  * file spends nothing (the test is skipped).
  *
- * The signer is the Sui CLI's active address, loaded from
- * `~/.sui/sui_config/sui.keystore` as `packages/walrus/test/live.write.test.ts`
- * does. The key is never printed, logged or written; any error while loading
- * it becomes one fixed message.
+ * The signer is `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key of a funded
+ * testnet account), as in `packages/walrus/test/live.write.test.ts`. The key
+ * is never printed, logged or written; any error while loading it becomes one
+ * fixed message.
  *
  * `private_data::store_entry(nonce, data)` on Mysten's canary package creates
  * a `PrivateData` object owned by the wallet whose key id is
@@ -41,7 +41,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schedule from "effect/Schedule"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import { loadCliSigner } from "@unconfirmed/test-support/keystore"
+import { loadLiveSigner } from "@unconfirmed/test-support/funded"
 import * as Approval from "../src/Approval.ts"
 import * as Config from "../src/Config.ts"
 import * as Seal from "../src/Seal.ts"
@@ -57,7 +57,7 @@ const TIMEOUT = 120_000
 // Signer (never print the key)
 // -----------------------------------------------------------------------------
 
-const loadSigner = loadCliSigner
+const loadSigner = loadLiveSigner
 
 // -----------------------------------------------------------------------------
 // Layers

@@ -24,6 +24,7 @@ import {
 } from "@unconfirmed/sui"
 import * as SuiGrpc from "../../sui/src/grpc/index.ts"
 import { DEVNET, faucet, grpcLayer, live, TESTNET } from "@unconfirmed/test-support/live"
+import { fundedAddress } from "@unconfirmed/test-support/funded"
 import * as SuiGraphQL from "../src/index.ts"
 
 const suite = live ? describe : describe.skip
@@ -373,10 +374,11 @@ suite("testnet parity with gRPC: new services", () => {
   }, 90_000)
 })
 
-suite("server-side resolution over GraphQL", () => {
+const fundedTestnet = fundedAddress()
+;(fundedTestnet === undefined ? describe.skip : suite)("server-side resolution over GraphQL", () => {
   test("Tx.build resolves on the node: one ResolveTransaction (plus the signature it checks against)", async () => {
     const { layer, requests } = graphqlLayer(GQL_TESTNET)
-    const funded = A("0xa7183179d9add5002bae12bcefd3268e3f4f3f8c1f064898951a5d80b1db78f4")
+    const funded = A(fundedTestnet!)
     const data = await Effect.runPromise(Tx.build(clockRecipe, { sender: funded, resolve: "server" }).pipe(Effect.provide(layer)))
     const input = data.kind.inputs[0]!
     expect(input._tag === "Object" && input.value._tag === "SharedObject" && input.value.mutability._tag).toBe("Immutable")

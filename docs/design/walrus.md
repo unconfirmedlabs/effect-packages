@@ -794,13 +794,7 @@ Expect each `Read.blob` to take 5–10 s, most of it WASM (W5); set test timeout
 
 ### 6.4 Live testnet, writes (`WALRUS_LIVE=1`, spends funds)
 
-`live.write.test.ts`. The signer is loaded from the Sui CLI keystore; the key never enters the environment, a log or the repo:
-
-```ts
-const active = /active_address:\s*"?(0x[0-9a-f]{64})/.exec(yield* readFile("~/.sui/sui_config/client.yaml"))![1]
-const keys = yield* PrivateKey.decodeKeystore(yield* readFile("~/.sui/sui_config/sui.keystore"))
-// for each key: build the signer for its scheme (Ed25519 here; Secp256k1 / Secp256r1 from their packages) and keep the one whose address === active
-```
+`live.write.test.ts`. The signer is `SUI_LIVE_PRIVATE_KEY`, a `suiprivkey1…` key of a funded testnet account (SUI and WAL), loaded by `@unconfirmed/test-support/funded` (`PrivateKey.decode`, then the scheme's `fromSecretKey`). Testing never reads the Sui CLI's config. The key never enters a log, an error message or the repo.
 
 Errors from this block must be mapped to a fixed message before they reach `expect` (no key material in assertion output). The test first reads balances and skips with a clear message below 0.3 SUI or 0.01 WAL.
 
