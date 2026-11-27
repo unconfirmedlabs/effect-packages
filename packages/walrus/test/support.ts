@@ -427,7 +427,7 @@ export const committeeNodes: Effect.Effect<ReadonlyArray<LiveNode>, unknown, Obj
     }), { concurrency: "unbounded" })
 })
 
-export const suiLayer = SuiGrpc.layer({ baseUrl: TESTNET_FULLNODE }).pipe(Layer.provide(FetchHttpClient.layer))
+export const suiLayer = SuiGrpc.layer({ url: TESTNET_FULLNODE }).pipe(Layer.provide(FetchHttpClient.layer))
 
 /** The newest `BlobCertified` events (blob id, end epoch, deletable, object id), newest first. */
 /**

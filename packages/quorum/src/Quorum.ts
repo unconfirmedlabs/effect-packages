@@ -24,7 +24,7 @@ export interface Success<M, A> {
   readonly value: A
 }
 
-/** A member that failed for good (not retryable, or its schedule ran out). `error` is its last error. */
+/** A member that failed for good (not retryable, or its `retry` schedule ran out). `error` is its last error. */
 export interface Failure<M, E> {
   readonly member: M
   readonly index: number
@@ -55,9 +55,9 @@ interface Common<M, A, E, R> {
   /** One attempt at one member. Typed failures count against the member; defects fail the whole call. */
   readonly run: (member: M) => Effect.Effect<A, E, R>
   /** Per-member retry policy. Absent: one attempt. */
-  readonly schedule?: Schedule.Schedule<unknown, E>
-  /** Retry only these errors (default: all). A `false` makes the failure final at once. */
-  readonly while?: (error: E) => boolean
+  readonly retry?: Schedule.Schedule<unknown, E>
+  /** Retry only these errors (default: all). A `false` makes the failure final at once. Only used with `retry`. */
+  readonly retryWhile?: (error: E) => boolean
   /**
    * Attempts in flight at once; a retrying member keeps its slot. Default `"unbounded"`. A function is
    * asked again whenever a slot may open (at the start and after every settlement), so the window can
@@ -334,7 +334,7 @@ const drive = <M, A, E, R>(
         throw new Cause.IllegalArgumentError(`Quorum: concurrency must return a positive integer or Infinity, got ${n}`)
       }
       const state: Array<"queued" | "running" | "settled"> = entries.map(() => "queued")
-      const { schedule, while: retryWhile } = common
+      const { retry: schedule, retryWhile } = common
       let next = 0
       let running = 0
 

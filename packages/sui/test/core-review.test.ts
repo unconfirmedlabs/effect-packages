@@ -92,7 +92,7 @@ const httpLayer = (chunks: ReadonlyArray<Uint8Array>, status = 200) =>
     })
   )
 const grpcOver = (chunks: ReadonlyArray<Uint8Array>, status?: number) =>
-  GrpcWeb.layer({ baseUrl: "http://node" }).pipe(Layer.provide(httpLayer(chunks, status)))
+  GrpcWeb.layer({ url: "http://node" }).pipe(Layer.provide(httpLayer(chunks, status)))
 const subscribe = Effect.flatMap(Effect.service(GrpcWeb), (g) =>
   g.serverStream(Rpc.SubscriptionService_SubscribeCheckpoints, {}).pipe(Stream.runCollect))
 const serviceInfo = Effect.flatMap(Effect.service(GrpcWeb), (g) => g.unary(Rpc.LedgerService_GetServiceInfo, {}))
@@ -136,7 +136,7 @@ describe("gRPC-web framing", () => {
         return Effect.never
       })
     )
-    const layer = GrpcWeb.layer({ baseUrl: "http://node", requestTimeout: "20 millis" }).pipe(Layer.provide(hanging))
+    const layer = GrpcWeb.layer({ url: "http://node", requestTimeout: "20 millis" }).pipe(Layer.provide(hanging))
     const e = failureOf(await Effect.runPromiseExit(Effect.provide(serviceInfo, layer))) as RpcError
     expect([e.code, e.retryable]).toEqual(["DEADLINE_EXCEEDED", true])
     expect(Object.keys(seen[0]!).some((k) => k === "traceparent" || k === "b3")).toBe(false)

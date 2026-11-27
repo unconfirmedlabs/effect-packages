@@ -32,7 +32,7 @@ const NETWORKS = {
 } as const
 
 const chain = (network: keyof typeof NETWORKS) =>
-  SuiGrpc.layer({ baseUrl: NETWORKS[network].url }).pipe(Layer.provide(FetchHttpClient.layer))
+  SuiGrpc.layer({ url: NETWORKS[network].url }).pipe(Layer.provide(FetchHttpClient.layer))
 
 const walrusLayer = (network: keyof typeof NETWORKS) =>
   Layer.mergeAll(System.layer, Committee.layer()).pipe(
@@ -133,7 +133,7 @@ suite("live chain state", () => {
                 (f.returns ?? []).map(sig).join(", ")
               })`
             }))
-        }).pipe(Effect.provide(GrpcWeb.layer({ baseUrl: NETWORKS[network].url })), Effect.provide(FetchHttpClient.layer))
+        }).pipe(Effect.provide(GrpcWeb.layer({ url: NETWORKS[network].url })), Effect.provide(FetchHttpClient.layer))
       )
     const [testnet, mainnet] = await Promise.all([loadAll("testnet"), loadAll("mainnet")])
     const [a, b] = await Promise.all([signatures("testnet", testnet.state.packageId), signatures("mainnet", mainnet.state.packageId)])

@@ -25,7 +25,7 @@ import * as DynamicFieldsGrpc from "@unconfirmed/sui/grpc/DynamicFieldsGrpc"
 import * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"
 import * as MultiSig from "@unconfirmed/sui-multisig"
 import * as Secp256k1 from "@unconfirmed/sui-secp256k1"
-import { baseUrl, recipe as aRecipe, SignatureSchemes, signer, to } from "./shared.ts"
+import { url, recipe as aRecipe, SignatureSchemes, signer, to } from "./shared.ts"
 
 declare const type: string
 declare const amount: bigint
@@ -39,10 +39,10 @@ declare const myKeyValueStore: Layer.Layer<KeyValueStore>
 
 export const layers = () => {
   // #region readme
-  SuiGrpc.layerCore({ baseUrl })                              // Chain, Objects, Coins, Packages, Transactions: all Tx.run needs
-  DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl })))  // core + one more (layerCore also provides GrpcWeb)
-  ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))  // just Objects
-  SuiGrpc.layer({ baseUrl })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
+  SuiGrpc.layerCore({ url })                              // Chain, Objects, Coins, Packages, Transactions: all Tx.run needs
+  DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ url })))  // core + one more (layerCore also provides GrpcWeb)
+  ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url })))  // just Objects
+  SuiGrpc.layer({ url })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
   // #endregion
 }
 
@@ -123,7 +123,7 @@ export const lifecycle = (recipe: typeof aRecipe) =>
   Effect.gen(function*() {
     // #region readme
     const layer = Layer.mergeAll(
-      EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),   // same backend (and GrpcWeb) as Transactions
+      EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ url }))),   // same backend (and GrpcWeb) as Transactions
       JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
     )
     yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
@@ -134,7 +134,7 @@ export const lifecycle = (recipe: typeof aRecipe) =>
 export const lifecycleBrowser = (recipe: typeof aRecipe) => {
   // #region readme
   const browser = Layer.mergeAll(
-    EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),
+    EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ url }))),
     JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())),  // one connection per layer scope
     SenderLockWebLocks.layer                                                           // fails typed without navigator.locks
   )

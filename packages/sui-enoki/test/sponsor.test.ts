@@ -60,7 +60,7 @@ const fakeEnoki = (tamper?: (data: T.TransactionData) => T.TransactionData, repo
   })
 
 const enoki = (http: ReturnType<typeof scripted>) =>
-  EnokiHttp.layer({ apiKey: "k", apiUrl: "https://enoki.test" }).pipe(Layer.provide(http.layer))
+  EnokiHttp.layer({ apiKey: "k", url: "https://enoki.test" }).pipe(Layer.provide(http.layer))
 
 describe("Sponsor", () => {
   test("transactionKind matches @mysten/sui's onlyTransactionKind build", async () => {
@@ -286,7 +286,7 @@ describe("ZkLoginFlow", () => {
       const path = new URL(req.url).pathname
       if (path === "/v1/zklogin/nonce") {
         const pk = fromB64(JSON.parse(req.body!).ephemeralPublicKey)
-        const nonce = forgeNonce ?? Effect.runSync(Nonce.generate({ flag: pk[0]!, bytes: pk.subarray(1) }, 12, "77"))
+        const nonce = forgeNonce ?? Effect.runSync(Nonce.generate({ flag: pk[0]!, bytes: pk.subarray(1) }, 12n, "77"))
         return { body: { data: { nonce, randomness: "77", epoch: 10, maxEpoch: 12, estimatedExpiration: 1 } } }
       }
       if (path === "/v1/zklogin") return { body: { data: { address, publicKey: b64(identifier), salt: String(legacySalt) } } }
@@ -304,8 +304,8 @@ describe("ZkLoginFlow", () => {
         const done = yield* ZkLoginFlow.complete(session, makeJwt({ ...claims, nonce: session.nonce }))
         return { session, done, ephemeral }
       }).pipe(Effect.provide(enoki(http))))
-      expect(session).toMatchObject({ randomness: "77", maxEpoch: 12, network: "testnet" })
-      expect(session.nonce).toBe(Effect.runSync(Nonce.generate(ephemeral.publicKey, 12, "77")))
+      expect(session).toMatchObject({ randomness: "77", maxEpoch: 12n, network: "testnet" })
+      expect(session.nonce).toBe(Effect.runSync(Nonce.generate(ephemeral.publicKey, 12n, "77")))
       expect(done.address).toBe(address)
       expect(done.signer.address).toBe(address)
       expect(done.salt).toBe(String(legacySalt))
@@ -320,7 +320,7 @@ describe("ZkLoginFlow", () => {
   test("a nonce that doesn't commit to our ephemeral key is refused", async () => {
     // e.g. a nonce for the right epoch and randomness but someone else's key
     const otherKey = Effect.runSync(Ed25519.fromSecretKey(seed(5))).publicKey
-    const http = flow(Address.normalize("0x1"), Effect.runSync(Nonce.generate(otherKey, 12, "77")))
+    const http = flow(Address.normalize("0x1"), Effect.runSync(Nonce.generate(otherKey, 12n, "77")))
     const e = await Effect.runPromise(Effect.gen(function*() {
       const ephemeral = yield* Ed25519.fromSecretKey(seed(4))
       return yield* Effect.flip(ZkLoginFlow.start({ ephemeral }))

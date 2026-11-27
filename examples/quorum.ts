@@ -26,7 +26,7 @@ export const quorum = Effect.gen(function*() {
     weight: (node) => node.shards.length,
     threshold: nShards - maxFaulty,
     run: storeAndConfirm,                            // one attempt at one member
-    schedule: nodeRetry, while: (e) => e.retryable,  // per-member retry
+    retry: nodeRetry, retryWhile: (e) => e.retryable,  // per-member retry
     concurrency: 50, order: "weightedShuffle",
     linger: (elapsed) => Duration.sum(Duration.times(elapsed, 0.5), Duration.millis(500))  // wait for stragglers
   })

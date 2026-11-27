@@ -10,6 +10,7 @@ import * as Signature from "@unconfirmed/sui-zklogin/Signature"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
+import * as SchemaGetter from "effect/SchemaGetter"
 
 // -----------------------------------------------------------------------------
 // Errors
@@ -71,7 +72,8 @@ export interface CreateZkLoginZkpInput {
   readonly jwt: string
   readonly ephemeralPublicKey: SignatureScheme.PublicKey
   readonly randomness: string
-  readonly maxEpoch: number
+  /** A u64; sent to Enoki as a JSON number. */
+  readonly maxEpoch: bigint
 }
 
 interface SponsorBase {
@@ -139,11 +141,25 @@ export const ZkLoginAddresses = Schema.Struct({
 })
 export type ZkLoginAddresses = typeof ZkLoginAddresses.Type
 
+/**
+ * An epoch (a u64 on chain) as a `bigint`. Decodes Enoki's JSON number or a decimal string; encodes to a
+ * decimal string, so a persisted `SessionData` survives `JSON.stringify`.
+ */
+export const Epoch = Schema.Union([
+  Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  Schema.String.check(Schema.isPattern(/^(0|[1-9][0-9]*)$/))
+]).pipe(
+  Schema.decodeTo(Schema.BigInt, {
+    decode: SchemaGetter.BigInt(),
+    encode: SchemaGetter.transform((b: bigint) => b.toString())
+  })
+)
+
 export const ZkLoginNonce = Schema.Struct({
   nonce: Schema.String,
   randomness: Schema.String,
-  epoch: Schema.Number,
-  maxEpoch: Schema.Number,
+  epoch: Epoch,
+  maxEpoch: Epoch,
   /** Milliseconds since the epoch. */
   estimatedExpiration: Schema.Number
 })

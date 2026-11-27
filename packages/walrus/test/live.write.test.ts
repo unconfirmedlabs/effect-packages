@@ -96,17 +96,17 @@ const loadSigner = loadCliSigner
 // Layers and helpers
 // -----------------------------------------------------------------------------
 
-const RELAY = process.env.WALRUS_RELAY_URL ?? UploadRelay.TESTNET_HOST
+const RELAY = process.env.WALRUS_RELAY_URL ?? UploadRelay.TESTNET_URL
 
 const layer = Layer.mergeAll(
   System.layer,
   Committee.layer(),
   StorageNode.layer(),
   Encoder.layer(),
-  UploadRelay.layer({ host: RELAY, maxTip: 1_000_000n })
+  UploadRelay.layer({ url: RELAY, maxTip: 1_000_000n })
 ).pipe(
   Layer.provideMerge(Config.layer(Config.testnet)),
-  Layer.provideMerge(SuiGrpc.layer({ baseUrl: FULLNODE })),
+  Layer.provideMerge(SuiGrpc.layer({ url: FULLNODE })),
   Layer.provideMerge(FetchHttpClient.layer)
 )
 

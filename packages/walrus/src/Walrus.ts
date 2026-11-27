@@ -4,7 +4,7 @@
  * a Sui client (`Objects`, `Packages`).
  *
  *   const layer = Walrus.layer({ network: "testnet" }).pipe(
- *     Layer.provideMerge(SuiGrpc.layer({ baseUrl })),
+ *     Layer.provideMerge(SuiGrpc.layer({ url })),
  *     Layer.provideMerge(FetchHttpClient.layer)
  *   )
  *   const bytes = yield* Read.blob(blobId).pipe(Effect.provide(layer))

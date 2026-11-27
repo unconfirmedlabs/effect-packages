@@ -33,7 +33,7 @@ const ours = async <A>(
   const http = scripted(() => reply)
   const exit = await Effect.runPromiseExit(
     Effect.flatMap(Effect.service(EnokiClient), f).pipe(
-      Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, apiUrl: API_URL, ...(additionalEpochs !== undefined && { additionalEpochs }) })),
+      Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, url: API_URL, ...(additionalEpochs !== undefined && { additionalEpochs }) })),
       Effect.provide(http.layer)
     )
   )
@@ -89,20 +89,23 @@ const CASES: Array<{
     name: "createZkLoginNonce (network, explicit epochs)",
     reply: data({ nonce: "n", randomness: "42", epoch: 10, maxEpoch: 12, estimatedExpiration: 1700000000000 }),
     theirs: (c) => c.createZkLoginNonce({ network: "testnet", ephemeralPublicKey: theirKey, additionalEpochs: 2 }),
-    ours: (c) => c.createZkLoginNonce({ network: "testnet", ephemeralPublicKey: ourKey, additionalEpochs: 2 })
+    ours: (c) => c.createZkLoginNonce({ network: "testnet", ephemeralPublicKey: ourKey, additionalEpochs: 2 }),
+    // Epochs are u64s: ours decodes them to bigint (theirs keeps the JSON numbers).
+    expected: { nonce: "n", randomness: "42", epoch: 10n, maxEpoch: 12n, estimatedExpiration: 1700000000000 }
   },
   {
     name: "createZkLoginNonce (configured default epochs, no network)",
     reply: data({ nonce: "n", randomness: "42", epoch: 10, maxEpoch: 13, estimatedExpiration: 1 }),
     theirs: (c) => c.createZkLoginNonce({ ephemeralPublicKey: theirKey }),
     ours: (c) => c.createZkLoginNonce({ ephemeralPublicKey: ourKey }),
-    additionalEpochs: 3
+    additionalEpochs: 3,
+    expected: { nonce: "n", randomness: "42", epoch: 10n, maxEpoch: 13n, estimatedExpiration: 1 }
   },
   {
     name: "createZkLoginZkp",
     reply: data(zkp),
     theirs: (c) => c.createZkLoginZkp({ network: "devnet", jwt: JWT, ephemeralPublicKey: theirKey, randomness: "42", maxEpoch: 12 }),
-    ours: (c) => c.createZkLoginZkp({ network: "devnet", jwt: JWT, ephemeralPublicKey: ourKey, randomness: "42", maxEpoch: 12 })
+    ours: (c) => c.createZkLoginZkp({ network: "devnet", jwt: JWT, ephemeralPublicKey: ourKey, randomness: "42", maxEpoch: 12n })
   },
   {
     name: "createSponsoredTransaction (sender)",
@@ -171,13 +174,30 @@ describe("EnokiHttp matches @mysten/enoki", () => {
   }
 })
 
+describe("EnokiHttp options", () => {
+  test("url: trailing slashes are stripped; extra headers are sent, but never replace the API key", async () => {
+    const http = scripted(() => data({ address: "0xabc", publicKey: "AAE=", salt: "123" }))
+    await Effect.runPromise(
+      Effect.flatMap(Effect.service(EnokiClient), (c) => c.getZkLogin({ jwt: JWT })).pipe(
+        Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, url: `${API_URL}/`, headers: { "x-route": "eu", authorization: "Bearer other" } })),
+        Effect.provide(http.layer)
+      )
+    )
+    const request = http.requests[0]!
+    const headers = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]))
+    expect(request.url).toBe(`${API_URL}/v1/zklogin`)
+    expect(headers["x-route"]).toBe("eu")
+    expect(headers["authorization"]).toBe(`Bearer ${API_KEY}`)
+  })
+})
+
 describe("EnokiHttp errors", () => {
   const failure = async (reply: Reply | "network-error") => {
     const http = scripted(() => reply)
     return Effect.runPromise(
       Effect.flatMap(Effect.service(EnokiClient), (c) => c.getZkLogin({ jwt: JWT })).pipe(
         Effect.flip,
-        Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, apiUrl: API_URL })),
+        Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, url: API_URL })),
         Effect.provide(http.layer)
       )
     )
@@ -261,7 +281,7 @@ describe("EnokiHttp tracing", () => {
           c.getZkLogin({ jwt: JWT }).pipe(Effect.ignore),
           c.executeSponsoredTransaction({ digest: "SECRETDIGEST", signature: txBytes })
         )).pipe(
-          Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, apiUrl: API_URL })),
+          Effect.provide(EnokiHttp.layer({ apiKey: API_KEY, url: API_URL })),
           Effect.provide(http.layer),
           Effect.withTracer(tracer),
           // Record every header on the client span, so redaction is what's left to keep the JWT out.

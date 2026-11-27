@@ -455,7 +455,7 @@ Algorithm of `blob`:
 - *Exports.* Besides `blob`, `metadata` and `status`: `defaultRetry()` (exponential from 200 ms, each delay capped at 5 s, `Schedule.max` with `recurs(4)`) and `DEFAULT_MAX_SIZE` (1 GiB). `maxSize` failures reuse `BlobTooLarge { size, max: maxSize }`.
 - *Step 1.* An explicit `certifiedEpoch` always goes through `readCommittee` (so it can yield `BehindCurrentEpoch` outside a transition too). When the status lookup during `EpochChangeSync` says `Invalid`, the read fails with `InvalidBlob`; `Nonexistent` or not certified fails with `BlobNotFound` (Rust: `BlobIdDoesNotExist` / not certified).
 - *Step 2.* With threshold 1, `Quorum.run` only fails once *every* node has failed (quorum.md §3.7 assumes otherwise), and with three lanes, slow retries and 15–30 s timeouts on testnet's unreachable nodes a missing blob took about 2 minutes. So: (a) not-found and blocked answers are tallied as they arrive and, once they weigh `2f + 1`, the read stops with `BlobNotFound` / `BlobBlocked` (first a `Deferred` raced against the quorum; since Q3, `Quorum.run`'s `giveUp: { when: NotFound or Blocked, weight: 2f + 1 }`, then the same classification of the failures); (b) the metadata window starts at 3 requests and widens by one for every node that fails for good (first a resizable `Semaphore`; since the review, `Quorum`'s function-valued `concurrency: (p) => 3 + p.failed`, so unstarted nodes are reported `started: false`). Slivers need no `giveUp`: with threshold `n − 2f` the quorum is already unreachable at `2f + 1` failed shards. A present blob still costs about three metadata downloads; a random id now fails in about 6 s on testnet.
-- *Step 3.* The per-member retry runs inside the member (not through `Quorum`'s `schedule`), so that when a node gives up for good (non-retryable error, or retries exhausted) or is blamed, it is recorded in a per-read map and its other shards fail at once with that same error, including siblings that are mid-retry (`while` also stops once the node is marked). Not-found and blocked weight is still counted per shard.
+- *Step 3.* The per-member retry runs inside the member (not through `Quorum`'s `retry`), so that when a node gives up for good (non-retryable error, or retries exhausted) or is blamed, it is recorded in a per-read map and its other shards fail at once with that same error, including siblings that are mid-retry (`while` also stops once the node is marked). Not-found and blocked weight is still counted per shard.
 - *Steps 4–5.* Slivers that passed `sliverRoots` are kept across blame rounds; each round re-checks only the slivers fetched since, and refetches `need − kept`. A blamed node's other shards then fail fast as `Malformed`. After the third blame round: `NotEnoughSlivers` listing the blamed nodes.
 - *Step 6.* No sleeps: on `NoMetadata`, `NotEnoughSlivers` or `BehindCurrentEpoch` the committees are refreshed at once and the read is retried (at most twice) only if the current epoch or `transitioning` changed; otherwise the original error. `metadata` uses the same wrapper.
 - *Status.* The whole `agree` is retried on exponential 500 ms with 2 retries (3 calls, about 1.5 s) before `StatusUnverified`; `prefer` compares each group's first answer with `Status.order`.
@@ -619,7 +619,7 @@ export class UploadRelay extends Context.Service<UploadRelay, {
   readonly upload: (o: { readonly blob: Uint8Array; readonly blobId: BlobId; readonly nonce?: Uint8Array; readonly txDigest?: string; readonly deletableBlobObject?: Address })
     => Effect.Effect<Certificate, RelayError>
 }>()("@unconfirmed/walrus/UploadRelay") {}
-export const layer: (o: { readonly host: string; readonly maxTip: bigint; readonly tipAddress?: string; readonly requestTimeout?: Duration.Input; readonly minUploadRate?: number }) => Layer.Layer<UploadRelay, never, HttpClient.HttpClient>
+export const layer: (o: { readonly url: string; readonly maxTip: bigint; readonly tipAddress?: string; readonly requestTimeout?: Duration.Input; readonly minUploadRate?: number; readonly headers?: Readonly<Record<string, string>>; readonly tracerPropagation?: boolean }) => Layer.Layer<UploadRelay, never, HttpClient.HttpClient>
 export const tipAmount: (config: TipConfig, unencodedLength: number, nShards: number) => bigint                      // R1
 /** Must be the first thing the register recipe does: the relay reads input 0 (R3). Then pays the tip in SUI. */
 export const authAndTip: (o: { readonly blob: Uint8Array; readonly nonce: Uint8Array }) => Effect.Effect<void, RelayError | TipTooHigh, Ptb.PtbBuilder | UploadRelay | System>
@@ -636,7 +636,7 @@ As built (W8):
 - `upload` sends `encoding_type=RS2` always, as `@mysten/walrus`'s write flow does; URL (parameter order included) and body equal `UploadRelayClient.writeBlob`'s. We also label the body `application/octet-stream`. `nonce` and `tx_id` are sent only when given (`Write` gives them when the relay wants a tip). Non-2xx is `RelayError { status, message: body text }`; no answer is `RelayError` without `status`; default `requestTimeout` 60 s (the relay stores the blob on the nodes before answering).
 - The nonce comes from `crypto.getRandomValues` (`makeNonce`), not Effect's `Random`: it is what keeps others from spending our tip transaction, so it must be unpredictable. Tests pin it through a saved step.
 - `verifyCertificate` fails with `CertificateInvalid` only: a malformed signature or key is reported as `CertificateInvalid` ("malformed signature"), since it is the relay's fault. It also checks the signature is 96 bytes.
-- Extra exports: `parseTipConfig`, `parseUploadResponse` (accepts `blob_id` as bytes or text and checks it is the requested blob), `uploadPath`, `AuthPackage`, `authPackage`, `makeNonce`, `TESTNET_HOST`, `MAINNET_HOST`, `TipKind`, `UploadOptions`, `UploadRelayOptions`, `UploadRelayService`.
+- Extra exports: `parseTipConfig`, `parseUploadResponse` (accepts `blob_id` as bytes or text and checks it is the requested blob), `uploadPath`, `AuthPackage`, `authPackage`, `makeNonce`, `TESTNET_URL`, `MAINNET_URL`, `TipKind`, `UploadOptions`, `UploadRelayOptions`, `UploadRelayService`.
 
 ### 4.9 Quilts
 
@@ -716,7 +716,7 @@ export const layer: (options: WalrusOptions)
   => Layer.Layer<WalrusConfig | System | Committees | StorageNodes | Encoder, EncoderError, HttpClient.HttpClient | Objects.Objects | Packages.Packages>
 
 // A program:
-const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), Layer.provide(FetchHttpClient.layer))
+const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ url })), Layer.provide(FetchHttpClient.layer))
 const bytes = yield* Read.blob(blobId).pipe(Effect.provide(layer))
 ```
 

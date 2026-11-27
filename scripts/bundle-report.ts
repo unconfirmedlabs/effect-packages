@@ -53,14 +53,14 @@ const programs: Record<string, string> = {
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/sui", "Address", "Objects")}
     ${style === "named" ? `import { GrpcWeb, ObjectsGrpc } from "@unconfirmed/sui/grpc"` : `import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"\nimport * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"`}
-    const layer = ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    const layer = ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(Address.normalize("0x6"))).pipe(Effect.provide(layer))).then(console.log)`,
   "ours: build + resolve + sign + execute": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = SuiGrpc.layerCore({ baseUrl: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
+    const layer = SuiGrpc.layerCore({ url: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Tx.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
@@ -70,7 +70,7 @@ const programs: Record<string, string> = {
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
+    const layer = SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Tx.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
@@ -101,7 +101,7 @@ const programs: Record<string, string> = {
     ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
     ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = Layer.mergeAll(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStore.layerMemory))).pipe(Layer.provide(FetchHttpClient.layer))
+    const layer = Layer.mergeAll(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStore.layerMemory))).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
@@ -115,7 +115,7 @@ const programs: Record<string, string> = {
     import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb"
     import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = Layer.mergeAll(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
+    const layer = Layer.mergeAll(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
@@ -128,7 +128,7 @@ const programs: Record<string, string> = {
     import * as KeyValueStoreOpfs from "@unconfirmed/sui-lifecycle/KeyValueStoreOpfs"
     import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = Layer.mergeAll(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreOpfs.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
+    const layer = Layer.mergeAll(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreOpfs.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Lifecycle.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
@@ -147,7 +147,7 @@ const programs: Record<string, string> = {
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/walrus", "Read", "Walrus")}
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provide(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provide(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Read.blob(process.argv[2]).pipe(Effect.provide(layer))).then(console.log)`,
   "walrus: write a blob (nodes)": `
     ${E("Effect")}; ${E("Layer")}
@@ -155,7 +155,7 @@ const programs: Record<string, string> = {
     ${I("@unconfirmed/sui", "Ed25519")}
     ${I("@unconfirmed/walrus", "Walrus", "Write")}
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Write.run(new Uint8Array(32), { epochs: 1, deletable: true, executor: Write.viaTx(signer) })
@@ -166,7 +166,7 @@ const programs: Record<string, string> = {
     ${I("@unconfirmed/sui", "Ed25519")}
     ${I("@unconfirmed/walrus", "UploadRelay", "Walrus", "Write")}
     import * as SuiGrpc from "@unconfirmed/sui/grpc"
-    const layer = Layer.mergeAll(Walrus.layer({ network: "testnet" }), UploadRelay.layer({ host: UploadRelay.TESTNET_HOST })).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    const layer = Layer.mergeAll(Walrus.layer({ network: "testnet" }), UploadRelay.layer({ url: UploadRelay.TESTNET_URL })).pipe(Layer.provideMerge(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Write.run(new Uint8Array(32), { epochs: 1, deletable: true, executor: Write.viaTx(signer), via: "relay" })
@@ -190,7 +190,7 @@ const programs: Record<string, string> = {
     ${I("@unconfirmed/sui", "Ed25519")}
     ${I("@unconfirmed/seal", "Approval", "Config", "Seal", "SealGrpc")}
     const packageId = "0x58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2"
-    const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" } }).pipe(Layer.provideMerge(FetchHttpClient.layer))
+    const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { url: "https://fullnode.testnet.sui.io:443" } }).pipe(Layer.provideMerge(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       const id = new Uint8Array(32)
@@ -211,7 +211,7 @@ const programs: Record<string, string> = {
     ${E("Effect")}
     ${I("@unconfirmed/sui", "Ed25519")}
     ${I("@unconfirmed/sui-zklogin", "ZkLogin")}
-    Effect.runPromise(Effect.flatMap(Ed25519.generate, (ephemeral) => ZkLogin.signer({ ephemeral, inputs: JSON.parse(process.argv[2]), maxEpoch: 10 }))).then(console.log)`,
+    Effect.runPromise(Effect.flatMap(Ed25519.generate, (ephemeral) => ZkLogin.signer({ ephemeral, inputs: JSON.parse(process.argv[2]), maxEpoch: 10n }))).then(console.log)`,
   "mysten: verify a signature": `
     import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
     verifyPersonalMessageSignature(new Uint8Array([1]), "AA==", { offline: true }).then(console.log)`,

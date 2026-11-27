@@ -96,7 +96,7 @@ describe("zkLogin parity with @mysten/sui", () => {
     const kp = Ed25519Keypair.fromSecretKey(seed(7))
     const ours = run(Ed25519.fromSecretKey(seed(7)))
     for (const [maxEpoch, randomness] of [[10, "100681567828351849884072155819400689117"], [954, 5n], [0, "0"]] as const) {
-      expect(run(Nonce.generate(ours.publicKey, maxEpoch, randomness))).toBe(
+      expect(run(Nonce.generate(ours.publicKey, BigInt(maxEpoch), randomness))).toBe(
         Theirs.generateNonce(kp.getPublicKey(), maxEpoch, randomness)
       )
     }
@@ -145,7 +145,7 @@ describe("zkLogin parity with @mysten/sui", () => {
       })
       const { signer, signed } = run(Effect.gen(function*() {
         const ephemeral = yield* Ed25519.fromSecretKey(seed(9))
-        const signer = yield* ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch: 954, legacyAddress })
+        const signer = yield* ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch: 954n, legacyAddress })
         return { signer, signed: yield* Signer.signPersonalMessage(signer, msg) }
       }))
       expect(signer.address).toBe(theirs.toSuiAddress() as any)
@@ -160,7 +160,7 @@ describe("zkLogin parity with @mysten/sui", () => {
       legacyAddress: true
     }).toSuiAddress()
     const refused = run(Effect.flip(Effect.flatMap(Ed25519.fromSecretKey(seed(9)), (ephemeral) =>
-      ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch: 954, address: expected as any }))))
+      ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch: 954n, address: expected as any }))))
     expect(refused._tag).toBe("InvalidKey")
   })
 })

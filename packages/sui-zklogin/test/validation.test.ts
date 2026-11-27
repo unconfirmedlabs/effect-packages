@@ -37,9 +37,9 @@ describe("address seeds", () => {
   test("ZkLogin.signer takes the seed only as canonical decimal in the field", async () => {
     const ephemeral = await Effect.runPromise(Ed25519.generate)
     const good = String(Theirs.genAddressSeed(1n, "sub", claims.sub, claims.aud))
-    await Effect.runPromise(ZkLogin.signer({ ephemeral, inputs: inputs(good), maxEpoch: 10 }))
+    await Effect.runPromise(ZkLogin.signer({ ephemeral, inputs: inputs(good), maxEpoch: 10n }))
     for (const seed of ["", "0x10", " 16 ", "-1", "016", "1e3", String(Poseidon.BN254_FIELD_SIZE)]) {
-      const err = await Effect.runPromise(Effect.flip(ZkLogin.signer({ ephemeral, inputs: inputs(seed), maxEpoch: 10 })))
+      const err = await Effect.runPromise(Effect.flip(ZkLogin.signer({ ephemeral, inputs: inputs(seed), maxEpoch: 10n })))
       expect(err._tag, JSON.stringify(seed)).toBe("InvalidKey")
     }
   })
@@ -47,14 +47,15 @@ describe("address seeds", () => {
   test("ZkLogin.signer refuses a maxEpoch that is not a u64", async () => {
     const ephemeral = await Effect.runPromise(Ed25519.generate)
     const zk = inputs(String(Theirs.genAddressSeed(1n, "sub", claims.sub, claims.aud)))
-    for (const maxEpoch of [10, 10n, "10", 2n ** 64n - 1n]) {
+    for (const maxEpoch of [0n, 10n, 2n ** 64n - 1n]) {
       await Effect.runPromise(ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch }))
     }
-    for (const maxEpoch of ["", "0x10", " 1", -1, 1.5, -1n, 2n ** 64n, Number.MAX_SAFE_INTEGER + 2]) {
+    // Untyped callers: a number or string is refused rather than coerced.
+    for (const maxEpoch of [-1n, 2n ** 64n, 10, "10", ""] as ReadonlyArray<any>) {
       const err = await Effect.runPromise(Effect.flip(ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch })))
       expect(err._tag, String(maxEpoch)).toBe("InvalidKey")
     }
-    const serialize = Signature.serialize({ inputs: zk, maxEpoch: "", userSignature: new Uint8Array(97) })
+    const serialize = Signature.serialize({ inputs: zk, maxEpoch: -1n, userSignature: new Uint8Array(97) })
     expect(flip(serialize)._tag).toBe("InvalidZkLoginInput")
     expect(flip(Nonce.generate({ flag: 0, bytes: new Uint8Array(32) }, 2n ** 64n, 1n))._tag).toBe("InvalidZkLoginInput")
   })

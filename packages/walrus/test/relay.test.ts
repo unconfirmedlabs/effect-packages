@@ -85,7 +85,7 @@ const failure = <A, E>(exit: Exit.Exit<A, E>): E => {
 
 const relayLayer = (route: (req: Recorded) => Outcome, options: Partial<UploadRelay.UploadRelayOptions> = {}) => {
   const http = scripted(route)
-  return { layer: UploadRelay.layer({ host: HOST, maxTip: 1_000_000n, ...options }).pipe(Layer.provide(http.layer)), requests: http.requests }
+  return { layer: UploadRelay.layer({ url: HOST, maxTip: 1_000_000n, ...options }).pipe(Layer.provide(http.layer)), requests: http.requests }
 }
 const withRelay = <A, E>(layer: Layer.Layer<UploadRelay.UploadRelay>, f: (r: UploadRelay.UploadRelayService) => Effect.Effect<A, E>) =>
   Effect.runPromise(Effect.exit(Effect.provide(Effect.flatMap(Effect.service(UploadRelay.UploadRelay), f), layer)))
@@ -208,6 +208,14 @@ describe("http", () => {
     expect(relay.requests[0]!.method).toBe(request.method)
     expect(result).toEqual({ address: TIP_ADDRESS, kind: { const: 105 } })
     expect(config).toEqual({ _tag: "SendTip", address: TIP_ADDRESS, kind: { _tag: "Const", amount: 105n } })
+  })
+
+  test("url: trailing slashes are stripped; extra headers go with every request", async () => {
+    const relay = relayLayer(() => ({ body: CONST_TIP }), { url: `${HOST}//`, headers: { authorization: "Bearer t" } })
+    value(await withRelay(relay.layer, (r) => r.tipConfig))
+    expect(relay.requests[0]!.url).toBe(`${HOST}/v1/tip-config`)
+    expect(relay.requests[0]!.headers["authorization"]).toBe("Bearer t")
+    expect(relay.requests[0]!.headers["traceparent"]).toBeUndefined()
   })
 
   test("blob_id may also come as text", async () => {
@@ -357,7 +365,7 @@ describe("authAndTip", () => {
 
   test("an untyped caller without maxTip pays no tip at all (TipTooHigh, max 0)", async () => {
     const unbounded = scripted(() => ({ body: CONST_TIP }))
-    const layer = UploadRelay.layer({ host: HOST } as UploadRelay.UploadRelayOptions).pipe(Layer.provide(unbounded.layer))
+    const layer = UploadRelay.layer({ url: HOST } as UploadRelay.UploadRelayOptions).pipe(Layer.provide(unbounded.layer))
     expect(failure(await authWith(layer))).toMatchObject({ _tag: "TipTooHigh", tip: 105n, max: 0n })
     // maxTip 0n still works with a relay that wants no tip.
     const free = relayLayer(() => ({ body: JSON.stringify("no_tip") }), { maxTip: 0n })

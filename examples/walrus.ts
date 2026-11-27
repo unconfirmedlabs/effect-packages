@@ -17,7 +17,7 @@ import * as Quilt from "@unconfirmed/walrus/Quilt"
 import * as QuiltRead from "@unconfirmed/walrus/QuiltRead"
 import * as System from "@unconfirmed/walrus/System"
 import * as UploadRelay from "@unconfirmed/walrus/UploadRelay"
-import { baseUrl, signer } from "./shared.ts"
+import { url, signer } from "./shared.ts"
 
 declare const blobId: BlobId
 declare const entries: ReadonlyArray<Quilt.QuiltEntry>
@@ -26,7 +26,7 @@ export const nodes = Effect.gen(function*() {
   // #region readme
   // System, committees, storage nodes and the encoder for one network; needs an HttpClient and a Sui client.
   const layer = Walrus.layer({ network: "testnet" }).pipe(          // or { config: { systemObjectId, stakingObjectId } }
-    Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })),
+    Layer.provideMerge(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })),
     Layer.provideMerge(FetchHttpClient.layer)
   )
 
@@ -44,8 +44,8 @@ export const relay = (bytes: Uint8Array) =>
     // #region readme
     const layer = Layer.mergeAll(
       Walrus.layer({ network: "testnet" }),
-      UploadRelay.layer({ host: UploadRelay.TESTNET_HOST, maxTip: 1_000n })   // required; `0n` accepts only relays that want no tip
-    ).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), Layer.provideMerge(FetchHttpClient.layer))
+      UploadRelay.layer({ url: UploadRelay.TESTNET_URL, maxTip: 1_000n })   // required; `0n` accepts only relays that want no tip
+    ).pipe(Layer.provideMerge(SuiGrpc.layer({ url })), Layer.provideMerge(FetchHttpClient.layer))
     yield* Write.run(bytes, { epochs: 5, deletable: true, executor: Write.viaTx(signer), via: "relay" })
     // #endregion
   })

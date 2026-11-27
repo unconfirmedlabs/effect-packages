@@ -75,7 +75,7 @@ for (const [network, { aggregators, servers, url }] of Object.entries(networks))
         listOwned: o.listOwned
       }))
   )
-  const chain = SuiGrpc.layer({ baseUrl: url }).pipe(Layer.provide(FetchHttpClient.layer))
+  const chain = SuiGrpc.layer({ url }).pipe(Layer.provide(FetchHttpClient.layer))
   const onChain = await Effect.runPromise(
     Effect.forEach(servers, (id) => KeyServer.read(id as Address), { concurrency: "unbounded" }).pipe(
       Effect.provide(recording.pipe(Layer.provide(chain)))

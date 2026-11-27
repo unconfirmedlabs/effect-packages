@@ -3,7 +3,7 @@
  * server that takes the raw blob, encodes it, stores it on the nodes and
  * answers with a certificate, in exchange for a tip in SUI.
  *
- *   UploadRelay.layer({ host: "https://upload-relay.testnet.walrus.space", maxTip: 10_000_000n })
+ *   UploadRelay.layer({ url: UploadRelay.TESTNET_URL, maxTip: 10_000_000n })
  *     .pipe(Layer.provide(FetchHttpClient.layer))
  *
  * The relay is trusted with availability only: `verifyCertificate` checks
@@ -140,12 +140,15 @@ export interface UploadRelayService {
 export class UploadRelay extends Context.Service<UploadRelay, UploadRelayService>()("@unconfirmed/walrus/UploadRelay") {}
 
 export interface UploadRelayOptions {
-  /** The relay's base URL, e.g. `https://upload-relay.testnet.walrus.space`. */
-  readonly host: string
+  /**
+   * The relay's base URL, e.g. {@link TESTNET_URL}. Request paths (`/v1/…`) are appended to it;
+   * trailing slashes are stripped.
+   */
+  readonly url: string
   /**
    * The most the client will tip per blob, in MIST; above it `authAndTip` fails with `TipTooHigh` before
    * anything is signed. Required: the amount comes from the relay's `/v1/tip-config` answer, so without a
-   * bound the relay (or whoever answers for its host) would choose what the signer pays (`@mysten/walrus`
+   * bound the relay (or whoever answers at its URL) would choose what the signer pays (`@mysten/walrus`
    * likewise needs `sendTip: { max }`). `0n` accepts only relays that want no tip.
    */
   readonly maxTip: bigint
@@ -161,12 +164,14 @@ export interface UploadRelayOptions {
   readonly requestTimeout?: Duration.Input
   /** The slowest uplink an upload is expected to tolerate, in bytes per second. Default 125,000 (1 Mbit/s). */
   readonly minUploadRate?: number
+  /** Sent with every request, e.g. `{ authorization: "Bearer …" }` for a relay behind auth. */
+  readonly headers?: Readonly<Record<string, string>>
   /** Default `false`, as for storage nodes: trace headers would make browsers preflight. */
   readonly tracerPropagation?: boolean
 }
 
-export const TESTNET_HOST = "https://upload-relay.testnet.walrus.space"
-export const MAINNET_HOST = "https://upload-relay.mainnet.walrus.space"
+export const TESTNET_URL = "https://upload-relay.testnet.walrus.space"
+export const MAINNET_URL = "https://upload-relay.mainnet.walrus.space"
 
 /** `blob_id` is serde's form of `BlobId([u8; 32])`: an array of 32 numbers (live); the text form is accepted too. */
 const UploadResponse = /* @__PURE__ */ Schema.Struct({
@@ -222,7 +227,8 @@ export const layer = (options: UploadRelayOptions): Layer.Layer<UploadRelay, nev
     UploadRelay,
     Effect.gen(function*() {
       const http = yield* HttpClient.HttpClient
-      const base = options.host.replace(/\/+$/, "")
+      const base = options.url.replace(/\/+$/, "")
+      const headers = options.headers ?? {}
       const baseTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60))
       const minUploadRate = options.minUploadRate ?? DEFAULT_MIN_UPLOAD_RATE
       const tracerPropagation = options.tracerPropagation ?? false
@@ -235,7 +241,7 @@ export const layer = (options: UploadRelayOptions): Layer.Layer<UploadRelay, nev
       ): Effect.Effect<unknown, RelayError> => {
         const fail = (message: string, status?: number) =>
           new RelayError({ ...(status !== undefined && { status }), message: `${operation}: ${message}` })
-        return http.execute(HttpClientRequest.prependUrl(request, base)).pipe(
+        return http.execute(HttpClientRequest.setHeaders(HttpClientRequest.prependUrl(request, base), headers)).pipe(
           Effect.mapError((e) => fail(e.message)),
           Effect.flatMap((res) =>
             Effect.flatMap(

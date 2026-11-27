@@ -295,8 +295,8 @@ const agreeStatus = (
     threshold: Bft.validity(n),
     quorum: Bft.quorum(n),
     prefer: (a, b) => Status.order(a.successes[0]!.value, b.successes[0]!.value),
-    schedule: retry,
-    while: StorageNode.retryable
+    retry,
+    retryWhile: StorageNode.retryable
   })
   return (rounds > 0 ? Effect.retry(once, { schedule: agreementRetry(rounds) }) : once).pipe(
     Effect.map((agreed) => agreed.winner.successes[0]!.value),
@@ -389,8 +389,8 @@ const fetchMetadata = (
     return yield* Quorum.run(committee.nodes, {
       weight: (node) => node.shards.length,
       run: (node) => Effect.flatMap(nodes.metadata(node, blobId, { maxBytes }), (bytes) => verify(node, bytes)),
-      schedule: retry,
-      while: (e) => e.kind === "RateLimited",
+      retry,
+      retryWhile: (e) => e.kind === "RateLimited",
       concurrency: (p) => METADATA_LANES + p.failed,
       threshold: 1,
       order: "shuffle",

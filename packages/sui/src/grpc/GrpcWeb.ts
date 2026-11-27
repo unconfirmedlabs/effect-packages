@@ -155,8 +155,11 @@ export const httpCode = (status: number): RpcCode =>
 // -----------------------------------------------------------------------------
 
 export interface GrpcWebOptions {
-  /** A full node or RPC provider, e.g. `https://fullnode.mainnet.sui.io:443`. */
-  readonly baseUrl: string
+  /**
+   * Base URL of a full node or RPC provider, e.g. `https://fullnode.mainnet.sui.io:443`.
+   * Method paths are appended to it; trailing slashes are stripped.
+   */
+  readonly url: string
   /** Extra headers on every call (API keys, routing). */
   readonly headers?: Readonly<Record<string, string>>
   /**
@@ -181,7 +184,7 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
       GrpcWeb,
       Effect.gen(function*() {
         const http = yield* HttpClient.HttpClient
-        const baseUrl = options.baseUrl.replace(/\/+$/, "")
+        const base = options.url.replace(/\/+$/, "")
         const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? "30 seconds")
         const tracerPropagation = options.tracerPropagation ?? false
 
@@ -195,7 +198,7 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
             catch: (e) => fail(`invalid request: ${e instanceof Error ? e.message : String(e)}`, "INVALID_ARGUMENT")
           }).pipe(
             Effect.flatMap((body) =>
-              HttpClientRequest.post(`${baseUrl}/${path}`).pipe(
+              HttpClientRequest.post(`${base}/${path}`).pipe(
                 HttpClientRequest.setHeaders({ ...options.headers, "x-grpc-web": "1", accept: "application/grpc-web+proto" }),
                 HttpClientRequest.bodyUint8Array(body, "application/grpc-web+proto"),
                 http.execute,

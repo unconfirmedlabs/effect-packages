@@ -132,7 +132,7 @@ suite("devnet", () => {
         // 4. Generate from the published package over gRPC.
         const onChain = yield* FromGrpc.load(pkg, { name: "fixture" })
         return { pkg, published, created, updated, before, after, vault, onChain, thingId }
-      }).pipe(Effect.provide(GrpcWeb.layer({ baseUrl: DEVNET }).pipe(Layer.provideMerge(layer))))
+      }).pipe(Effect.provide(GrpcWeb.layer({ url: DEVNET }).pipe(Layer.provideMerge(layer))))
     )
 
     const { pkg, before, after, vault, thingId } = result

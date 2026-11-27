@@ -47,7 +47,7 @@ const stubVerifier = () => {
 
 const setup = Effect.gen(function*() {
   const ephemeral = yield* Ed25519.fromSecretKey(seed(9))
-  const zkSigner = yield* ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch: 954 })
+  const zkSigner = yield* ZkLogin.signer({ ephemeral, inputs: zk, maxEpoch: 954n })
   const other = yield* Ed25519.fromSecretKey(seed(1))
   const pk = yield* MultiSig.publicKey({
     members: [{ publicKey: other.publicKey, weight: 1 }, { publicKey: zkSigner.publicKey, weight: 1 }],
@@ -148,7 +148,7 @@ describe("ZkLogin.scheme", () => {
       const stranger = yield* ZkLogin.signer({
         ephemeral,
         inputs: inputs(String(Theirs.genAddressSeed(43n, "sub", claims.sub, claims.aud))),
-        maxEpoch: 954
+        maxEpoch: 954n
       })
       const sig = yield* Signer.signPersonalMessage(stranger, msg)
       // Splice the stranger's signature into the member slot by hand.
@@ -192,7 +192,7 @@ describe("ZkLogin.scheme", () => {
     const legacyInputs = inputs(String(Theirs.genAddressSeed(legacySalt, "sub", claims.sub, claims.aud)))
     const result = await Effect.runPromise(Effect.gen(function*() {
       const ephemeral = yield* Ed25519.fromSecretKey(seed(9))
-      const signer = yield* ZkLogin.signer({ ephemeral, inputs: legacyInputs, maxEpoch: 954, legacyAddress: true })
+      const signer = yield* ZkLogin.signer({ ephemeral, inputs: legacyInputs, maxEpoch: 954n, legacyAddress: true })
       const { signature } = yield* Signer.signPersonalMessage(signer, msg)
       const v = yield* Verify.personalMessage(msg, signature, { address: signer.address })
       const other = yield* Effect.flip(Verify.personalMessage(msg, signature, { address: "0x" + "ab".repeat(32) as any }))

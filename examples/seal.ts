@@ -22,9 +22,9 @@ export const seal = Effect.gen(function*() {
   // (Objects, Packages) over gRPC-web; needs an HttpClient.
   const layer = SealGrpc.layer({
     servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee],
-    grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" }
+    grpc: { url: "https://fullnode.testnet.sui.io:443" }
   }).pipe(Layer.provideMerge(FetchHttpClient.layer))
-  // A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), ...).
+  // A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ url })), ...).
   // SuiGrpc.layer ships every service's RPCs (about 60 KB more than Seal needs).
 
   const id = Bcs.encodeSync(Bcs.Address)(signer.address)                       // account_based: the id is the user's address
