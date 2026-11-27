@@ -36,6 +36,7 @@
     "@unconfirmed/sui-secp256r1": "workspace:*",
     "@unconfirmed/sui-wallet": "workspace:*",
     "@unconfirmed/sui-zklogin": "workspace:*",
+    "@unconfirmed/test-support": "workspace:*",
     "@unconfirmed/walrus": "workspace:*",
     "effect": "4.1.6",
     "esbuild": "0.28.2",

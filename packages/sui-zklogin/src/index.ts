@@ -3,6 +3,7 @@
  * (`@unconfirmed/sui-zklogin/ZkLogin`, `.../Nonce`, ...); this barrel is for convenience.
  */
 export * from "./ZkLogin.ts"
+export * as ZkLogin from "./ZkLogin.ts"
 export * as AddressSeed from "./AddressSeed.ts"
 export * from "./Errors.ts"
 export * as Jwt from "./Jwt.ts"

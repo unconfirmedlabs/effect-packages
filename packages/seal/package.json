@@ -16,5 +16,11 @@
     "@unconfirmed/quorum": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6"
+  },
+  "devDependencies": {
+    "@mysten/seal": "2.0.1",
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/sui-wallet": "workspace:*",
+    "@unconfirmed/test-support": "workspace:*"
   }
 }

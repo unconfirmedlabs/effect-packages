@@ -23,12 +23,20 @@ export class InvalidEncoding extends /* @__PURE__ */ Schema.TaggedError<InvalidE
   /** `"G1"`, `"G2"` or `"Scalar"`. */
   what: Schema.String,
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `invalid ${this.what} encoding: ${this.reason}`
+  }
+}
 
 /** Shamir inputs that cannot be split or combined: empty, unequal lengths, duplicate or zero index, threshold out of range, wrong coefficient count. */
 export class InvalidShares extends /* @__PURE__ */ Schema.TaggedError<InvalidShares>()("InvalidShares", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** The runtime has no WebCrypto (`crypto.subtle`), e.g. a browser page not served over HTTPS. Only AES-GCM needs it. */
 export class CryptoUnavailable extends /* @__PURE__ */ Schema.TaggedError<CryptoUnavailable>()("CryptoUnavailable", {
@@ -38,23 +46,39 @@ export class CryptoUnavailable extends /* @__PURE__ */ Schema.TaggedError<Crypto
 /** The DEM rejected the ciphertext: a bad AES-GCM tag or HMAC-CTR mac (wrong key, tampered blob or aad). */
 export class DecryptionFailed extends /* @__PURE__ */ Schema.TaggedError<DecryptionFailed>()("DecryptionFailed", {
   reason: /* @__PURE__ */ Schema.Literals(["tag", "mac"])
-}) {}
+}) {
+  override get message(): string {
+    return `decryption failed: bad ${this.reason === "tag" ? "AES-GCM tag" : "HMAC-CTR mac"}`
+  }
+}
 
 /** An encrypted object that breaks a rule of I4, or whose keys do not reconstruct a valid randomness. */
 export class InvalidCiphertext extends /* @__PURE__ */ Schema.TaggedError<InvalidCiphertext>()("InvalidCiphertext", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** Encryption parameters out of range: threshold, share count, key or id sizes. */
 export class InvalidEncryption extends /* @__PURE__ */ Schema.TaggedError<InvalidEncryption>()("InvalidEncryption", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** Fewer shares have keys than the object's threshold. */
 export class NotEnoughKeys extends /* @__PURE__ */ Schema.TaggedError<NotEnoughKeys>()("NotEnoughKeys", {
   required: Schema.Number,
   available: Schema.Number
-}) {}
+}) {
+  override get message(): string {
+    return `${this.available} keys available, needs ${this.required}`
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Key server error kinds (used by key server loading and HTTP)
@@ -117,7 +141,11 @@ export const isDefinitiveKind = (kind: KeyServerErrorKind): boolean => DEFINITIV
 
 export class InvalidConfig extends /* @__PURE__ */ Schema.TaggedError<InvalidConfig>()("InvalidConfig", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /**
  * A key server object that cannot be used: wrong type, unsupported version or key type, bad public key, configuration
@@ -133,13 +161,20 @@ export class InvalidKeyServer extends /* @__PURE__ */ Schema.TaggedError<Invalid
   get retryable(): boolean {
     return this.kind !== undefined && RETRYABLE.has(this.kind)
   }
+  override get message(): string {
+    return `invalid key server ${this.objectId}${this.kind === undefined ? "" : ` (${this.kind})`}: ${this.reason}`
+  }
 }
 
 /** A policy package id that is not the package's first version (I1). */
 export class NotFirstVersion extends /* @__PURE__ */ Schema.TaggedError<NotFirstVersion>()("NotFirstVersion", {
   packageId: Schema.String,
   version: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `package ${this.packageId} is version ${this.version}, not the first`
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Key server HTTP
@@ -181,11 +216,19 @@ export class KeyServerError extends /* @__PURE__ */ Schema.TaggedError<KeyServer
 export class SessionKeyExpired extends /* @__PURE__ */ Schema.TaggedError<SessionKeyExpired>()("SessionKeyExpired", {
   expiresAt: Schema.Number,
   now: Schema.Number
-}) {}
+}) {
+  override get message(): string {
+    return `session key expired at ${this.expiresAt}, now ${this.now}`
+  }
+}
 
 export class InvalidSessionKey extends /* @__PURE__ */ Schema.TaggedError<InvalidSessionKey>()("InvalidSessionKey", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** The session has neither a signer nor a signature. `message` is the personal message to sign, base64. */
 export class SignatureRequired extends /* @__PURE__ */ Schema.TaggedError<SignatureRequired>()("SignatureRequired", {
@@ -195,12 +238,20 @@ export class SignatureRequired extends /* @__PURE__ */ Schema.TaggedError<Signat
 /** A `seal_approve` transaction that breaks a rule of P1, with the server's wording. */
 export class InvalidApproval extends /* @__PURE__ */ Schema.TaggedError<InvalidApproval>()("InvalidApproval", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 /** The object, the session and the approval do not belong together (another package, an id the approval lacks). */
 export class ApprovalMismatch extends /* @__PURE__ */ Schema.TaggedError<ApprovalMismatch>()("ApprovalMismatch", {
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Fetching keys

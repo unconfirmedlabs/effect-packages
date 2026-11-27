@@ -188,7 +188,7 @@ packages/walrus/
   test/            see §6
 ```
 
-Rules: namespace subpath imports only; every module-level value is a `/* @__PURE__ */` call or a function; only `Encoder.ts` imports `@mysten/walrus-wasm`; only `Read.ts`, `Write.ts` and `QuiltRead.ts` import `@unconfirmed/quorum`. A program that only uses `Aggregator` or the pure modules ships neither the WASM glue nor the quorum code.
+Rules: namespace subpath imports only; every module-level value is a `/* @__PURE__ */` call or a function; only `Encoder.ts` imports `@mysten/walrus-wasm`; only `Read.ts` and `Write.ts` import `@unconfirmed/quorum` (`QuiltRead.ts` reaches it through `Read.ts`). A program that only uses `Aggregator` or the pure modules ships neither the WASM glue nor the quorum code.
 
 ## 4. Public API
 
@@ -789,7 +789,7 @@ const keys = yield* PrivateKey.decodeKeystore(yield* readFile("~/.sui/sui_config
 
 Errors from this block must be mapped to a fixed message before they reach `expect` (no key material in assertion output). The test first reads balances and skips with a clear message below 0.3 SUI or 0.01 WAL.
 
-1. Direct: `Write.run` a 32-byte random blob, `epochs: 1`, `deletable: true`, collecting the steps; then `Read.blob` returns it and `Read.status` is certified; then `burnBlob`.
+1. Direct: `Write.run` a 32-byte random blob (case 4 below also writes a 445,556-byte quilt), `epochs: 1`, `deletable: true`, collecting the steps; then `Read.blob` returns it and `Read.status` is certified; then `burnBlob`.
 2. Resume: run `Write.register` only, drop all state, then `Write.run` with no `resume` (the crash case of item 14) → the registration is reused: one `Blob` object in total; `burnBlob`.
 3. Relay: the same as case 1 through the testnet relay (`via: "relay"`); `burnBlob`.
 4. Quilt: three small entries; read one patch by id from slivers and one by identifier; `burnBlob`.

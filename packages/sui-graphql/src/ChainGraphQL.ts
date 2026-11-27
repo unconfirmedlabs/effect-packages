@@ -11,21 +11,16 @@ import { RpcError } from "@unconfirmed/sui/RpcError"
 import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
 import { call, U64 } from "./convert.ts"
 
-const Sequence = Schema.NullOr(Schema.Struct({ sequenceNumber: U64 }))
-
 /** Chain info and the reference gas price in one request (they read the same `epoch`). */
 export const ChainInfo = GraphQL.query("ChainInfo", {
-  document: "query ChainInfo{chainIdentifier epoch{epochId referenceGasPrice checkpoints(first:1){nodes{sequenceNumber}}} " +
-    "checkpoint{sequenceNumber} serviceConfig{availableRange(type:\"Query\",field:\"checkpoint\"){first{sequenceNumber}}}}",
+  document: "query ChainInfo{chainIdentifier epoch{epochId referenceGasPrice} checkpoint{sequenceNumber}}",
   result: Schema.Struct({
     chainIdentifier: Schema.String,
     epoch: Schema.NullOr(Schema.Struct({
       epochId: U64,
-      referenceGasPrice: Schema.optionalKey(Schema.NullOr(U64)),
-      checkpoints: Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Schema.Struct({ sequenceNumber: U64 })) }))
+      referenceGasPrice: Schema.optionalKey(Schema.NullOr(U64))
     })),
-    checkpoint: Sequence,
-    serviceConfig: Schema.Struct({ availableRange: Schema.Struct({ first: Sequence }) })
+    checkpoint: Schema.NullOr(Schema.Struct({ sequenceNumber: U64 }))
   })
 })
 
@@ -66,10 +61,7 @@ export const layer: Layer.Layer<Chain.Chain, never, GraphQLProtocol.GraphQLProto
         chainId: r.chainIdentifier as ObjectDigest,
         chain: CHAINS[r.chainIdentifier] ?? "unknown",
         epoch: r.epoch.epochId,
-        checkpointHeight: r.checkpoint.sequenceNumber,
-        // The indexer's real retention floor (0 on Mysten's endpoints, which keep all history).
-        lowestAvailableCheckpoint: r.serviceConfig.availableRange.first?.sequenceNumber,
-        epochFirstCheckpoint: r.epoch.checkpoints?.nodes[0]?.sequenceNumber
+        checkpointHeight: r.checkpoint.sequenceNumber
       })
     })
     const referenceGasPrice = yield* fetch.pipe(

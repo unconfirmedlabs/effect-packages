@@ -25,7 +25,7 @@ import {
   Verify
 } from "@unconfirmed/sui"
 import { Wallet } from "../src/index.ts"
-import { fakeWallet, type FakeWalletOptions } from "./FakeWallet.ts"
+import { fakeWallet, type FakeWalletOptions } from "@unconfirmed/test-support/wallet"
 
 const A = Address.normalize
 const D = (seed: number) => base58.encode(new Uint8Array(32).fill(seed)) as T.ObjectDigest

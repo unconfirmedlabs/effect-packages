@@ -16,7 +16,7 @@ import * as ZkLoginVerifierGrpc from "../src/ZkLoginVerifierGrpc.ts"
 import * as Signature from "../src/Signature.ts"
 import * as ZkLogin from "../src/ZkLogin.ts"
 import { ZkLoginVerifier } from "../src/ZkLoginVerifier.ts"
-import { claims, inputs } from "./fixtures.ts"
+import { claims, inputs } from "@unconfirmed/test-support/zklogin"
 
 const { SignatureSchemes } = SignatureScheme
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")

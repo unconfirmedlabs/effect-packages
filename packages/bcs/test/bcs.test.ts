@@ -189,3 +189,17 @@ describe("skipping the schema pass changes no result", () => {
     expect(Bcs.encodeSync(Bcs.u64)(0x0102030405060708n)).toEqual(new Uint8Array([8, 7, 6, 5, 4, 3, 2, 1]))
   })
 })
+
+describe("BcsDecodeError", () => {
+  test("is a Schema.TaggedError with a readable message and offset", () => {
+    const e = decodeError(Bcs.decode(Bcs.bool)(new Uint8Array([2])))
+    expect(e._tag).toBe("BcsDecodeError")
+    expect(e.message).toBe("invalid bool 2")
+    expect(e.offset).toBe(0)
+    expect(String(e)).toBe("BcsDecodeError: invalid bool 2")
+    expect(Schema.encodeSync(Bcs.BcsDecodeError)(e)).toEqual({ _tag: "BcsDecodeError", message: "invalid bool 2", offset: 0 })
+    const trailing = decodeError(Bcs.decode(Bcs.bool)(new Uint8Array([1, 0])))
+    expect(trailing.message).toBe("1 trailing bytes")
+    expect(trailing.offset).toBe(1)
+  })
+})

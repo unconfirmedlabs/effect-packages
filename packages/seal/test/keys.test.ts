@@ -48,7 +48,7 @@ import {
   b64
 } from "./support.ts"
 
-// Stepping 10 ms of virtual time at a time through a 10 s timeout takes a few real seconds.
+// The harness jumps between scheduled wake-ups, so even the 10 s timeout cases take well under a second.
 setDefaultTimeout(30_000)
 
 const T0 = Date.UTC(2026, 10, 27, 12, 0, 0)
@@ -72,7 +72,13 @@ interface Run<A, E> {
 const TICKS = 4
 const realTick = Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
 
-/** Run `effect` at `T0` under `TestClock`, advancing 10 ms at a time until it ends (at most `limit` ms). */
+/** When the earliest pending sleep wakes, if any (`TestClock` keeps them sorted, latest first). */
+const nextWakeUp = TestClock.testClockWith((clock) => {
+  const sleeps = (clock as unknown as { readonly sleeps: ReadonlyArray<{ readonly timestamp: number }> }).sleeps
+  return Effect.succeed(sleeps.length === 0 ? undefined : sleeps[sleeps.length - 1]!.timestamp)
+})
+
+/** Run `effect` at `T0` under `TestClock`, jumping from one wake-up to the next until it ends (at most `limit` ms). */
 const timed = async <A, E>(
   layer: Layer.Layer<Services>,
   effect: Effect.Effect<A, E, Services>,
@@ -85,10 +91,15 @@ const timed = async <A, E>(
       const fiber = yield* Effect.forkChild(
         Effect.flatMap(Effect.exit(effect), (exit) => Effect.map(Clock.currentTimeMillis, (now) => ({ exit, at: now - start })))
       )
-      for (let elapsed = 0; fiber.pollUnsafe() === undefined && elapsed <= limit; elapsed += step) {
+      for (let elapsed = 0; fiber.pollUnsafe() === undefined && elapsed <= limit;) {
         for (let i = 0; i < TICKS && fiber.pollUnsafe() === undefined; i++) yield* realTick
         if (fiber.pollUnsafe() !== undefined) break
-        yield* TestClock.adjust(step)
+        // Jump straight to the next scheduled wake-up (nothing can happen in virtual time before it);
+        // with nothing scheduled, step `step` ms so pending real I/O gets more real ticks.
+        const next = yield* nextWakeUp
+        const by = next === undefined ? step : Math.max(1, next - (start + elapsed))
+        yield* TestClock.adjust(by)
+        elapsed += by
       }
       if (fiber.pollUnsafe() === undefined) throw new Error(`still running after ${limit} ms of virtual time`)
       return yield* Fiber.join(fiber)

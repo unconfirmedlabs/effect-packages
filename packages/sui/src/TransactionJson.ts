@@ -34,6 +34,7 @@ import * as SchemaAST from "effect/SchemaAST"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "./Address.ts"
 import * as Hash from "./Hash.ts"
+import * as Allowances from "./internal/allowances.ts"
 import type * as Ptb from "./Ptb.ts"
 import * as Resolve from "./Resolve.ts"
 import * as T from "./TransactionData.ts"
@@ -47,13 +48,21 @@ import * as TypeTag from "./TypeTag.ts"
 /** Not v2 transaction JSON: wrong shape, a bad u64, address, digest, type tag or base64. */
 export class InvalidTransactionJson extends /* @__PURE__ */ Schema.TaggedError<InvalidTransactionJson>()("InvalidTransactionJson", {
   issue: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return this.issue
+  }
+}
 
 /** Well-formed, but uses something this SDK can't represent faithfully. */
 export class UnsupportedTransactionJson extends /* @__PURE__ */ Schema.TaggedError<UnsupportedTransactionJson>()(
   "UnsupportedTransactionJson",
   { construct: Schema.String, reason: Schema.String }
-) {}
+) {
+  override get message(): string {
+    return `unsupported ${this.construct}: ${this.reason}`
+  }
+}
 
 // -----------------------------------------------------------------------------
 // The JSON shape (mirrors `SerializedTransactionDataV2Schema`)
@@ -833,7 +842,8 @@ const toUnresolvedSync = (json: TransactionJson): Unresolved => {
         ...(appType !== undefined && { appType: TypeTag.format(toTypeTag(appType)) }),
         allowance,
         clock,
-        ...(permit !== undefined && { permit })
+        ...(permit !== undefined && { permit }),
+        resolve: Allowances.resolve
       }
     }
     if (intent.name !== COIN_WITH_BALANCE) {

@@ -31,12 +31,17 @@ import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import { EnokiClient, EnokiError, type EnokiNetwork } from "./EnokiClient.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 /** Enoki answered with transaction bytes that are not the transaction we asked it to sponsor. */
 export class UnexpectedSponsoredTransaction extends Schema.TaggedError<UnexpectedSponsoredTransaction>()(
   "UnexpectedSponsoredTransaction",
   { reason: Schema.String }
-) {}
+) {
+  override get message(): string {
+    return this.reason
+  }
+}
 
 const encodeKind = Bcs.encodeSync(T.TransactionKind)
 
@@ -117,7 +122,6 @@ export interface Sponsored {
 
 const unexpected = (reason: string) => new UnexpectedSponsoredTransaction({ reason })
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 interface Expected {
   readonly kind: Uint8Array
@@ -142,7 +146,7 @@ const check = (bytes: Uint8Array, expected: Expected) =>
       if (data.sender !== expected.sender) {
         return Effect.fail(unexpected(`sender is ${data.sender}, expected ${expected.sender}`))
       }
-      if (!sameBytes(encodeKind(data.kind), expected.kind)) return Effect.fail(unexpected("transaction kind was changed"))
+      if (!Bytes.equal(encodeKind(data.kind), expected.kind)) return Effect.fail(unexpected("transaction kind was changed"))
       if (gasData.owner === expected.sender) return Effect.fail(unexpected("gas would be paid by the sender"))
       if (expected.sponsor !== undefined && gasData.owner !== expected.sponsor) {
         return Effect.fail(unexpected(`gas owner is ${gasData.owner}, not the sponsor ${expected.sponsor}`))

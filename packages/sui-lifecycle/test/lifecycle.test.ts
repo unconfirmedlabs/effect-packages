@@ -412,7 +412,7 @@ describe("reconcile", () => {
   })
 
   test("without an Evidence service the expiry rule is off, and says so", async () => {
-    const world = makeWorld({ epoch: 20n, lowestAvailableCheckpoint: 0n })
+    const world = makeWorld({ epoch: 20n })
     const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)))
     expect(error._tag).toBe("SubmissionUnknown")
     expect(error._tag === "SubmissionUnknown" && error.reason).toContain("expiry rule is off")

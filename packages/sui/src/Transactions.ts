@@ -76,7 +76,11 @@ export interface Simulation {
 
 export class TransactionNotFound extends /* @__PURE__ */ Schema.TaggedError<TransactionNotFound>()("TransactionNotFound", {
   digest: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `transaction ${this.digest} not found`
+  }
+}
 
 /**
  * The node accepted the transaction but its answer can't be read as effects
@@ -103,7 +107,11 @@ export class Transactions extends /* @__PURE__ */ Context.Service<Transactions, 
 export class TransactionWaitTimeout extends /* @__PURE__ */ Schema.TaggedError<TransactionWaitTimeout>()("TransactionWaitTimeout", {
   digest: Schema.String,
   timeoutMillis: Schema.Number
-}) {}
+}) {
+  override get message(): string {
+    return `transaction ${this.digest} not seen within ${this.timeoutMillis} ms`
+  }
+}
 
 export interface WaitForOptions {
   /** Overall bound. Default 60 seconds. */

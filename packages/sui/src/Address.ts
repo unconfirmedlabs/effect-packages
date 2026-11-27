@@ -5,12 +5,12 @@ import { blake2b } from "@noble/hashes/blake2.js"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Schema from "effect/Schema"
 import * as SchemaTransformation from "effect/SchemaTransformation"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 /** The branded, normalized address. Also its BCS layout (32 raw bytes). */
 export const Address = Bcs.Address
 export type Address = Bcs.Address
 
-const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("")
 
 /** Normalize `0x2`, `0X02` or unprefixed hex. Throws on anything else: use for literals you control. */
 export const normalize = (s: string): Address => {
@@ -28,7 +28,7 @@ export const Strict: Schema.Codec<Address, string> = /* @__PURE__ */ Schema.Stri
   )
 ) as any
 
-export const fromBytes = (bytes: Uint8Array): Address => ("0x" + hex(bytes)) as Address
+export const fromBytes = (bytes: Uint8Array): Address => ("0x" + Bytes.toHex(bytes)) as Address
 
 /** `blake2b256(flag || publicKey)`, the address of a single-key scheme. */
 export const fromPublicKey = (flag: number, publicKey: Uint8Array): Address => {

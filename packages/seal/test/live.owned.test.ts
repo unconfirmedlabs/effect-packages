@@ -32,10 +32,7 @@
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import type * as Address from "@unconfirmed/sui/Address"
 import * as Coins from "@unconfirmed/sui/Coins"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as PrivateKey from "@unconfirmed/sui/PrivateKey"
 import * as Ptb from "@unconfirmed/sui/Ptb"
-import type * as Signer from "@unconfirmed/sui/Signer"
 import type * as Transactions from "@unconfirmed/sui/Transactions"
 import * as Tx from "@unconfirmed/sui/Tx"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
@@ -44,8 +41,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schedule from "effect/Schedule"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import { readFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { loadCliSigner } from "@unconfirmed/test-support/keystore"
 import * as Approval from "../src/Approval.ts"
 import * as Config from "../src/Config.ts"
 import * as Seal from "../src/Seal.ts"
@@ -61,26 +57,7 @@ const TIMEOUT = 120_000
 // Signer (never print the key)
 // -----------------------------------------------------------------------------
 
-const loadSigner = async (): Promise<Signer.Signer> => {
-  try {
-    const dir = `${homedir()}/.sui/sui_config`
-    const active = /active_address:\s*"?(0x[0-9a-fA-F]{64})/.exec(readFileSync(`${dir}/client.yaml`, "utf-8"))![1]!.toLowerCase()
-    const keys = await Effect.runPromise(PrivateKey.decodeKeystore(readFileSync(`${dir}/sui.keystore`, "utf-8")))
-    for (const key of keys) {
-      const signer = key.scheme === "ED25519"
-        ? await Effect.runPromise(Ed25519.fromSecretKey(key.secretKey))
-        : key.scheme === "Secp256k1"
-        ? await Effect.runPromise((await import("@unconfirmed/sui-secp256k1")).fromSecretKey(key.secretKey))
-        : key.scheme === "Secp256r1"
-        ? await Effect.runPromise((await import("@unconfirmed/sui-secp256r1")).fromSecretKey(key.secretKey))
-        : undefined
-      if (signer?.address === active) return signer
-    }
-  } catch {
-    // fall through to the fixed message: no key material in assertion output
-  }
-  throw new Error("could not load the Sui CLI signer for the active address")
-}
+const loadSigner = loadCliSigner
 
 // -----------------------------------------------------------------------------
 // Layers

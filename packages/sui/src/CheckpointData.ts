@@ -32,13 +32,21 @@ export interface Checkpoint {
 
 export class CheckpointNotFound extends /* @__PURE__ */ Schema.TaggedError<CheckpointNotFound>()("CheckpointNotFound", {
   sequenceNumber: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `checkpoint ${this.sequenceNumber} not found`
+  }
+}
 
 /** `follow` could not list a gap between history and the live subscription in time. */
 export class CheckpointGap extends /* @__PURE__ */ Schema.TaggedError<CheckpointGap>()("CheckpointGap", {
   from: Schema.BigInt,
   to: Schema.BigInt
-}) {}
+}) {
+  override get message(): string {
+    return `could not fill checkpoints ${this.from} to ${this.to}`
+  }
+}
 
 export class CheckpointData extends /* @__PURE__ */ Context.Service<CheckpointData, {
   readonly get: (sequenceNumber: bigint) => Effect.Effect<Checkpoint, CheckpointNotFound | RpcError>

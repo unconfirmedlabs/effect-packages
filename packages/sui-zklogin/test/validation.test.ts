@@ -14,7 +14,7 @@ import * as PublicIdentifier from "../src/PublicIdentifier.ts"
 import * as Signature from "../src/Signature.ts"
 import * as ZkLogin from "../src/ZkLogin.ts"
 import * as ZkLoginAddress from "../src/ZkLoginAddress.ts"
-import { claims, inputs } from "./fixtures.ts"
+import { claims, inputs } from "@unconfirmed/test-support/zklogin"
 
 const flip = <A, E>(e: Effect.Effect<A, E>) => Effect.runSync(Effect.flip(e))
 const iss = claims.iss

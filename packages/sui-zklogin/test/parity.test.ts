@@ -14,7 +14,7 @@ import * as PublicIdentifier from "../src/PublicIdentifier.ts"
 import * as Signature from "../src/Signature.ts"
 import * as ZkLogin from "../src/ZkLogin.ts"
 import * as ZkLoginAddress from "../src/ZkLoginAddress.ts"
-import { claims, inputs, jwt, makeJwt } from "./fixtures.ts"
+import { claims, inputs, jwt, makeJwt } from "@unconfirmed/test-support/zklogin"
 
 const run = Effect.runSync
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")

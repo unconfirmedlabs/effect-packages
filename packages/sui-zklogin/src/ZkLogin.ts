@@ -3,7 +3,7 @@
  * in the registry and a `Signer` that wraps any ephemeral `Signer`.
  *
  *   SignatureSchemes.layer(Ed25519.scheme, ZkLogin.scheme, MultiSig.scheme)
- *     .pipe(Layer.provide(ZkLoginVerifierGrpc.layer), Layer.provide(GrpcWeb.GrpcWeb.layer({ baseUrl })))
+ *     .pipe(Layer.provide(ZkLoginVerifierGrpc.layer), Layer.provide(GrpcWeb.layer({ baseUrl })))
  *
  *   const signer = yield* ZkLogin.signer({ ephemeral, inputs, maxEpoch })
  *   yield* Tx.run(recipe, { signer })
@@ -23,6 +23,7 @@ import { issuerOfUnsafe } from "./Jwt.ts"
 import * as PublicIdentifier from "./PublicIdentifier.ts"
 import * as Signature from "./Signature.ts"
 import { ZkLoginVerifier } from "./ZkLoginVerifier.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 export const FLAG = PublicIdentifier.FLAG
 const NAME = "ZkLogin"
@@ -53,7 +54,6 @@ const withFlag = (body: Uint8Array) => {
   return out
 }
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 export const scheme: SignatureScheme.SignatureScheme<ZkLoginVerifier> = {
   name: NAME,
@@ -83,7 +83,7 @@ export const scheme: SignatureScheme.SignatureScheme<ZkLoginVerifier> = {
         try: () => PublicIdentifier.normalizeUnsafe(publicKey, false),
         catch: () => invalid("malformed member public identifier")
       })
-      if (!sameBytes(identifier, member)) return yield* invalid("signature is not from this member's zkLogin identity")
+      if (!Bytes.equal(identifier, member)) return yield* invalid("signature is not from this member's zkLogin identity")
       yield* ask(signature, intentMessage, PublicIdentifier.toAddress(publicKey))
     })
 }

@@ -280,6 +280,8 @@ Fix: delete only files that start with the generated header (or refuse when a di
 Effort S each.
 
 **Resolution:** fixed except the dead `ChainInfo` fields.
+
+**Resolution (dead fields, final batch):** removed. Nothing read `lowestAvailableCheckpoint` or `epochFirstCheckpoint` (the lifecycle's expiry rule uses `Evidence`, which makes its own `GetServiceInfo` / `GetEpoch` calls). `Chain.ChainInfo` is now `chainId`, `chain`, `epoch`, `checkpointHeight`; the GraphQL `ChainInfo` query no longer selects `epoch.checkpoints(first:1)` or `serviceConfig.availableRange`; over gRPC `info` is `GetServiceInfo` alone and the gas price `GetEpoch` with `reference_gas_price` only. The lean spec (`scripts/grpc-lean.ts`, regenerated with `bun run codegen`) prunes `Epoch` to that one field. Lifecycle test world, gRPC/GraphQL offline and live tests updated.
 - `ChainInfo` now also selects `referenceGasPrice`, and one query feeds both caches (30 s for info, 1 min for the gas price); `ReferenceGasPrice` is removed. Test: two failures then one success serve both members.
 - `CheckpointData.list` enumerates numbers (CT-1): 0 listing requests where there were 2 per 100.
 - `GetMoveFunction` no longer selects `object(address)`. A separate `ObjectExists` query runs only when there is no package.

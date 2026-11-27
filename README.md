@@ -7,7 +7,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | Package | What | Extra deps |
 |---|---|---|
 | `@unconfirmed/bcs` | BCS declared as Effect Schemas | `@scure/base` |
-| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
+| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only), `@scure/base` |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
 | `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / KeyValueStore), sender lock | — |
@@ -15,11 +15,11 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-mldsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
 | `@unconfirmed/sui-multisig` | Multisig scheme, `signer`, `combine` | — |
-| `@unconfirmed/sui-passkey` | Passkey (WebAuthn) scheme (also as a multisig member), signer over a pluggable authenticator (browser `navigator.credentials`, or in-memory for tests and servers), public-key recovery for returning users | `@noble/curves` |
+| `@unconfirmed/sui-passkey` | Passkey (WebAuthn) scheme (also as a multisig member), signer over a pluggable authenticator (browser `navigator.credentials`, or in-memory for tests and servers), public-key recovery for returning users | `@noble/curves`, `@noble/hashes`, `@scure/base` |
 | `@unconfirmed/sui-mnemonic` | BIP39 mnemonics; Ed25519 / ML-DSA-65 (SLIP-0010) and Secp256k1 / r1 (BIP32) derivation on Sui's paths | `@scure/bip39`, `@scure/bip32` |
-| `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite` |
+| `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite`, `@scure/base` |
 | `@unconfirmed/sui-enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
-| `@unconfirmed/sui-wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app` (+ types from `@wallet-standard/base`) |
+| `@unconfirmed/sui-wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app`, `@scure/base` (+ types from `@wallet-standard/base`) |
 | `@unconfirmed/quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order, an optional linger window and an optional early give-up. Knows nothing about Sui; used by Walrus and Seal | — |
 | `@unconfirmed/sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/bcs` and `@unconfirmed/sui` (runtime: `@unconfirmed/sui/Move`) | — (dev-time) |
 | `@unconfirmed/walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@mysten/walrus-wasm`, loaded on first use | `@mysten/walrus-wasm`, `@noble/hashes` |
@@ -88,7 +88,7 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 
 - **Reads** verify the metadata against the blob id before using it, check each sliver's shape, decode from `n − 2f` shards and re-derive the blob id (`consistency: "strict"`, the default). If the bytes don't match, the slivers are checked one by one: a node that served a bad one is blamed and replaced. Only a blob the writer encoded wrongly is `InconsistentBlob`. A blob unknown to `2f + 1` shards is `BlobNotFound` (`BlobBlocked` for blocked blobs), typically within seconds; a read that fails while the nodes call the blob `Nonexistent` (deleted meanwhile) is `BlobNotFound` too. During an epoch change the read committee is chosen per blob from its certified epoch (the current one when no status gathers enough agreement). `consistency: "skip"` drops the final check, and slivers are then only header-checked: any one node that served a sliver can change the bytes, so use it only when the bytes are verified another way. Reads prefer asking another node to retrying a slow one, and a body larger than the expected size is refused.
 - **Writes** count weight in shards, as the chain does. The certificate is built at `n − f` (`@mysten/walrus` counts nodes, so it can refuse a valid certificate or build one the chain rejects). Each confirmation's signature is checked. In-flight sliver bytes are capped (12.5 MB), retries are per request, and the write lingers `0.5 × elapsed + 500 ms` after the quorum for stragglers, as the Rust client does. Upload timeouts grow with the bytes in flight (`requestTimeout + bytes / minUploadRate`, default 1 Mbit/s), so a slow uplink delays a large write instead of timing it out. `owner` (default: the executor's sender) receives the `Blob` in the certify transaction: the sender holds it until then, since only an object's owner can certify it. The system state (prices, package id) is cached for a minute, and a register transaction that aborts because the prices or the package moved is rebuilt once. [docs/design/walrus.md](docs/design/walrus.md) §1.8 and §2 list what differs from `@mysten/walrus` and why.
-- **Steps are resumable.** `onStep` receives each step as plain JSON (`Schema.encode(Write.Step)`), and `resume` continues from it in another process. Each step checks the chain before acting, so a crash between register and persist reuses the registration rather than paying again. For the transactions themselves, any `Executor` works: `Write.viaTx(signer)` (a key or a wallet), or `sui-lifecycle`'s `Lifecycle.run` for a journal.
+- **Steps are resumable.** `onStep` receives each `Write.Step` (with `Uint8Array` fields, so not JSON as is): persist `Schema.encodeSync(Write.Step)(step)`, which is plain JSON, and pass `Schema.decodeSync(Write.Step)(saved)` as `resume` to continue in another process. Each step checks the chain before acting, so a crash between register and persist reuses the registration rather than paying again. For the transactions themselves, any `Executor` works: `Write.viaTx(signer)` (a key or a wallet), or `sui-lifecycle`'s `Lifecycle.run` for a journal.
 - **Through the upload relay** the blob goes to a relay that encodes and stores it for a tip in SUI. The relay's certificate is verified before the certify transaction is built. The tip amount and address come from the relay, so `maxTip` (MIST per blob) is required: a higher tip is `TipTooHigh` before anything is signed, and `tipAddress` optionally pins the recipient. Only relay writes need the relay layer (`via: "relay"` adds `UploadRelay` to the requirements):
 
   ```ts
@@ -116,7 +116,7 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 
   ```ts
   const { nShards } = yield* Effect.flatMap(Effect.service(System.System), (s) => s.state)
-  const { quilt, patches } = yield* Quilt.encode(entries, nShards)   // entries: { identifier, contents, tags? }[]; byte-identical to @mysten/walrus
+  const { quilt, patches } = yield* Effect.fromResult(Quilt.encode(entries, nShards))   // a Result; entries: { identifier, contents, tags? }[]; byte-identical to @mysten/walrus
   const certified = yield* Write.run(quilt, { epochs: 5, deletable: true, attributes: Quilt.ATTRIBUTE, executor: Write.viaTx(signer) })
   const file = yield* QuiltRead.patch(Quilt.patchId(certified.blobId, patches[0]!))   // or QuiltRead.byIdentifier(blobId, "hello.txt")
   ```
@@ -131,9 +131,9 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 | Bun, Node (unbundled) | Nothing. |
 | Server bundle | Keep `@mysten/walrus-wasm` external (`--external @mysten/walrus-wasm`). A Bun bundle that inlines it works only on the machine that built it, and esbuild's ESM output fails (no `__dirname`). |
 | Browser, Vite / webpack 5 | Nothing (they emit the `.wasm`), or pass `wasmUrl` from `import wasmUrl from "@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url"` (Vite). |
-| Browser, esbuild / Rolldown / Bun | Serve `node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm` (358 KB) and pass its URL: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm" })` (or `Encoder.layer({ wasmUrl })`). |
+| Browser, esbuild / Rolldown / Bun | Serve `node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm` (349 KB) and pass its URL: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm" })` (or `Encoder.layer({ wasmUrl })`). |
 
-**Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That uses the Sui CLI's active address (`~/.sui/sui_config`): direct, resumed and relay writes of 32-byte blobs, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
+**Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That uses the Sui CLI's active address (`~/.sui/sui_config`): direct, resumed and relay writes of 32-byte blobs and one 445 KB quilt, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
 
 ### Seal
 
@@ -150,7 +150,7 @@ const layer = SealGrpc.layer({
   grpc: { baseUrl: "https://fullnode.testnet.sui.io:443" }
 }).pipe(Layer.provideMerge(FetchHttpClient.layer))
 // A program that also builds transactions: Seal.layer({ servers }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), ...).
-// SuiGrpc.layer ships every RPC (about 100 KB more than Seal needs).
+// SuiGrpc.layer ships every service's RPCs (about 60 KB more than Seal needs).
 
 const id = Bcs.encodeSync(Bcs.Address)(signer.address)                       // account_based: the id is the user's address
 const { encryptedObject } = yield* Seal.encrypt({ packageId, id, data, threshold: 2 })   // or dem: "Hmac256Ctr", aad
@@ -174,7 +174,7 @@ const plaintext = yield* Seal.decrypt({ data: encryptedObject, session, approval
 
 **1. Capabilities are separate services.** Instead of one client with 30 methods there are `Chain`, `Objects`, `Coins`, `Packages`, `Transactions` and `Checkpoints`. A function's type says what it touches:
 
-```ts
+```ts nocheck
 Resolve.inputs   // Effect<Plan, ObjectNotFound | RpcError | InvalidTransaction, Objects | Packages>
 Resolve.budget   // Effect<Plan, ..., Transactions | Chain>
 Resolve.coins    // Effect<Plan, ..., Coins>
@@ -190,7 +190,7 @@ ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))  // just Objec
 SuiGrpc.layer({ baseUrl })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
 ```
 
-Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 27 KB of checkpoint, event and dynamic-field code that a transaction never calls.
+Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 28 KB of checkpoint, event and dynamic-field code that a transaction never calls.
 
 **2. Signature schemes are plugins.** The core dispatches on the flag byte but knows only the schemes you install:
 
@@ -263,8 +263,8 @@ const json = yield* TransactionJson.encode({ sender, draft })   // Ptb.coin / Pt
 const json2 = yield* TransactionJson.encode(data)                // resolved TransactionData (with its digest)
 // Transaction.from(json) in @mysten/sui builds the same bytes our resolver does.
 
-const tx = yield* TransactionJson.decode(await mystenTx.toJSON({ supportedIntents: ["CoinWithBalance", "AllowanceBalance"] }))
-const data = yield* TransactionJson.resolve(tx)                  // the default pipeline, keeping the JSON's gas fields
+const tx = yield* TransactionJson.decode(yield* Effect.promise(() => mystenTx.toJSON({ supportedIntents: ["CoinWithBalance", "AllowanceBalance"] })))
+const resolved = yield* TransactionJson.resolve(tx)              // the default pipeline, keeping the JSON's gas fields
 const offline = yield* TransactionJson.toTransactionData(tx)     // already fully resolved: no network
 ```
 
@@ -297,8 +297,7 @@ import * as EvidenceGrpc from "@unconfirmed/sui-lifecycle/EvidenceGrpc"   // or 
 import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/sui-lifecycle"
 
 const layer = Layer.mergeAll(
-  SuiGrpc.layer({ baseUrl }),
-  EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl }))),   // same backend as Transactions
+  EvidenceGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl }))),   // same backend (and GrpcWeb) as Transactions
   JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
 )
 yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
@@ -375,7 +374,7 @@ bun packages/sui-codegen/src/bin.ts generate     # or Generate.run(config) from 
 
 This writes `src/generated/<package>/<module>.ts` (schemas, type strings and call builders), `<package>/$package.ts`, and `deps/<address>/<module>.ts` (dependency types, pruned to what layouts reach). A generated call is an ordinary recipe step:
 
-```ts
+```ts nocheck
 import * as counter from "./generated/counter/counter.ts"
 
 const recipe = Effect.gen(function*() {
@@ -395,7 +394,7 @@ counter.Counter.type()                         // "0x<packageId>::counter::Count
 - **Writing.** `generate` replaces `<output>/<package>` and `<output>/deps` only when they hold nothing but generated files (otherwise it fails and writes nothing), and fails when two packages would be written to one path. Directories of packages removed from the config are left in place.
 - **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, ...).
 - **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
-- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2.6 KB min / 1.0 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report).
+- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~0.6 KB min / 0.3 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report).
 - Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
 
 ## Importing
@@ -417,45 +416,45 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | Program | Bun | esbuild | Rolldown | `@mysten/*` (Rolldown) |
 |---|---|---|---|---|
 | Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 122 / 40 | — |
-| `Quorum.run`, three members (no Schema) | 60 / 20 | 59 / 21 | 56 / 19 | — |
-| Verify, Ed25519 only | 146 / 52 | 144 / 51 | 144 / 50 | 129 / 44 (ships every scheme) |
-| Verify, Ed25519 + k1 + r1 + multisig | 178 / 63 | 176 / 63 | 173 / 60 | — |
-| Read one object | 199 / 66 | 197 / 67 | 195 / 64 | 289 / 76 (ships all 30 RPCs) |
-| Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 311 / 101 | 306 / 101 | 302 / 97 | 373 / 105 |
-| The same with `SuiGrpc.layer` (all nine services) | 338 / 106 | 333 / 106 | 329 / 101 | — |
-| The same over GraphQL (`SuiGraphQL.layer`) | 309 / 106 | 303 / 106 | 307 / 101 | — |
-| `Lifecycle.run` (gRPC, KeyValueStore journal) | 423 / 124 | 418 / 124 | 424 / 119 | — |
-| Hand-written `Ptb.moveCall` | 89 / 30 | 90 / 31 | 93 / 30 | — |
-| One generated call (Walrus `blob.burn`) | 91 / 31 | 92 / 32 | 96 / 31 | — |
-| Walrus: read via the aggregator | 144 / 49 | 144 / 49 | 145 / 47 | — |
+| `Quorum.run`, three members (no Schema) | 66 / 23 | 65 / 23 | 62 / 21 | — |
+| Verify, Ed25519 only | 143 / 51 | 142 / 51 | 140 / 49 | 129 / 44 (ships every scheme) |
+| Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 176 / 64 | 173 / 61 | — |
+| Read one object | 196 / 65 | 196 / 66 | 187 / 62 | 289 / 76 (ships all 30 RPCs) |
+| Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 315 / 103 | 311 / 103 | 307 / 99 | 373 / 105 |
+| The same with `SuiGrpc.layer` (all nine services) | 343 / 108 | 339 / 108 | 334 / 104 | — |
+| The same over GraphQL (`SuiGraphQL.layer`) | 310 / 107 | 304 / 106 | 297 / 101 | — |
+| `Lifecycle.run` (`SuiGrpc.layer`, KeyValueStore journal) | 375 / 119 | 370 / 119 | 362 / 113 | — |
+| Hand-written `Ptb.moveCall` | 82 / 28 | 84 / 29 | 79 / 26 | — |
+| One generated call (Walrus `blob.burn`) | 82 / 28 | 85 / 29 | 79 / 27 | — |
+| Walrus: read via the aggregator | 139 / 47 | 139 / 47 | 133 / 45 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
-| Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |
-| Walrus: write a blob through the nodes | 453 / 136 | 447 / 135 | 455 / 130 | 455 / 128 (`writeBlob`) |
-| Walrus: write a blob through the relay | 458 / 137 | 452 / 137 | 460 / 132 | — |
-| Seal: parse an encrypted object | 91 / 31 | 90 / 31 | 97 / 31 | — |
-| Seal: encrypt with pinned keys (`Envelope.seal`) | 177 / 63 | 175 / 63 | 183 / 62 | — |
-| Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 389 / 135 | 384 / 135 | 390 / 130 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
-| zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 98 / 41 | — |
-| zkLogin: `ZkLoginAddress.fromJwt` | 155 / 74 | 154 / 74 | 160 / 76 | — |
-| zkLogin: `ZkLogin.signer` | 138 / 49 | 136 / 49 | 143 / 49 | — |
+| Walrus: read a blob from the nodes | 342 / 107 | 337 / 107 | 333 / 103 | 401 / 110 (`readBlob`) |
+| Walrus: write a blob through the nodes | 418 / 134 | 412 / 134 | 405 / 127 | 446 / 127 (`writeBlob`) |
+| Walrus: write a blob through the relay | 423 / 136 | 417 / 136 | 410 / 129 | — |
+| Seal: parse an encrypted object | 91 / 31 | 89 / 31 | 93 / 31 | — |
+| Seal: encrypt with pinned keys (`Envelope.seal`) | 176 / 63 | 175 / 63 | 177 / 62 | — |
+| Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 386 / 135 | 381 / 135 | 375 / 129 | 460 / 135 (`SealClient` + `SuiGrpcClient`) |
+| zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 95 / 41 | — |
+| zkLogin: `ZkLoginAddress.fromJwt` | 148 / 72 | 148 / 72 | 145 / 72 | — |
+| zkLogin: `ZkLogin.signer` | 139 / 49 | 138 / 49 | 140 / 49 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
-- **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
-- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 80 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (6 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 100 KB, every RPC's codec.
-- **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.
+- **Walrus.** JS only. Programs that read or write from the nodes also fetch the 349 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
+- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 86 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (5 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 58 KB, the RPCs of the services Seal doesn't use.
+- **With barrel imports in the app,** esbuild grows by 4–84 KB per program (24–60 KB for most; `--named`); before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.
   - `HttpClient` (which brings `Stream`): +52 / +16.
   - `Schema` (from `Schema.TaggedError` errors and BCS-as-Schema): +40 / +13.
   - The protobuf codec: ~20 KB.
-  - `Quorum.run` is 59 KB against 26 KB for a bare `Effect.runPromise(Effect.succeed(1))`: the quorum code itself is ~6.8 / 2.7 KB (both entry points); the rest is the Effect modules it uses (`Schedule` via retry, spans, `Queue`, `Scope`, `Duration`), which an app with `HttpClient` already ships.
+  - `Quorum.run` is 62 KB against 22 KB for a bare `Effect.runPromise(Effect.succeed(1))`: the quorum code itself is ~6.8 / 2.7 KB (both entry points); the rest is the Effect modules it uses (`Schedule` via retry, spans, `Queue`, `Scope`, `Duration`), which an app with `HttpClient` already ships.
 - **For an app already on Effect,** that cost is shared, and the Sui-specific code is a small part of these numbers.
 
 ## Develop
 
 ```sh
 bun install
-bun run typecheck
+bun run typecheck     # also compiles examples/: every ```ts README block is checked against them (packages/test-support/test/readme.test.ts)
 bun run test          # offline: parity with @mysten/sui (BCS, built tx bytes, signatures, multisig)
 bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multisig / wallet-standard executions
 bun run codegen       # protoc -> descriptor chunks + types from packages/sui/proto/src (sui-apis)
@@ -465,7 +464,7 @@ bun run codegen       # protoc -> descriptor chunks + types from packages/sui/pr
 
 ## Writing a scheme extension
 
-```ts
+```ts nocheck
 export const scheme: SignatureScheme.SignatureScheme</* services it needs */> = {
   name: "MyScheme",
   flag: 0x08,
@@ -476,7 +475,7 @@ export const scheme: SignatureScheme.SignatureScheme</* services it needs */> = 
 export const fromSecretKey = (sk: Uint8Array): Effect.Effect<Signer.Signer, Signer.InvalidKey> => ...
 ```
 
-`packages/sui-secp256k1/src/index.ts` is a complete example (~80 lines).
+`packages/sui/src/Ecdsa.ts` is a complete example (~100 lines; `sui-secp256k1` and `sui-secp256r1` are that module over their noble curve).
 
 ## License
 

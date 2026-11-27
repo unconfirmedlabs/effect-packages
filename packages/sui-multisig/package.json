@@ -13,6 +13,8 @@
     "effect": "4.1.6"
   },
   "devDependencies": {
-    "@unconfirmed/sui-secp256k1": "workspace:*"
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/sui-secp256k1": "workspace:*",
+    "@unconfirmed/test-support": "workspace:*"
   }
 }

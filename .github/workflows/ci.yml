@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      # Also compiles examples/ and scripts/ (README blocks are checked against examples/ by the tests).
+      - run: bun run typecheck
+      # Offline only: no SUI_LIVE, WALRUS_LIVE or SEAL_LIVE.
+      - run: bun test packages/
+      # Fails on a Seal containment violation (seal.md §6.5).
+      - run: bun scripts/bundle-report.ts

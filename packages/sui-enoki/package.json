@@ -13,5 +13,10 @@
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6",
     "@unconfirmed/sui-zklogin": "workspace:*"
+  },
+  "devDependencies": {
+    "@mysten/enoki": "2.0.1",
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/test-support": "workspace:*"
   }
 }

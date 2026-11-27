@@ -27,6 +27,7 @@ import * as Signer from "@unconfirmed/sui/Signer"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 export const FLAG = 0x06
 const NAME = "Passkey"
@@ -89,7 +90,6 @@ const SPKI_HEADER = Uint8Array.from([
   0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00
 ])
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 const invalidKey = (reason: string) => new Signer.InvalidKey({ scheme: NAME, reason })
 
@@ -98,7 +98,7 @@ export const publicKeyFromSpki = (der: Uint8Array): Effect.Effect<Uint8Array, Si
   if (der.length !== SPKI_HEADER.length + 65) {
     return Effect.fail(invalidKey(`expected a ${SPKI_HEADER.length + 65}-byte P-256 SubjectPublicKeyInfo, got ${der.length} bytes`))
   }
-  if (!sameBytes(der.subarray(0, SPKI_HEADER.length), SPKI_HEADER)) {
+  if (!Bytes.equal(der.subarray(0, SPKI_HEADER.length), SPKI_HEADER)) {
     return Effect.fail(invalidKey("not a P-256 SubjectPublicKeyInfo (is the credential ES256?)"))
   }
   if (der[SPKI_HEADER.length] !== 0x04) return Effect.fail(invalidKey("public key is not an uncompressed point"))
@@ -139,16 +139,9 @@ const decodeAuthenticator = Bcs.decode(PasskeyAuthenticatorBcs)
 const encodeAuthenticator = Bcs.encodeSync(PasskeyAuthenticatorBcs)
 const utf8 = new TextEncoder()
 
-const concat = (a: Uint8Array, b: Uint8Array) => {
-  const out = new Uint8Array(a.length + b.length)
-  out.set(a)
-  out.set(b, a.length)
-  return out
-}
-
 /** What the authenticator signs: `authenticatorData || sha256(clientDataJSON)`. */
 const signedMessage = (authenticatorData: Uint8Array, clientDataJSON: Uint8Array) =>
-  concat(authenticatorData, sha256(clientDataJSON))
+  Bytes.concat([authenticatorData, sha256(clientDataJSON)])
 
 /** `serde_json`'s recursion limit: a container nested this deep (the outer object is 1) is refused. */
 const SERDE_MAX_DEPTH = 128
@@ -202,7 +195,7 @@ const checkClientData = (clientDataJson: string, intentMessage: Uint8Array): Sig
   } catch {
     return invalid("clientDataJSON challenge is not unpadded base64url")
   }
-  if (!sameBytes(decoded, Hash.blake2b256(intentMessage))) return invalid("clientDataJSON challenge is not this intent message's digest")
+  if (!Bytes.equal(decoded, Hash.blake2b256(intentMessage))) return invalid("clientDataJSON challenge is not this intent message's digest")
   return undefined
 }
 
@@ -240,7 +233,7 @@ export const scheme: SignatureScheme.SignatureScheme = {
     // Sui stores a passkey member's signature in full, `0x06 || body`, and the multisig scheme hands it over as is.
     if (signature[0] !== FLAG) return Effect.fail(invalid("member signature is not a serialized passkey signature (0x06 || body)"))
     return Effect.flatMap(verifyBody(signature.subarray(1), intentMessage), (signer) =>
-      sameBytes(signer, publicKey) ? Effect.void : Effect.fail(invalid("signature is not from this member's passkey")))
+      Bytes.equal(signer, publicKey) ? Effect.void : Effect.fail(invalid("signature is not from this member's passkey")))
   }
 }
 
@@ -383,7 +376,7 @@ export const findCommonPublicKey = (
   a: ReadonlyArray<Uint8Array>,
   b: ReadonlyArray<Uint8Array>
 ): Effect.Effect<Uint8Array, NoUniquePublicKey> => {
-  const matches = a.filter((x) => b.some((y) => sameBytes(x, y)))
+  const matches = a.filter((x) => b.some((y) => Bytes.equal(x, y)))
   return matches.length === 1 ? Effect.succeed(matches[0]!) : Effect.fail(new NoUniquePublicKey({ matches: matches.length }))
 }
 

@@ -40,6 +40,8 @@ Not reproduced: the known flake in `packages/walrus/test/live.gateway.test.ts` p
 
 Also: line 205 (`const [coin] = yield* Ptb.splitCoins(...)` then `[coin]`) fails under `noUncheckedIndexedAccess`, which this repo uses; `splitCoins` (`packages/sui/src/Ptb.ts:182`) returns an array, not a tuple typed by `amounts`. Returning a mapped tuple would remove the `coin!` every caller writes. Effort S for all.
 
+**Resolution:** fixed, and guarded. Re-verified all three (and the `splitCoins` one). `@unconfirmed/quorum`'s root now exports both shapes (`export *` and `export * as Quorum`), so the README's `import * as Quorum` works; the quilt example uses `yield* Effect.fromResult(Quilt.encode(...))`; the steps bullet says `onStep` gets a `Write.Step` and that `Schema.encodeSync(Write.Step)` / `Schema.decodeSync` give and restore the JSON. `Ptb.splitCoins` returns a tuple typed by `amounts`, so `const [coin] = …` needs no `!`. The check found two more: the `TransactionJson` block used `await` inside `Effect.gen` and declared `data` twice. Guard: every ```` ```ts ```` README block now lives verbatim in a `// #region readme` of a file under `examples/` (compiled by `bun run typecheck`, which now includes `examples/` and `scripts/`), and `packages/test-support/test/readme.test.ts` fails when a block and its region differ or a region is unused. Three illustrative blocks (type signatures, a hypothetical generated module, the scheme skeleton) are fenced ```` ```ts nocheck ````. Reverting the quilt fix fails both typecheck (TS2345) and the test.
+
 ### X-3 · medium · bundle · CONFIRMED
 **Module-level calls without `/* @__PURE__ */` in `bcs` and the `sui` core keep unused code in every bundle.**
 Walrus and Seal annotate consistently; the older packages do not. 925 module-evaluation-time calls lack the annotation; the files that matter are `packages/bcs/src/Bcs.ts:86-122` (22), `packages/sui/src/Address.ts` (10), `TransactionData.ts` (52), `Signer.ts`, `Objects.ts`, plus `packages/walrus/src/Status.ts` (11) and `BlobId.ts` (5).
@@ -91,6 +93,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - `version` is `0.0.0`; no `repository`, `description` or per-package `LICENSE` file; `sui-codegen`'s `bin` is a `.ts` file with a `bun` shebang.
 - Fix: a build step (or an explicit "TypeScript source, bundlers only" contract), `peerDependencies` for `effect`, `files`, and an `exports` map that excludes `internal/` and `generated/`. Effort M.
 
+**Resolution:** deferred: not publishing yet. The packages stay in this repo, consumed as TypeScript source; `package.json` publishing setup is unchanged.
+
 ### X-6 · medium · api · CONFIRMED
 **79 of 94 error classes have an empty `message`.**
 
@@ -98,6 +102,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Result: `String(new InvalidSliver({ reason: "bad header" }))` is `"InvalidSliver"`, `e.message` is `""`, and `Cause.pretty` prints `ObjectNotFound: `. An `Effect.runPromise` rejection, a log line or an error tracker shows the tag and nothing else.
 - Related hazard: these constructors validate their fields and throw `Schema validation failed` on a mismatch (`new BlobNotFound({ blobId: "x" as BlobId })`, `new RpcError({ ..., message: undefined })`). The call sites I checked guard their inputs (`GrpcWeb.ts:53`, `StorageNode.ts:94`, `KeyServerApi.ts:170`, `EnokiHttp.ts:57`), so this is a note, not a bug.
 - Fix: one convention. Either name the free-text field `message` everywhere, or add `override get message()` that renders the fields. Effort M (mechanical, touches public field names).
+
+**Resolution:** fixed with one convention: every error class without a `message` field has an `override get message()` rendering its fields as a short lower-case line (77 classes: sui 30, walrus 21, seal 13, wallet 4, zklogin, enoki, lifecycle, mnemonic 2 each, multisig 1). Field names are unchanged, encoding is unchanged (a getter is not a field), and no helper or import was added. Nothing secret or bulky is rendered: no keys, mnemonics, signatures, signed bytes, JWTs or headers; errors with nested failures show counts and kinds. Tests in each package's `errors.test.ts` check `message`, `String(e)`, `Cause.pretty`, a rejection, and that an invalid key, a mnemonic, a JWT and signed bytes stay out. `BcsDecodeError` became a `Schema.TaggedError` (X-19). Left: `sui-lifecycle` `NotApplied` keeps its optional `message` field (a getter would be encoded into it and break the round trip), and an `RpcError` whose server sent an empty `grpc-message`. Bundle (Bun, minified): the getters in a whole bundle (Effect's own included) total 2.1 KB in `Tx.run`, 3.3 KB in Seal encrypt + decrypt and 4.4 KB in a Walrus write; programs that changed for no other reason moved +0.1 KB (aggregator read) and +1.3 / +0.1 KB gzip (Seal encrypt + decrypt).
 
 ### X-7 · medium · correctness · CONFIRMED (code read; reproduced by the delegated doc audit)
 **`ThresholdNotMet.reason` is `"unreachable"` instead of `"denied"` when a server's keys are cached.**
@@ -107,12 +113,16 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Scenario: 3 of 3, one server cached, one `NoAccess`, one slow. `3 − 1 < 3 − 1` is false, so the reason is `"unreachable"`. Without the cache the same case is `"denied"`, as `docs/design/seal.md:646` says it should be.
 - Fix: compare `totalWeight - denied < threshold`, or pass the uncached weight. Effort S. (Seal internals; listed here because the doc check found it.)
 
+**Resolution:** fixed in the Seal batch (SEAL-3): `denied` when `d ≥ threshold || totalWeight − d < threshold`.
+
 ### X-8 · low · api · CONFIRMED
 **`SuiGrpc.layer` hides `GrpcWeb`, so everything else that needs it builds a second transport.**
 `packages/sui/src/grpc/index.ts:59-68` ends in `Layer.provide(GrpcWeb.layer(options))`.
 
 - `ZkLoginVerifierGrpc.layer`, `sui-lifecycle`'s `EvidenceGrpc.layer` and the README's escape hatch (`grpc.unary(Rpc.NameService_LookupName, …)`, line 280) all require `GrpcWeb`. With `SuiGrpc.layer` in place they fail with `Service not found: @unconfirmed/sui/GrpcWeb` until the caller adds `GrpcWeb.layer({ baseUrl })` again, repeating `baseUrl` and `headers`.
 - Fix: `Layer.provideMerge`, with `Services | GrpcWeb` in the type. Same for `SuiGraphQL.layer` and `GraphQLProtocol`. Effort S.
+
+**Resolution:** fixed. `SuiGrpc.layer` provides `Services | GrpcWeb` and `SuiGraphQL.layer` provides `Services | GraphQLProtocol` (`Layer.provideMerge`), so `EvidenceGrpc`, `ZkLoginVerifierGrpc` and `grpc.unary(Rpc.…)` reuse the transport. README lifecycle example uses it. Test in `grpc-lean.test.ts`.
 
 ### X-9 · low · api · CONFIRMED
 **Transport options differ by package for the same concepts.**
@@ -130,6 +140,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - `RpcError.retryable` exists but only `sui-lifecycle` and Seal's key-server lookup act on it. Walrus `System` / `Committee` reads and the `Resolve` pipeline fail on the first `UNAVAILABLE` or 429.
 - Fix: one `TransportOptions` shape (`url`, `headers`, `requestTimeout`, `tracerPropagation`) shared by every HTTP layer. Effort M.
 
+**Resolution:** partly fixed. The two behaviours that matter are aligned: `GrpcWeb`, `SuiGraphQL` and `EnokiHttp` take `requestTimeout` (default 30 s; unary calls / queries only, never streams or subscriptions) failing with a retryable typed error (`DEADLINE_EXCEEDED`, `UNAVAILABLE`, `EnokiError` `timeout`), and `GrpcWeb` and `SuiGraphQL` take `tracerPropagation`, off by default as everywhere else (spans are still recorded; trace headers are no longer sent unless asked). Test: a hung unary call fails at the timeout and sends no `traceparent`/`b3`. Not changed: the endpoint names (`baseUrl` / `url` / `host` / `apiUrl`), `headers` on `UploadRelay`, the retry option shapes and `maxEpoch` types: renaming is a breaking change across every caller for consistency alone, better done with one shared `TransportOptions` when there is an API break to ride on.
+
 ### X-10 · low · deps · CONFIRMED
 **Dependency lists do not match the imports.**
 
@@ -138,6 +150,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Undeclared test dependencies that resolve only because the root lists every workspace package: Seal tests import `sui-wallet`, `sui-secp256k1`, `sui-secp256r1`; Walrus tests and scripts import `sui-codegen`, `sui-secp256k1`, `sui-secp256r1`; `sui-mnemonic` tests import `sui-mldsa65` and both secp packages; `sui-mldsa65`, `sui-passkey` and `sui-zklogin` tests import `sui-multisig`. Only `sui-multisig` and `walrus` declare any `devDependencies`.
 - Every `src` import is declared. Pins are consistent: `effect` 4.1.6 everywhere, `^2.3.0` for noble and scure, exact for `@mysten/walrus-wasm` and `poseidon-lite`.
 - Effort S.
+
+**Resolution:** fixed. `@noble/hashes` was already removed (SIGN-20). Every package now declares what its tests and scripts import (`devDependencies`: `@mysten/*` oracles, the workspace packages, `@unconfirmed/test-support`); a script checked every import against the manifests. `@wallet-standard/base` stays a dependency of `sui-wallet` on purpose: the package ships TypeScript source whose exported types reference it, so a consumer's compiler needs it (zero runtime cost, and `@wallet-standard/app` depends on it anyway).
 
 ### X-11 · low · simplification · CONFIRMED
 **The same byte helpers are written per package, and three encoder families are in use.**
@@ -149,6 +163,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Size: `effect/encoding/Base64` + `Hex` is 2.0 KB and already ships with `Schema`; `@scure/base` is 3.2 KB for base58 alone and 8.0 KB with base64, bech32 and base64url. Using Effect's base64 and hex and keeping `@scure/base` for base58 and bech32 saves up to about 3 KB in programs that use `PrivateKey`, `TransactionJson` or a wallet.
 - Fix: one `Bytes` module (in `@unconfirmed/bcs`, which everything already depends on). Effort S.
 
+**Resolution:** fixed for the duplicates that are true copies. New `@unconfirmed/bcs/Bytes` (a leaf: `equal`, `concat`, `toHex`, `fromHex`) replaces the 9 `sameBytes`, the hand-written hex in `Bcs.ts`, `Address.ts`, `CoinReservation.ts` and `PublicIdentifier.ts`, and `concat` in Seal (`bytes.ts` re-exports it) and `sui-passkey`; every user already depended on `bcs`, so no coupling is added, and each function shakes out on its own. `GrpcWeb`'s frame builder is not a generic concat and stays. Not changed: base64. Swapping `@scure/base`'s base64 for Effect's in `PrivateKey`, `TransactionJson` and `sui-wallet` saves about 3 KB only in programs that use them, and the two decoders differ on padding and whitespace, so it would change which strings `PrivateKey.decodeKeystore` and `TransactionJson.decode` accept; `@scure/base` stays for base58/bech32 regardless.
+
 ### X-12 · low · tests · CONFIRMED
 **Test support is duplicated or shared through relative paths into other packages.**
 
@@ -159,6 +175,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - `faucet` (`packages/sui/test/support.ts:65`) has no timeout and no retry on 429, and a live run calls it about 17 times from one IP. It did not fail in two runs, but it is the obvious next flake.
 - Fix: a private workspace package (`packages/test-support`) with the recorded-`Objects` layer, the oracle helpers, the keystore loader and a faucet with retry. Effort M.
 
+**Resolution:** fixed. New private workspace package `packages/test-support` (`@unconfirmed/test-support`, test-only): `live` (switch, endpoints, `grpcLayer`, and a `faucet` with a 30 s bound and backoff on no answer / 429 / 5xx), `keystore` (`loadCliSigner`, replacing the Walrus and Seal copies), `recorded` (`recordObject`, `restoreObject`, the recorded `Objects` layer, used by both fixture files), `wallet` (the fake wallet, moved from `sui-wallet/test`), `zklogin` (moved from `sui-zklogin/test`), and `readme` (X-2). No test imports another package's `test/` directory any more. Not merged: the two `oracle.ts` files load different Mysten packages, and the one-line `run` / `ok` / `failure` helpers differ in shape per file.
+
 ### X-13 · low · tests · CONFIRMED
 **A quarter of the offline suite's time is one file stepping virtual time 10 ms at a time.**
 
@@ -166,6 +184,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Other slow files are inherent: `walrus/test/encoder.test.ts` 7.9 s (WASM at n = 1000), `seal/test/envelope.test.ts` 6.9 s (255 shares, 3.5 s), `seal/test/parity.envelope.test.ts` 3.0 s, `walrus/test/messages.test.ts` 2.6 s.
 - `packages/bcs/test/` is empty. BCS is covered only through `packages/sui/test/parity.test.ts` and its users.
 - Fix: step to the next scheduled wake-up instead of a fixed 10 ms (or use larger steps outside the asserted windows). Effort S.
+
+**Resolution:** fixed. The `keys.test.ts` harness jumps `TestClock` to the next scheduled wake-up (read from the clock's pending sleeps; 10 ms when none) after its real macrotasks: the file runs in 2.4 s instead of 12.3 s, with the same virtual-time assertions. `packages/bcs/test` exists since CORE-25.
 
 ### X-14 · low · bundle · CONFIRMED
 **The Rolldown column counts `/* @__PURE__ */` comments, which Rolldown keeps in minified output.**
@@ -188,9 +208,13 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - `README.md:135` and `docs/design/walrus.md:787`: "32-byte blobs"; `packages/walrus/test/live.write.test.ts:314-358` also writes a 445,556-byte quilt.
 - Everything else checked in the As-built notes was correct (about 170 Walrus claims, about 150 Seal and Quorum claims).
 
+**Resolution:** fixed, each re-verified against the code. README "short or unprefixed id" was already corrected by the Seal batch; `seal.md` S5 now says `SessionKey.verify` accepts a spread copy (it reads only the copied public fields); S6 says only servers whose keys are not all cached are in `unsettled`; `walrus.md` says only `Read.ts` and `Write.ts` import the quorum; the README live-test paragraph and `walrus.md` live case 1 mention the 445,556-byte quilt.
+
 ### X-16 · low · performance · CONFIRMED
 **`Chain` over gRPC calls `GetEpoch` twice for one resolve.**
 `packages/sui/src/grpc/ChainGrpc.ts:13-30`: `info` asks for `epoch, first_checkpoint` and `referenceGasPrice` asks for `epoch, reference_gas_price` separately. The live log shows both in one `Tx.run` (`GetEpoch`, `GetBalance`, `GetServiceInfo`, `GetEpoch`). One request with both paths, cached once, saves a round trip per cold resolve. Effort S.
+
+**Resolution:** fixed. Since CORE-10 one `GetEpoch` served both members; with CT-23, `Chain.info` reads only `GetServiceInfo` and the gas price only `GetEpoch` (`reference_gas_price`).
 
 ### X-17 · nit · docs · CONFIRMED
 **Small inaccuracies in the README bundle section.**
@@ -201,6 +225,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Table rounding: write through nodes is 453.8 / 447.7 / 455.5 (table: 453 / 447 / 455); relay is 458.8 / 452.7 / 460.7 (table: 458 / 452 / 460).
 - "Extra deps" column omits `@scure/base` for `sui`, `sui-passkey`, `sui-wallet`, `sui-zklogin`, and `@noble/hashes` for `sui-passkey`.
 
+**Resolution:** fixed with the regenerated table (rounded, not truncated): WASM 349 KB, a bare `runPromise` 22 KB under Rolldown (and `Quorum.run` 62), esbuild barrel growth 4–84 KB (24–60 for most, measured with `--named`), Seal 86 KB / 5 KB gzip under Mysten's, the generated call +0.6 / +0.3 KB, and the missing `@scure/base` / `@noble/hashes` in the "Extra deps" column.
+
 ### X-18 · nit · api · CONFIRMED
 **Package roots export in three shapes.**
 
@@ -210,8 +236,12 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 
 So `import * as X from "@unconfirmed/<pkg>"` works for the flat ones and fails for `quorum` (X-2). Also `GrpcWeb.layer` is a static on the service class, imported by name, while every other layer is a module-level `layer`; `sui-zklogin`'s doc comment writes `GrpcWeb.GrpcWeb.layer`. Core capability services have no accessors (`Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(id))`), while Walrus and Seal export them (`Aggregator.blob(id)`).
 
+**Resolution:** partly fixed. `@unconfirmed/quorum` and `@unconfirmed/sui-zklogin` roots also export their main module as a namespace (`import { Quorum }` and `import * as Quorum` both work; `import { ZkLogin }` now works, which `bundle-report --named` needed). Not changed: flattening the namespace packages or adding accessors to the core services (API additions with no bug behind them). The zkLogin doc comments now write `GrpcWeb.layer`, as a user importing `{ GrpcWeb }` (like the README) would.
+
 ### X-19 · nit · api · CONFIRMED
 **`BcsDecodeError` is a `Data.TaggedError`** (`packages/bcs/src/Bcs.ts:461`) in a package that already ships `Schema`. Quorum's two `Data.TaggedError`s are justified (generic, no `Schema`); this one is not.
+
+**Resolution:** fixed: `BcsDecodeError` is a `Schema.TaggedError` with `message` and `offset`; all construction sites pass a string and a number.
 
 ### X-20 · nit · tests · CONFIRMED
 **`scripts/bundle-report.ts` is outside `bun run typecheck`, and nothing runs the checks automatically.**
@@ -219,6 +249,8 @@ So `import * as X from "@unconfirmed/<pkg>"` works for the flat ones and fails f
 - The root `tsconfig.json` includes `packages/*/{src,test,scripts}` only. Every other `.ts` file in the repo is covered (305 files). The script does typecheck clean when included.
 - There is no CI configuration, so typecheck, tests and the Seal containment checks in the bundle report run only by hand.
 - Fix: add `"scripts"` to `include`. Effort S.
+
+**Resolution:** fixed. The root `tsconfig.json` includes `scripts` and `examples`; `.github/workflows/ci.yml` runs `bun install --frozen-lockfile`, typecheck, the offline tests and the bundle report (whose Seal containment check fails the job).
 
 ## Optimizations
 

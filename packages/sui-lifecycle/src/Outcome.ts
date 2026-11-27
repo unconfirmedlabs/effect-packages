@@ -51,7 +51,11 @@ export class SubmissionUnknown extends Schema.TaggedError<SubmissionUnknown>()("
   digest: Schema.String,
   signed: Schema.optionalKey(SignedTransaction),
   reason: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `outcome of ${this.digest} unknown: ${this.reason}`
+  }
+}
 
 /**
  * The journal could not be read or written. Raised only before bytes that were
@@ -74,7 +78,11 @@ export class JournalError extends Schema.TaggedError<JournalError>()("JournalErr
 export class DigestMismatch extends Schema.TaggedError<DigestMismatch>()("DigestMismatch", {
   digest: Schema.String,
   computed: Schema.String
-}) {}
+}) {
+  override get message(): string {
+    return `digest ${this.digest} does not match the bytes (${this.computed})`
+  }
+}
 
 export type Outcome = "applied" | "not_applied" | "unknown"
 

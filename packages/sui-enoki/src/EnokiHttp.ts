@@ -5,6 +5,7 @@
  *   EnokiHttp.layer({ apiKey }).pipe(Layer.provide(FetchHttpClient.layer))
  */
 import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
@@ -37,6 +38,8 @@ export interface EnokiHttpOptions {
    * them, and the Enoki API doesn't list them as allowed headers.
    */
   readonly tracerPropagation?: boolean
+  /** Bound on each request; one without an answer in time is a retryable `EnokiError` (`status: 0`, `code: "timeout"`). Default 30 seconds. */
+  readonly requestTimeout?: Duration.Input
 }
 
 const toBase64 = (bytes: Uint8Array): string => {
@@ -97,6 +100,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
     Effect.gen(function*() {
       const http = yield* HttpClient.HttpClient
       const base = `${options.apiUrl ?? DEFAULT_API_URL}/${VERSION}`
+      const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? "30 seconds")
 
       const call = <S extends Schema.Top & { readonly DecodingServices: never }>(
         operation: string,
@@ -133,7 +137,14 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
             )
           )
           return (body as { readonly data: S["Type"] }).data
-        }).pipe(Effect.withSpan(`EnokiClient.${operation}`, { attributes: { "http.request.method": method, "enoki.path": path } }))
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: timeout,
+            orElse: () =>
+              Effect.fail(new EnokiError({ status: 0, code: "timeout", message: `${operation}: no answer within ${Duration.format(timeout)}`, errors: [] }))
+          }),
+          Effect.withSpan(`EnokiClient.${operation}`, { attributes: { "http.request.method": method, "enoki.path": path } })
+        )
       }
 
       const jwtHeader = (jwt: string | undefined) => (jwt ? { [ZKLOGIN_HEADER]: jwt } : {})

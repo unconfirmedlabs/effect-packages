@@ -28,8 +28,8 @@ export interface LeanMethod {
   readonly request?: ReadonlyArray<string>
 }
 
-/** `ChainGrpc`: `info` and `referenceGasPrice`. */
-const EPOCH = ["epoch", "first_checkpoint", "reference_gas_price"]
+/** `ChainGrpc`: `referenceGasPrice`. */
+const EPOCH = ["reference_gas_price"]
 /** `CheckpointsGrpc` (the bare listing). */
 const CHECKPOINT_IDS = ["sequence_number", "digest"]
 /** `DynamicFieldsGrpc` (`LIST_MASK`). */

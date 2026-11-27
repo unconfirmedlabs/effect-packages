@@ -79,11 +79,13 @@ export const layerCore = (options: GrpcWebOptions): Layer.Layer<CoreServices | G
   ).pipe(Layer.provideMerge(GrpcWeb.layer(options)))
 
 /**
- * All nine capability services over one gRPC-web endpoint. Needs an
- * `HttpClient`. This links every RPC the services use; a program that only
- * builds and executes transactions is smaller with `layerCore`.
+ * All nine capability services over one gRPC-web endpoint, plus the `GrpcWeb`
+ * client itself (for `EvidenceGrpc`, `ZkLoginVerifierGrpc` or `grpc.unary`
+ * calls on the same transport). Needs an `HttpClient`. This links every RPC
+ * the services use; a program that only builds and executes transactions is
+ * smaller with `layerCore`.
  */
-export const layer = (options: GrpcWebOptions): Layer.Layer<Services, never, HttpClient.HttpClient> =>
+export const layer = (options: GrpcWebOptions): Layer.Layer<Services | GrpcWeb, never, HttpClient.HttpClient> =>
   Layer.mergeAll(
     ChainGrpc.layer,
     PackagesGrpc.layer,
@@ -92,4 +94,4 @@ export const layer = (options: GrpcWebOptions): Layer.Layer<Services, never, Htt
     CheckpointDataGrpc.layer,
     EventsGrpc.layer,
     Layer.mergeAll(CoinsGrpc.layer, DynamicFieldsGrpc.layer).pipe(Layer.provideMerge(ObjectsGrpc.layer))
-  ).pipe(Layer.provide(GrpcWeb.layer(options)))
+  ).pipe(Layer.provideMerge(GrpcWeb.layer(options)))

@@ -14,6 +14,7 @@
  */
 import { base58 } from "@scure/base"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 import { type Address, fromBytes, normalize } from "./Address.ts"
 import { deriveId } from "./DynamicFields.ts"
 import type { ObjectDigest, ObjectRef } from "./TransactionData.ts"
@@ -38,8 +39,6 @@ export const reservedOf = (ref: ObjectRef): bigint => {
   return new DataView(d.buffer, d.byteOffset, d.byteLength).getBigUint64(0, true)
 }
 
-const hex = (s: string) => Uint8Array.from(s.slice(2).match(/../g)!, (h) => parseInt(h, 16))
-
 /**
  * A reservation of `reserved` MIST from `owner`'s SUI address balance, valid
  * in `epoch` on the chain `chainId` (the genesis checkpoint digest).
@@ -52,7 +51,7 @@ export const make = (options: {
   readonly epoch: bigint
 }): ObjectRef => {
   if (options.epoch < 0n || options.epoch > 0xffffffffn) throw new Error(`epoch ${options.epoch} exceeds u32`)
-  const field = hex(deriveId(ACCUMULATOR_ROOT, SUI_ACCUMULATOR_KEY, Bcs.encodeSync(Bcs.Address)(options.owner)))
+  const field = Bytes.fromHex(deriveId(ACCUMULATOR_ROOT, SUI_ACCUMULATOR_KEY, Bcs.encodeSync(Bcs.Address)(options.owner)).slice(2))
   const chain = base58.decode(options.chainId)
   if (chain.length !== 32) throw new Error(`chain id must be 32 bytes, got ${chain.length}`)
   const id = field.map((b, i) => b ^ chain[i]!)

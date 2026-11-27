@@ -13,10 +13,6 @@ export interface ChainInfo {
   readonly chain: string
   readonly epoch: bigint
   readonly checkpointHeight: bigint
-  /** The oldest checkpoint the node serves; `undefined` when the transport doesn't report it (not "full history"). */
-  readonly lowestAvailableCheckpoint: bigint | undefined
-  /** The first checkpoint of `epoch`; `undefined` when the transport doesn't report it. */
-  readonly epochFirstCheckpoint: bigint | undefined
 }
 
 export class Chain extends /* @__PURE__ */ Context.Service<Chain, {

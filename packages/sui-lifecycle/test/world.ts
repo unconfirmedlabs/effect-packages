@@ -60,7 +60,6 @@ export type Behaviour =
 export interface World {
   epoch: bigint
   chainId: string
-  lowestAvailableCheckpoint: bigint
   /** The sender's SUI address balance (gas is paid from it unless a test pins coins). */
   addressBalance: bigint
   script: Array<Behaviour>
@@ -95,7 +94,6 @@ export const makeWorld = (overrides: Partial<World> = {}): World => ({
   epoch: 10n,
   addressBalance: 1_000_000_000_000n,
   chainId: CHAIN_ID,
-  lowestAvailableCheckpoint: 0n,
   script: [],
   executeCalls: 0,
   getCalls: 0,
@@ -242,9 +240,7 @@ export const layer = (world: World) =>
         chainId: world.chainId as T.ObjectDigest,
         chain: "stub",
         epoch: world.epoch,
-        checkpointHeight: 1000n,
-        lowestAvailableCheckpoint: world.lowestAvailableCheckpoint,
-        epochFirstCheckpoint: undefined
+        checkpointHeight: 1000n
       })),
       referenceGasPrice: Effect.succeed(1000n)
     }),

@@ -27,6 +27,7 @@ import * as Read from "./Read.ts"
 import type { ReadError, ReadOptions, ReadServices } from "./Read.ts"
 import { NodeError, StorageNodes } from "./StorageNode.ts"
 import * as StorageNode from "./StorageNode.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 // -----------------------------------------------------------------------------
 // API
@@ -296,14 +297,9 @@ const sliverRootsMatch = (
       const roots = yield* encoder.sliverRoots(n, "secondary", layout.symbolSize, batch.map((c) => c.bytes))
       for (let k = 0; k < batch.length; k++) {
         const expected = metadata.hashes[Encoding.pairOfSecondary(batch[k]!.s, n)]!.secondary
-        if (!sameBytes(roots[k]!, expected)) return false
+        if (!Bytes.equal(roots[k]!, expected)) return false
       }
     }
     return true
   })
 
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-  return true
-}

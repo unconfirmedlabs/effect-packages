@@ -59,6 +59,7 @@ import * as Recipes from "./Recipes.ts"
 import { NodeError, retryable, StorageNodes } from "./StorageNode.ts"
 import { System, type SystemError, type SystemState } from "./System.ts"
 import { authAndTipWith, makeNonce, UploadRelay, type UploadRelayService, verifyCertificate } from "./UploadRelay.ts"
+import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 // -----------------------------------------------------------------------------
 // Steps
@@ -258,7 +259,6 @@ const registeredOf = (encoded: Encoded, b: OnChainBlob, digest?: string): Regist
   ...(digest !== undefined && { digest })
 })
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
 /** The epoch in a confirmation message (M1), if it is one. */
 const messageEpoch = (m: Uint8Array): number | undefined => {
@@ -543,7 +543,7 @@ const uploadOnce = (
         })
         yield* Effect.all(puts, { concurrency: PER_NODE_CONCURRENCY, discard: true })
         const signed = yield* withRetry(nodes.confirmation(node, blobId, persistenceOf(registered)))
-        if (!sameBytes(signed.serializedMessage, message)) {
+        if (!Bytes.equal(signed.serializedMessage, message)) {
           const epoch = messageEpoch(signed.serializedMessage)
           if (epoch !== undefined && epoch > committee.epoch) yield* Ref.set(newerEpoch, epoch)
           return yield* failure(

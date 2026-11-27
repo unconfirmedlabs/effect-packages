@@ -1,0 +1,20 @@
+{
+  "name": "@unconfirmed/test-support",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Test-only helpers shared by the packages' test suites (live endpoints, devnet faucet, recorded chain objects, the Sui CLI signer). Never a runtime dependency.",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/sui": "workspace:*",
+    "@unconfirmed/sui-secp256k1": "workspace:*",
+    "@unconfirmed/sui-secp256r1": "workspace:*",
+    "@unconfirmed/sui-wallet": "workspace:*",
+    "@wallet-standard/base": "^1.1.1",
+    "effect": "4.1.6"
+  }
+}

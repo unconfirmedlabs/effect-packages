@@ -242,6 +242,8 @@ Counts: 1 high, 5 medium, 13 low, 6 nit.
 
 **Resolution.** Added `SuiGrpc.layerCore({ baseUrl })` (Chain, Objects, Coins, Packages, Transactions, plus `GrpcWeb` for stacking more `*Grpc.layer`s); `SuiGrpc.layer` is unchanged and documented as linking all nine. README and the bundle report use `layerCore`: with descriptor pruning the program is 310.9 / 101.0 KB (Bun), 337.8 / 105.6 with `SuiGrpc.layer` (was 388.3 / 112.3, comments stripped). Allowance resolution is still linked (+5.8 KB): making it lazy needs a caller-added step (API change) or a resolver attached to `AllowanceIntent` in `Ptb.ts`.
 
+**Resolution (allowance laziness, final batch).** Done the second way, with no API change for allowance users. `AllowanceIntent` carries `resolve` (the resolver, moved to `src/internal/allowances.ts`); `Ptb.coin` / `Ptb.balance` with `allowance` and `TransactionJson.decode` of an `AllowanceBalance` intent attach it; `Resolve.allowances` (and so `Resolve.balances` and the default pipeline) calls it through the first allowance intent of the plan and does nothing without one. The resolver, the `Allowance` BCS layout and the seven error classes are linked only by programs that can make an allowance intent (`Ptb.coin` / `Ptb.balance` or `TransactionJson`). Measured on the build + resolve + sign + execute program (Bun, `layerCore`): 315.7 / 102.7 KB, 321.2 / 104.3 with the resolver forced in, so −5.5 / −1.6 KB; the bundle no longer contains `balance_spend`. All allowance tests (offline and devnet) pass unchanged.
+
 ### Bundle: prune protobuf messages the SDK never reads (−48 KB)
 
 - Descriptors are the largest part of our own code: 104.9 KB of 383.9 in the README program, 85.7 KB with five layers. Sui core is 26.5 KB and BCS 5.8 KB.

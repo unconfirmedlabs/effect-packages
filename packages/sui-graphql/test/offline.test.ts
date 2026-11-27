@@ -407,9 +407,8 @@ describe("failures are not cached", () => {
         body: {
           data: {
             chainIdentifier: "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD",
-            epoch: { epochId: 3, referenceGasPrice: "750", checkpoints: { nodes: [{ sequenceNumber: 7 }] } },
-            checkpoint: { sequenceNumber: 9 },
-            serviceConfig: { availableRange: { first: { sequenceNumber: 0 } } }
+            epoch: { epochId: 3, referenceGasPrice: "750" },
+            checkpoint: { sequenceNumber: 9 }
           }
         }
       })
@@ -423,8 +422,8 @@ describe("failures are not cached", () => {
     expect(out[0]._tag).toBe("Failure")
     expect(out[1]._tag).toBe("Failure")
     expect(out[2].chain).toBe("testnet")
-    expect(out[2].epochFirstCheckpoint).toBe(7n)
-    expect(out[2].lowestAvailableCheckpoint).toBe(0n)
+    expect(out[2].epoch).toBe(3n)
+    expect(out[2].checkpointHeight).toBe(9n)
     expect(out[3]).toBe(750n)
     // Info and gas price share one query: two failures, then one success feeds both.
     expect(calls).toBe(3)
