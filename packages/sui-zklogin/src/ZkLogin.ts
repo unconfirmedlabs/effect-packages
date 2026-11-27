@@ -18,6 +18,7 @@ import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
 import * as Signer from "@unconfirmed/sui/Signer"
 import * as Effect from "effect/Effect"
 import { reasonOf } from "./Errors.ts"
+import * as Parse from "./internal/parse.ts"
 import { issuerOfUnsafe } from "./Jwt.ts"
 import * as PublicIdentifier from "./PublicIdentifier.ts"
 import * as Signature from "./Signature.ts"
@@ -30,7 +31,7 @@ const invalid = (reason: string) => new SignatureScheme.InvalidSignature({ schem
 
 /** @internal The padded public identifier a signature's proof inputs commit to. */
 const identifierOf = (inputs: Signature.ZkLoginSignatureInputs): Uint8Array =>
-  PublicIdentifier.encode(BigInt(inputs.addressSeed), issuerOfUnsafe(inputs.issBase64Details), false)
+  PublicIdentifier.encode(Parse.seed(inputs.addressSeed), issuerOfUnsafe(inputs.issBase64Details), false)
 
 const parse = (body: Uint8Array) =>
   Effect.flatMap(
@@ -114,11 +115,11 @@ export const signer = (options: SignerOptions): Effect.Effect<Signer.Signer, Sig
     const { identifier, address, maxEpoch } = yield* Effect.try({
       try: () => {
         const iss = issuerOfUnsafe(options.inputs.issBase64Details)
-        const seed = BigInt(options.inputs.addressSeed)
+        const seed = Parse.seed(options.inputs.addressSeed)
         return {
           identifier: PublicIdentifier.encode(seed, iss, false),
           address: PublicIdentifier.toAddress(PublicIdentifier.encode(seed, iss, options.legacyAddress ?? false)),
-          maxEpoch: BigInt(options.maxEpoch)
+          maxEpoch: Parse.epoch(options.maxEpoch)
         }
       },
       catch: (e) => refuse(reasonOf(e))

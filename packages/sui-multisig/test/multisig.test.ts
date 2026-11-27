@@ -100,4 +100,52 @@ describe("MultiSig", () => {
     const v = await Effect.runPromise(Verify.personalMessage(msg, ours).pipe(Effect.provide(all)))
     expect(v.address).toBe(t.pk.toSuiAddress() as typeof v.address)
   })
+  test("combine below the threshold is refused (the result could never verify)", async () => {
+    const err = await Effect.runPromise(Effect.gen(function*() {
+      const { a, pk } = yield* setup
+      const sa = yield* Signer.signPersonalMessage(a, msg)
+      return yield* Effect.flip(MultiSig.combine(pk, [sa.signature]))
+    }))
+    expect(err).toMatchObject({ _tag: "InvalidMultiSig" })
+    expect(err.reason).toContain("below threshold")
+  })
+
+  test("member keys of the wrong length are refused, so no unreachable address is derived", async () => {
+    const a = await Effect.runPromise(Ed25519.fromSecretKey(seed(1)))
+    const zk = (issLength: number, rest: number) => new Uint8Array([issLength, ...new Uint8Array(issLength + rest).fill(0x61)])
+    const bad: Array<[string, SignatureScheme.PublicKey]> = [
+      ["31-byte Ed25519", { flag: 0x00, bytes: new Uint8Array(31) }],
+      ["65-byte (uncompressed) secp256k1", { flag: 0x01, bytes: new Uint8Array(65).fill(4) }],
+      ["32-byte key under the secp256r1 flag", { flag: 0x02, bytes: new Uint8Array(32) }],
+      ["short passkey", { flag: 0x06, bytes: new Uint8Array(32) }],
+      ["short ML-DSA-65", { flag: 0x07, bytes: new Uint8Array(1951) }],
+      ["zkLogin without a seed", { flag: 0x05, bytes: zk(3, 0) }],
+      ["zkLogin with a 33-byte seed", { flag: 0x05, bytes: zk(3, 33) }],
+      ["zkLogin without an issuer", { flag: 0x05, bytes: new Uint8Array([0, 1, 2]) }]
+    ]
+    for (const [why, publicKey] of bad) {
+      const err = await Effect.runPromise(
+        MultiSig.publicKey({ members: [{ publicKey: a.publicKey, weight: 1 }, { publicKey, weight: 1 }], threshold: 1 }).pipe(Effect.flip)
+      )
+      expect(err._tag, why).toBe("InvalidMultiSig")
+      expect(err.reason, why).toContain("member 1")
+    }
+    // A padded (32-byte seed) and a legacy (shorter seed) zkLogin identifier are both fine.
+    for (const bytes of [zk(3, 32), zk(3, 31)]) {
+      await Effect.runPromise(MultiSig.publicKey({ members: [{ publicKey: { flag: 0x05, bytes }, weight: 1 }], threshold: 1 }))
+    }
+  })
+
+  test("signer fails, never throws, on a bad member set", async () => {
+    const a = await Effect.runPromise(Ed25519.fromSecretKey(seed(1)))
+    const pk = await Effect.runPromise(MultiSig.publicKey({ members: [{ publicKey: a.publicKey, weight: 1 }], threshold: 1 }))
+    // A hand-built key that skipped `publicKey` (the brand is only a type): a 31-byte member, a weight of 300.
+    for (const member of [{ publicKey: { flag: 0x00, bytes: new Uint8Array(31) }, weight: 1 }, { publicKey: { flag: 0x00, bytes: seed(5) }, weight: 300 }]) {
+      const forged = { ...pk, members: [...pk.members, member] } as MultiSig.MultiSigPublicKey
+      const run = MultiSig.signer(forged, [a]) // building the effect doesn't throw
+      expect((await Effect.runPromise(Effect.flip(run)))._tag).toBe("InvalidMultiSig")
+      const sa = await Effect.runPromise(Signer.signPersonalMessage(a, msg))
+      expect((await Effect.runPromise(Effect.flip(MultiSig.combine(forged, [sa.signature]))))._tag).toBe("InvalidMultiSig")
+    }
+  })
 })

@@ -12,7 +12,6 @@
     "@unconfirmed/bcs": "workspace:*",
     "@unconfirmed/sui": "workspace:*",
     "effect": "4.1.6",
-    "@noble/hashes": "^2.3.0",
     "@scure/base": "^2.3.0",
     "poseidon-lite": "0.3.0"
   }

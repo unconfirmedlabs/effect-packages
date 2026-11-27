@@ -6,6 +6,7 @@
  */
 import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
@@ -18,6 +19,8 @@ import { EnokiClient, EnokiError, type EnokiErrorDetail } from "./EnokiClient.ts
 import * as E from "./EnokiClient.ts"
 
 export const DEFAULT_API_URL = "https://api.enoki.mystenlabs.com"
+/** How long a successful `getApp` (which names the sponsor addresses) is reused. Failures aren't cached. */
+export const APP_CACHE_TTL = "5 minutes"
 const VERSION = "v1"
 const ZKLOGIN_HEADER = "zklogin-jwt"
 /** Headers that carry credentials (`authorization` is redacted by Effect already). */
@@ -74,6 +77,20 @@ export const errorFromResponse = (status: number, text: string): EnokiError => {
   })
 }
 
+/**
+ * The failure to keep as an `EnokiError`'s `cause`. HTTP client errors hold
+ * the request, whose headers carry the API key and the user's JWT, so only
+ * their name and message are kept; a Schema error (about the response body)
+ * is kept as is.
+ */
+const withoutRequest = (e: unknown): unknown => {
+  if (Schema.isSchemaError(e)) return e
+  const tag = Predicate.hasProperty(e, "reason") && Predicate.hasProperty(e.reason, "_tag") ? String(e.reason._tag) : undefined
+  const error = new Error(Predicate.hasProperty(e, "message") ? String(e.message) : String(e))
+  error.name = tag ?? "HttpClientError"
+  return error
+}
+
 export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never, HttpClient.HttpClient> =>
   Layer.effect(
     EnokiClient,
@@ -104,7 +121,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
             Effect.provideService(HttpClient.TracerPropagationEnabled, options.tracerPropagation ?? false),
             // The JWT is a bearer credential for the user; keep it out of spans and logs like `Authorization`.
             Effect.provideService(Headers.CurrentRedactedNames, [...redacted, ...REDACTED]),
-            Effect.mapError((e) => new EnokiError({ status: 0, code: "request_failed", message: e.message, errors: [] }))
+            Effect.mapError((e) => new EnokiError({ status: 0, code: "request_failed", message: e.message, errors: [], cause: withoutRequest(e) }))
           )
           if (response.status < 200 || response.status >= 300) {
             const text = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
@@ -112,7 +129,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
           }
           const body = yield* HttpClientResponse.schemaBodyJson(envelope)(response).pipe(
             Effect.mapError((e) =>
-              new EnokiError({ status: response.status, code: "invalid_response", message: e.message, errors: [] })
+              new EnokiError({ status: response.status, code: "invalid_response", message: e.message, errors: [], cause: withoutRequest(e) })
             )
           )
           return (body as { readonly data: S["Type"] }).data
@@ -121,8 +138,17 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
 
       const jwtHeader = (jwt: string | undefined) => (jwt ? { [ZKLOGIN_HEADER]: jwt } : {})
 
+      // `Sponsor` asks for the app (its sponsor addresses) with every transaction: answer it from a cache,
+      // and drop the cache when Enoki says the sponsor or gas price changed, as `@mysten/enoki` does.
+      const [getApp, invalidateApp] = yield* Effect.cachedInvalidateWithTTL(
+        call("getApp", "GET", "app", E.App),
+        (exit) => (Exit.isSuccess(exit) ? APP_CACHE_TTL : 0)
+      )
+      const dropAppWhenStale = <A>(effect: Effect.Effect<A, EnokiError>) =>
+        Effect.tapError(effect, (e) => (e.requiresRebuild ? invalidateApp : Effect.void))
+
       return EnokiClient.of({
-        getApp: call("getApp", "GET", "app", E.App),
+        getApp,
         getZkLogin: ({ jwt }) => call("getZkLogin", "GET", "zklogin", E.ZkLoginAccount, { headers: jwtHeader(jwt) }),
         getZkLoginAddresses: ({ jwt }) =>
           call("getZkLoginAddresses", "GET", "zklogin/addresses", E.ZkLoginAddresses, { headers: jwtHeader(jwt) }),
@@ -146,7 +172,7 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
           }),
         createSponsoredTransaction: (input) => {
           const bySender = "sender" in input ? input : undefined
-          return call("createSponsoredTransaction", "POST", "transaction-blocks/sponsor", E.SponsoredTransaction, {
+          return dropAppWhenStale(call("createSponsoredTransaction", "POST", "transaction-blocks/sponsor", E.SponsoredTransaction, {
             headers: jwtHeader("jwt" in input ? input.jwt : undefined),
             body: {
               sender: bySender?.sender,
@@ -155,12 +181,12 @@ export const layer = (options: EnokiHttpOptions): Layer.Layer<EnokiClient, never
               allowedAddresses: bySender?.allowedAddresses,
               allowedMoveCallTargets: bySender?.allowedMoveCallTargets
             }
-          })
+          }))
         },
         executeSponsoredTransaction: (input) =>
-          call("executeSponsoredTransaction", "POST", `transaction-blocks/sponsor/${input.digest}`, E.ExecutedTransaction, {
+          dropAppWhenStale(call("executeSponsoredTransaction", "POST", `transaction-blocks/sponsor/${input.digest}`, E.ExecutedTransaction, {
             body: { signature: toBase64(input.signature) }
-          }),
+          })),
         sponsorAndExecuteTransaction: (input) =>
           call("sponsorAndExecuteTransaction", "POST", "transaction-blocks/sponsor/execute", E.ExecutedTransaction, {
             body: {

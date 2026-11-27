@@ -10,6 +10,8 @@
 import * as Address from "@unconfirmed/sui/Address"
 import * as Effect from "effect/Effect"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"
+import * as Parse from "./internal/parse.ts"
+import { BN254_FIELD_SIZE } from "./internal/poseidon.ts"
 
 export const FLAG = 0x05
 
@@ -38,8 +40,9 @@ export const normalizeIssuer = (iss: string): string => (iss === "accounts.googl
 const seedBytes = (seed: bigint, legacyAddress: boolean) =>
   legacyAddress ? toBigEndianBytes(seed, 32) : toPaddedBigEndianBytes(seed, 32)
 
-/** @internal `len || iss || seed`, the seed padded or (legacy) not. */
+/** @internal `len || iss || seed`, the seed padded or (legacy) not. Throws on a seed outside the BN254 field. */
 export const encode = (addressSeed: bigint, iss: string, legacyAddress: boolean): Uint8Array => {
+  Parse.seed(addressSeed)
   const issBytes = new TextEncoder().encode(normalizeIssuer(iss))
   if (issBytes.length > 255) throw new Error(`issuer is ${issBytes.length} bytes, at most 255 allowed`)
   const seed = seedBytes(addressSeed, legacyAddress)
@@ -67,10 +70,9 @@ export const parse = (bytes: Uint8Array): Effect.Effect<Parsed, InvalidZkLoginIn
   }
   const seed = bytes.subarray(1 + issLength)
   if (seed.length > 32) return Effect.fail(new InvalidZkLoginInput({ reason: "address seed is longer than 32 bytes" }))
-  return Effect.succeed({
-    iss: new TextDecoder().decode(bytes.subarray(1, 1 + issLength)),
-    addressSeed: BigInt("0x" + hex(seed))
-  })
+  const addressSeed = BigInt("0x" + hex(seed))
+  if (addressSeed >= BN254_FIELD_SIZE) return Effect.fail(new InvalidZkLoginInput({ reason: "address seed is not in the BN254 field" }))
+  return Effect.succeed({ iss: new TextDecoder().decode(bytes.subarray(1, 1 + issLength)), addressSeed })
 }
 
 /** @internal Re-encode identifier bytes with a padded (or legacy) seed. Assumes `bytes` parse. */

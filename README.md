@@ -271,11 +271,11 @@ const accounts = yield* Wallet.connect(wallet)                   // ConnectionEr
 const signer = yield* Wallet.signer(wallet, { chain: "sui:testnet" })
 yield* Tx.run(recipe, { signer })                                // we resolve, the wallet signs, we execute its bytes
 yield* signer.signAndExecuteTransaction({ draft })               // or: the wallet resolves and submits
-                                                                // (a bad answer after submitting is ExecutionUnconfirmed, with the digest: check before retrying)
+                                                                // (a failure after the wallet may have submitted is ExecutionUnconfirmed: check before retrying)
 yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
 ```
 
-A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`.
+A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`. For `signAndExecuteTransaction`, only a coded refusal (wallet-standard `4001000`, EIP-1193 `4001`) is a rejection: any other failure (a timeout waiting for effects, an RPC error) or a bad answer is `ExecutionUnconfirmed`, with the digest when the wallet reported one. Only accounts on a `sui:` chain are used, so a multi-chain wallet's EVM account is never picked.
 
 **5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
 
@@ -395,7 +395,11 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
 | Seal: parse an encrypted object | 91 / 31 | 90 / 31 | 97 / 31 | — |
 | Seal: encrypt with pinned keys (`Envelope.seal`) | 177 / 63 | 175 / 63 | 183 / 62 | — |
 | Seal: encrypt + decrypt (the layer, gRPC, `FetchHttpClient`) | 487 / 150 | 481 / 150 | 490 / 145 | 470 / 136 (`SealClient` + `SuiGrpcClient`) |
+| zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 98 / 41 | — |
+| zkLogin: `ZkLoginAddress.fromJwt` | 155 / 74 | 154 / 74 | 160 / 76 | — |
+| zkLogin: `ZkLogin.signer` | 138 / 49 | 136 / 49 | 143 / 49 | — |
 
+- **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
 - **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program is 20 KB larger than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (9 KB gzip, Rolldown).
 - **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.

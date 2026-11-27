@@ -10,7 +10,11 @@
  *
  *   const { digest } = yield* Sponsor.run(recipe, { signer, network: "testnet" })
  *
- * Each step is exported for flows that stop in between.
+ * Each step is exported for flows that stop in between: `transactionKind`,
+ * `sponsor` (create and check), then sign, then `execute`. A failed execute is
+ * `ExecutionUnconfirmed`, carrying the signed bytes, signature and digest:
+ * check the digest on chain, or `execute` the same signature again, rather
+ * than sponsoring a second transaction.
  */
 import * as Address from "@unconfirmed/sui/Address"
 import type * as Coins from "@unconfirmed/sui/Coins"
@@ -26,7 +30,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
-import { EnokiClient, type EnokiError, type EnokiNetwork } from "./EnokiClient.ts"
+import { EnokiClient, EnokiError, type EnokiNetwork } from "./EnokiClient.ts"
 
 /** Enoki answered with transaction bytes that are not the transaction we asked it to sponsor. */
 export class UnexpectedSponsoredTransaction extends Schema.TaggedError<UnexpectedSponsoredTransaction>()(
@@ -48,11 +52,30 @@ export const transactionKind = (draft: Ptb.Draft): Effect.Effect<Uint8Array, Res
       : Effect.fail(new Resolve.Incomplete({ missing: "object inputs or coin/balance intents (run Resolve.inputs and Resolve.balances)" }))
   })
 
-export interface SponsorOptions {
-  /** Signs the sponsored transaction; its address is the sender unless `sender` is given. */
-  readonly signer: Signer.Signer
+/**
+ * Executing a signed sponsored transaction through Enoki failed. Enoki may
+ * have executed it anyway (a gateway timeout, a lost response): check `digest`
+ * on chain, or post the same `signature` again with `execute`. Sponsoring
+ * again would make a second, different transaction (new gas, new digest).
+ * `cause` is Enoki's answer; `retryable` is its.
+ */
+export class ExecutionUnconfirmed extends Schema.TaggedError<ExecutionUnconfirmed>()("ExecutionUnconfirmed", {
+  digest: Schema.String,
+  /** The sponsored `TransactionData` bytes that were signed. */
+  bytes: Schema.Uint8Array,
+  signature: Schema.Uint8Array,
+  message: Schema.String,
+  cause: EnokiError
+}) {
+  get retryable(): boolean {
+    return this.cause.retryable
+  }
+}
+
+/** What Enoki is asked to sponsor, and the checks the transaction it returns must pass. */
+export interface SponsorRequest {
   readonly network?: EnokiNetwork
-  readonly sender?: Address.Address
+  readonly sender: Address.Address
   /**
    * Identify a zkLogin sender by JWT instead of address (public API keys).
    * `allowedAddresses` / `allowedMoveCallTargets` apply only to sender-based sponsorship.
@@ -62,14 +85,27 @@ export interface SponsorOptions {
   readonly allowedMoveCallTargets?: ReadonlyArray<string>
   /**
    * The gas owner Enoki must use. Default: the app's sponsor address for
-   * `network` from `getApp` (mainnet/testnet), when it lists one. Either way
-   * the gas owner must not be the sender, so the user never pays.
+   * `network` from `getApp` (mainnet/testnet; an omitted network is Enoki's
+   * default, mainnet), when it lists one. Either way the gas owner must not be
+   * the sender, so the user never pays.
    */
   readonly sponsorAddress?: Address.Address
   /** Refuse sponsored transactions with a larger gas budget (MIST). */
   readonly maxBudget?: bigint
   /** Refuse sponsored transactions with a higher gas price (MIST per unit). */
   readonly maxGasPrice?: bigint
+}
+
+export interface SponsorOptions extends Omit<SponsorRequest, "sender"> {
+  /** Signs the sponsored transaction; its address is the sender unless `sender` is given. */
+  readonly signer: Signer.Signer
+  readonly sender?: Address.Address
+}
+
+/** A sponsored transaction Enoki created and `sponsor` checked: sign `bytes`, then `execute`. */
+export interface SponsoredTransaction {
+  readonly digest: string
+  readonly bytes: Uint8Array
 }
 
 export interface Sponsored {
@@ -121,55 +157,93 @@ const check = (bytes: Uint8Array, expected: Expected) =>
     }
   })
 
+/** The network Enoki sponsors on when the request names none (as `@mysten/enoki` assumes too). */
+const DEFAULT_NETWORK = "mainnet"
+
 /** The sponsor address to require: given, or the app's for this network (if it lists one). */
-const sponsorFor = (enoki: EnokiClient["Service"], options: SponsorOptions) =>
-  options.sponsorAddress !== undefined
-    ? Effect.succeed<Address.Address | undefined>(options.sponsorAddress)
-    : options.network === "mainnet" || options.network === "testnet"
-    ? Effect.flatMap(enoki.getApp, (app) => {
-      const listed = app.sponsorAddresses?.[options.network as "mainnet" | "testnet"]
-      if (listed === undefined) return Effect.succeed(undefined)
-      return Result.match(Schema.decodeUnknownResult(Address.Strict)(listed), {
-        onFailure: () => Effect.fail(unexpected(`Enoki listed an invalid sponsor address ${listed}`)),
-        onSuccess: (a) => Effect.succeed<Address.Address | undefined>(a)
-      })
+const sponsorFor = (enoki: EnokiClient["Service"], request: SponsorRequest) => {
+  if (request.sponsorAddress !== undefined) return Effect.succeed<Address.Address | undefined>(request.sponsorAddress)
+  const network = request.network ?? DEFAULT_NETWORK
+  if (network !== "mainnet" && network !== "testnet") return Effect.succeed<Address.Address | undefined>(undefined)
+  return Effect.flatMap(enoki.getApp, (app) => {
+    const listed = app.sponsorAddresses?.[network]
+    if (listed === undefined) return Effect.succeed(undefined)
+    return Result.match(Schema.decodeUnknownResult(Address.Strict)(listed), {
+      onFailure: () => Effect.fail(unexpected(`Enoki listed an invalid sponsor address ${listed}`)),
+      onSuccess: (a) => Effect.succeed<Address.Address | undefined>(a)
     })
-    : Effect.succeed<Address.Address | undefined>(undefined)
+  })
+}
+
+/**
+ * Ask Enoki to sponsor a `TransactionKind` and check what comes back: the
+ * digest it reports, the sender, the kind, and gas paid by the sponsor within
+ * the caps. Answers bytes that are safe to sign.
+ */
+export const sponsor = Effect.fn("Sponsor.sponsor")(function*(kind: Uint8Array, request: SponsorRequest) {
+  const enoki = yield* EnokiClient
+  const network = request.network !== undefined ? { network: request.network } : {}
+  const [gasOwner, sponsored] = yield* Effect.all([sponsorFor(enoki, request), enoki.createSponsoredTransaction(
+    request.jwt !== undefined
+      ? { ...network, transactionKindBytes: kind, jwt: request.jwt }
+      : {
+        ...network,
+        transactionKindBytes: kind,
+        sender: request.sender,
+        ...(request.allowedAddresses && { allowedAddresses: request.allowedAddresses }),
+        ...(request.allowedMoveCallTargets && { allowedMoveCallTargets: request.allowedMoveCallTargets })
+      }
+  )], { concurrency: "unbounded" })
+  yield* check(sponsored.bytes, {
+    kind,
+    sender: request.sender,
+    digest: sponsored.digest,
+    sponsor: gasOwner,
+    maxBudget: request.maxBudget,
+    maxGasPrice: request.maxGasPrice
+  })
+  return { digest: sponsored.digest, bytes: sponsored.bytes } satisfies SponsoredTransaction
+}) as (
+  kind: Uint8Array,
+  request: SponsorRequest
+) => Effect.Effect<SponsoredTransaction, EnokiError | UnexpectedSponsoredTransaction, EnokiClient>
+
+/**
+ * Execute a signed sponsored transaction through Enoki. Posting the same
+ * signature again is safe: it is the same transaction. A failure is
+ * `ExecutionUnconfirmed` with everything needed to check or retry.
+ */
+export const execute = (signed: Sponsored): Effect.Effect<Sponsored, ExecutionUnconfirmed, EnokiClient> =>
+  Effect.flatMap(Effect.service(EnokiClient), (enoki) =>
+    enoki.executeSponsoredTransaction({ digest: signed.digest, signature: signed.signature }).pipe(
+      Effect.map(({ digest }) => ({ digest, bytes: signed.bytes, signature: signed.signature }) satisfies Sponsored),
+      Effect.mapError((cause) =>
+        new ExecutionUnconfirmed({
+          digest: signed.digest,
+          bytes: signed.bytes,
+          signature: signed.signature,
+          message: `executing sponsored transaction ${signed.digest} failed, it may still have executed: ${cause.message}`,
+          cause
+        })
+      )
+    )).pipe(Effect.withSpan("Sponsor.execute"))
 
 /**
  * Sponsor a `TransactionKind`, check what comes back, sign it with the
  * user's `Signer`, and execute it through Enoki.
  */
 export const sponsorAndExecute = Effect.fn("Sponsor.sponsorAndExecute")(function*(kind: Uint8Array, options: SponsorOptions) {
-  const enoki = yield* EnokiClient
-  const sender = options.sender ?? options.signer.address
-  const network = options.network !== undefined ? { network: options.network } : {}
-  const [sponsor, sponsored] = yield* Effect.all([sponsorFor(enoki, options), enoki.createSponsoredTransaction(
-    options.jwt !== undefined
-      ? { ...network, transactionKindBytes: kind, jwt: options.jwt }
-      : {
-        ...network,
-        transactionKindBytes: kind,
-        sender,
-        ...(options.allowedAddresses && { allowedAddresses: options.allowedAddresses }),
-        ...(options.allowedMoveCallTargets && { allowedMoveCallTargets: options.allowedMoveCallTargets })
-      }
-  )], { concurrency: "unbounded" })
-  yield* check(sponsored.bytes, {
-    kind,
-    sender,
-    digest: sponsored.digest,
-    sponsor,
-    maxBudget: options.maxBudget,
-    maxGasPrice: options.maxGasPrice
-  })
+  const sponsored = yield* sponsor(kind, { ...options, sender: options.sender ?? options.signer.address })
   const { signature } = yield* Signer.signTransaction(options.signer, sponsored.bytes)
-  const { digest } = yield* enoki.executeSponsoredTransaction({ digest: sponsored.digest, signature })
-  return { digest, bytes: sponsored.bytes, signature } satisfies Sponsored
+  return yield* execute({ digest: sponsored.digest, bytes: sponsored.bytes, signature })
 }) as (
   kind: Uint8Array,
   options: SponsorOptions
-) => Effect.Effect<Sponsored, EnokiError | UnexpectedSponsoredTransaction | Signer.SigningError, EnokiClient>
+) => Effect.Effect<
+  Sponsored,
+  EnokiError | UnexpectedSponsoredTransaction | Signer.SigningError | ExecutionUnconfirmed,
+  EnokiClient
+>
 
 /** Build a recipe, resolve its object inputs, and have Enoki sponsor and execute it. */
 export const run = <A, E, R>(
@@ -186,7 +260,8 @@ export const run = <A, E, R>(
   | Resolve.AllowanceError
   | EnokiError
   | UnexpectedSponsoredTransaction
-  | Signer.SigningError,
+  | Signer.SigningError
+  | ExecutionUnconfirmed,
   Exclude<R, Ptb.PtbBuilder> | Objects.Objects | Packages.Packages | Coins.Coins | EnokiClient
 > =>
   Ptb.build(recipe).pipe(

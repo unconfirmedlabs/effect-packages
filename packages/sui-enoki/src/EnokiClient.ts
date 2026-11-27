@@ -27,14 +27,21 @@ export type EnokiErrorDetail = typeof EnokiErrorDetail.Type
  * A failed Enoki call. `status` is the HTTP status (0 when no response
  * arrived). `code` is Enoki's first error code, or one of ours:
  * `request_failed` (transport), `invalid_response` (body didn't decode),
- * `unknown_error` (an error body without codes).
+ * `unknown_error` (an error body without codes). `cause` is the underlying
+ * transport or decode failure, when there is one.
  */
 export class EnokiError extends Schema.TaggedError<EnokiError>()("EnokiError", {
   status: Schema.Number,
   code: Schema.String,
   message: Schema.String,
-  errors: Schema.Array(EnokiErrorDetail)
+  errors: Schema.Array(EnokiErrorDetail),
+  cause: Schema.optionalKey(Schema.Defect())
 }) {
+  /** Worth retrying as is: no response arrived (status 0), rate limited (429), or a server error (5xx). */
+  get retryable(): boolean {
+    return this.status === 0 || this.status === 429 || this.status >= 500
+  }
+
   /**
    * The transaction must be rebuilt and signed again: Enoki's sponsor address
    * or the reference gas price changed since it was built.

@@ -163,7 +163,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@noble/curves": "^2.3.0",
-        "@noble/hashes": "^2.3.0",
         "@unconfirmed/sui": "workspace:*",
         "effect": "4.1.6",
       },
@@ -173,7 +172,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@noble/curves": "^2.3.0",
-        "@noble/hashes": "^2.3.0",
         "@unconfirmed/sui": "workspace:*",
         "effect": "4.1.6",
       },
@@ -193,7 +191,6 @@
       "name": "@unconfirmed/sui-zklogin",
       "version": "0.0.0",
       "dependencies": {
-        "@noble/hashes": "^2.3.0",
         "@scure/base": "^2.3.0",
         "@unconfirmed/bcs": "workspace:*",
         "@unconfirmed/sui": "workspace:*",

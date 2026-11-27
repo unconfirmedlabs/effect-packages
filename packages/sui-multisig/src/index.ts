@@ -29,12 +29,12 @@ const MAX_MEMBERS = 10
 
 /** Member schemes by flag, in the `PublicKey` / `CompressedSignature` enum order. */
 const VARIANTS = [
-  { flag: 0x00, name: "ED25519", pk: Bcs.bytes(32), sig: Bcs.bytes(64), sigLength: 64 },
-  { flag: 0x01, name: "Secp256k1", pk: Bcs.bytes(33), sig: Bcs.bytes(64), sigLength: 64 },
-  { flag: 0x02, name: "Secp256r1", pk: Bcs.bytes(33), sig: Bcs.bytes(64), sigLength: 64 },
-  { flag: 0x05, name: "ZkLogin", pk: Bcs.byteVector, sig: Bcs.byteVector, sigLength: undefined },
-  { flag: 0x06, name: "Passkey", pk: Bcs.bytes(33), sig: Bcs.byteVector, sigLength: undefined },
-  { flag: 0x07, name: "MLDSA65", pk: Bcs.bytes(1952), sig: Bcs.bytes(3309), sigLength: 3309 }
+  { flag: 0x00, name: "ED25519", pk: Bcs.bytes(32), pkLength: 32, sig: Bcs.bytes(64), sigLength: 64 },
+  { flag: 0x01, name: "Secp256k1", pk: Bcs.bytes(33), pkLength: 33, sig: Bcs.bytes(64), sigLength: 64 },
+  { flag: 0x02, name: "Secp256r1", pk: Bcs.bytes(33), pkLength: 33, sig: Bcs.bytes(64), sigLength: 64 },
+  { flag: 0x05, name: "ZkLogin", pk: Bcs.byteVector, pkLength: undefined, sig: Bcs.byteVector, sigLength: undefined },
+  { flag: 0x06, name: "Passkey", pk: Bcs.bytes(33), pkLength: 33, sig: Bcs.byteVector, sigLength: undefined },
+  { flag: 0x07, name: "MLDSA65", pk: Bcs.bytes(1952), pkLength: 1952, sig: Bcs.bytes(3309), sigLength: 3309 }
 ] as const
 
 const byFlag = new Map<number, (typeof VARIANTS)[number]>(VARIANTS.map((v) => [v.flag, v]))
@@ -65,9 +65,21 @@ export interface Member {
   readonly weight: number
 }
 
-export interface MultiSigPublicKey {
+/** A member set and threshold, as given to `publicKey`. */
+export interface MultiSigPublicKeyInput {
   readonly members: ReadonlyArray<Member>
   readonly threshold: number
+}
+
+declare const Validated: unique symbol
+
+/**
+ * A member set and threshold that `publicKey` validated. Only a validated key
+ * has an `address`: an invalid one (a member key of the wrong length, say)
+ * would name an address no encodable multisig hashes to.
+ */
+export interface MultiSigPublicKey extends MultiSigPublicKeyInput {
+  readonly [Validated]: true
 }
 
 export class InvalidMultiSig extends Schema.TaggedError<InvalidMultiSig>()("InvalidMultiSig", {
@@ -76,15 +88,33 @@ export class InvalidMultiSig extends Schema.TaggedError<InvalidMultiSig>()("Inva
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
 
+/**
+ * Why a member's key bytes can't be what its flag says, or `undefined`. A
+ * zkLogin identifier is `len(iss) || iss || seed` with a 1 to 32-byte seed
+ * (32 padded, shorter for legacy accounts).
+ */
+const keyProblem = (v: (typeof VARIANTS)[number], bytes: Uint8Array): string | undefined => {
+  if (v.pkLength !== undefined) {
+    return bytes.length === v.pkLength ? undefined : `${v.name} key must be ${v.pkLength} bytes, got ${bytes.length}`
+  }
+  const issLength = bytes[0]
+  if (issLength === undefined || issLength === 0) return "zkLogin identifier has no issuer"
+  const seed = bytes.length - 1 - issLength
+  return seed >= 1 && seed <= 32 ? undefined : "zkLogin identifier must be len(iss) || iss || a 1 to 32-byte seed"
+}
+
 /** Validate a member set and threshold. */
-export const publicKey = (input: MultiSigPublicKey): Effect.Effect<MultiSigPublicKey, InvalidMultiSig> => {
+export const publicKey = (input: MultiSigPublicKeyInput): Effect.Effect<MultiSigPublicKey, InvalidMultiSig> => {
   const fail = (reason: string) => Effect.fail(new InvalidMultiSig({ reason }))
   const { members, threshold } = input
   if (members.length === 0 || members.length > MAX_MEMBERS) return fail(`1 to ${MAX_MEMBERS} members, got ${members.length}`)
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 0xffff) return fail(`invalid threshold ${threshold}`)
   let total = 0
   for (const [i, m] of members.entries()) {
-    if (!byFlag.has(m.publicKey.flag)) return fail(`member ${i}: flag ${m.publicKey.flag} cannot be a multisig member`)
+    const variant = byFlag.get(m.publicKey.flag)
+    if (!variant) return fail(`member ${i}: flag ${m.publicKey.flag} cannot be a multisig member`)
+    const problem = keyProblem(variant, m.publicKey.bytes)
+    if (problem) return fail(`member ${i}: ${problem}`)
     if (!Number.isInteger(m.weight) || m.weight < 1 || m.weight > 255) return fail(`member ${i}: invalid weight ${m.weight}`)
     if (members.slice(0, i).some((o) => o.publicKey.flag === m.publicKey.flag && sameBytes(o.publicKey.bytes, m.publicKey.bytes))) {
       return fail(`member ${i}: duplicate public key`)
@@ -92,7 +122,7 @@ export const publicKey = (input: MultiSigPublicKey): Effect.Effect<MultiSigPubli
     total += m.weight
   }
   if (threshold > total) return fail(`threshold ${threshold} exceeds total weight ${total}`)
-  return Effect.succeed(input)
+  return Effect.succeed(input as MultiSigPublicKey)
 }
 
 const toBcs = (pk: MultiSigPublicKey): typeof MultiSigPublicKeyBcs.Type => ({
@@ -100,7 +130,7 @@ const toBcs = (pk: MultiSigPublicKey): typeof MultiSigPublicKeyBcs.Type => ({
   threshold: pk.threshold
 })
 
-const fromBcs = (b: typeof MultiSigPublicKeyBcs.Type): MultiSigPublicKey => ({
+const fromBcs = (b: typeof MultiSigPublicKeyBcs.Type): MultiSigPublicKeyInput => ({
   members: b.pkMap.map((m) => {
     const pub = m.pubKey as unknown as { _tag: string; value: Uint8Array }
     return { publicKey: { flag: byName.get(pub._tag)!.flag, bytes: pub.value }, weight: m.weight }
@@ -109,7 +139,9 @@ const fromBcs = (b: typeof MultiSigPublicKeyBcs.Type): MultiSigPublicKey => ({
 })
 
 /** `blake2b256(0x03 || threshold:u16le || (flag || pk || weight)*)`. */
-export const address = (pk: MultiSigPublicKey): Address.Address => {
+export const address = (pk: MultiSigPublicKey): Address.Address => addressOf(pk)
+
+const addressOf = (pk: MultiSigPublicKeyInput): Address.Address => {
   const parts: Array<number> = [FLAG, pk.threshold & 0xff, pk.threshold >> 8]
   for (const m of pk.members) parts.push(...SignatureScheme.toSuiBytes(m.publicKey), m.weight)
   return Address.fromBytes(Hash.blake2b256(Uint8Array.from(parts)))
@@ -132,7 +164,9 @@ const invalid = (reason: string) => new SignatureScheme.InvalidSignature({ schem
 export const scheme: SignatureScheme.SignatureScheme = {
   name: "MultiSig",
   flag: FLAG,
-  address: (bytes) => address(fromBcs(Bcs.decodeSync(MultiSigPublicKeyBcs)(bytes))),
+  // Throws on bytes that aren't a BCS `MultiSigPublicKey`: the core's `address` hook can't fail (review SIGN-15).
+  // The registry only asks for keys a verification answered, which always decode.
+  address: (bytes) => addressOf(fromBcs(Bcs.decodeSync(MultiSigPublicKeyBcs)(bytes))),
   verify: (body, intentMessage, registry) =>
     Effect.gen(function*() {
       const parsed = Bcs.decode(MultiSigBcs)(body)
@@ -143,6 +177,10 @@ export const scheme: SignatureScheme.SignatureScheme = {
       const valid = yield* Effect.result(publicKey(pk))
       if (Result.isFailure(valid)) return yield* invalid(`invalid multisig public key: ${valid.failure.reason}`)
       const signers = indices(bitmap)
+      // Stricter than validators on purpose. Sui's `verify_claims` zips signatures with bitmap indices
+      // (`zip_debug_eq`: a fatal error in debug builds, a silent truncation in release), and `@mysten/sui`
+      // takes the i-th set bit per signature, so both accept extra bits. A bitmap naming members that
+      // didn't sign is never produced by `combine` / `signer` (ours, Sui's or Mysten's); we refuse it.
       if (signers.length !== sigs.length) return yield* invalid("bitmap does not match the signature count")
       let weight = 0
       for (const [i, memberIndex] of signers.entries()) {
@@ -200,7 +238,13 @@ export type PartialSignature =
  * the public key it embeds. zkLogin and passkey signatures don't carry a key in
  * that form, so pass them as `{ signature, publicKey }` naming their member.
  */
-export const combine = (pk: MultiSigPublicKey, signatures: ReadonlyArray<PartialSignature>) =>
+export const combine = (
+  pk: MultiSigPublicKey,
+  signatures: ReadonlyArray<PartialSignature>
+): Effect.Effect<Uint8Array, InvalidMultiSig> =>
+  Effect.flatMap(publicKey(pk), (pk) => combineValid(pk, signatures))
+
+const combineValid = (pk: MultiSigPublicKey, signatures: ReadonlyArray<PartialSignature>) =>
   Effect.forEach(signatures, (entry) =>
     Effect.gen(function*() {
       const serialized = entry instanceof Uint8Array ? entry : entry.signature
@@ -219,15 +263,27 @@ export const combine = (pk: MultiSigPublicKey, signatures: ReadonlyArray<Partial
       if (index < 0) return yield* new InvalidMultiSig({ reason: "signature from a key that is not a member" })
       return { index, flag, signature }
     })).pipe(
-      Effect.flatMap((parts) =>
-        new Set(parts.map((p) => p.index)).size === parts.length
-          ? Effect.succeed(assemble(pk, parts))
-          : Effect.fail(new InvalidMultiSig({ reason: "two signatures from the same member" }))
-      )
+      Effect.flatMap((parts) => {
+        if (new Set(parts.map((p) => p.index)).size !== parts.length) {
+          return Effect.fail(new InvalidMultiSig({ reason: "two signatures from the same member" }))
+        }
+        // Below the threshold the result could never verify: refuse it here, as `signer` does.
+        const weight = parts.reduce((w, p) => w + pk.members[p.index]!.weight, 0)
+        return weight < pk.threshold
+          ? Effect.fail(new InvalidMultiSig({ reason: `signatures' weight ${weight} is below threshold ${pk.threshold}` }))
+          : Effect.succeed(assemble(pk, parts))
+      })
     )
 
 /** One `Signer` from member signers. They sign concurrently. */
 export const signer = (
+  pk: MultiSigPublicKey,
+  signers: ReadonlyArray<Signer.Signer>
+): Effect.Effect<Signer.Signer, InvalidMultiSig> =>
+  // Re-validated: the brand is only a type, and a forged key would make the BCS encoding throw.
+  Effect.flatMap(publicKey(pk), (valid) => signerUnsuspended(valid, signers))
+
+const signerUnsuspended = (
   pk: MultiSigPublicKey,
   signers: ReadonlyArray<Signer.Signer>
 ): Effect.Effect<Signer.Signer, InvalidMultiSig> => {
