@@ -15,7 +15,7 @@ import {
 import { Objects } from "../Objects.ts"
 import * as TypeTag from "../TypeTag.ts"
 import type * as P from "./generated/proto.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 import { convert } from "./scan.ts"
 

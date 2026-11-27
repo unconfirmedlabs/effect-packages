@@ -8,6 +8,7 @@
  */
 import { Result } from "effect"
 import { ProtobufDescriptor, ProtobufMessage } from "effect/protobuf"
+import { LEAN, type LeanMethod } from "./grpc-lean.ts"
 
 const bytes = await Bun.file(new URL("../proto/sui-rpc.binpb", import.meta.url)).bytes()
 const registry = Result.getOrThrow(ProtobufDescriptor.fromFileDescriptorSet(bytes))
@@ -183,3 +184,173 @@ for (const f of registry.files) {
 
 await Bun.write(new URL("../src/grpc/generated/rpc.ts", import.meta.url), rpc)
 console.log(`generated ${all.length} types, ${methodCount} methods`)
+
+// -----------------------------------------------------------------------------
+// lean.ts: the handles the SDK's own services call, with descriptors pruned to
+// the fields they read (scripts/grpc-lean.ts). Same request/response types as
+// the full handles; fields outside a descriptor decode as unknown and are
+// skipped. Chunks are shared by content, so two handles that read the same
+// fields of a message ship it once.
+// -----------------------------------------------------------------------------
+
+interface RawType {
+  readonly kind: "message" | "enum"
+  readonly proto: any
+  readonly top: string
+  readonly file: any
+}
+const raw = new Map<string, RawType>()
+for (const f of set.file) {
+  const index = (protos: Array<any> | undefined, kind: RawType["kind"], prefix: string, top: string | undefined) => {
+    for (const p of protos ?? []) {
+      const name = `${prefix}.${p.name}`
+      raw.set(name, { kind, proto: p, top: top ?? name, file: f })
+      if (kind === "message") {
+        index(p.nested_type, "message", name, top ?? name)
+        index(p.enum_type, "enum", name, top ?? name)
+      }
+    }
+  }
+  index(f.message_type, "message", f.package, undefined)
+  index(f.enum_type, "enum", f.package, undefined)
+}
+const TYPE_MESSAGE = 11
+const TYPE_ENUM = 14
+const refOf = (field: any): string => (field.type_name as string).slice(1)
+
+/** Per method: message type -> kept field names ("all": every field, recursively). Enums are kept whole. */
+const leanView = (where: string, method: ProtobufDescriptor.MethodDescriptor, spec: LeanMethod) => {
+  const view = new Map<string, Set<string> | "all">()
+  const enums = new Set<string>()
+  const fieldOf = (type: string, name: string) => {
+    const field = (raw.get(type)!.proto.field ?? []).find((x: any) => x.name === name)
+    if (!field) throw new Error(`grpc-lean.ts, ${where}: ${type} has no field "${name}"`)
+    return field
+  }
+  const keepAll = (type: string): void => {
+    if (view.get(type) === "all") return
+    view.set(type, "all")
+    for (const field of raw.get(type)!.proto.field ?? []) {
+      if (field.type === TYPE_MESSAGE) keepAll(refOf(field))
+      if (field.type === TYPE_ENUM) enums.add(refOf(field))
+    }
+  }
+  const fieldsOf = (type: string) => {
+    const v = view.get(type)
+    if (v === "all") return undefined
+    if (v) return v
+    const s = new Set<string>()
+    view.set(type, s)
+    return s
+  }
+  const keepPath = (type: string, segments: ReadonlyArray<string>): void => {
+    if (segments.length === 0) return keepAll(type)
+    const [name, ...rest] = segments as [string, ...Array<string>]
+    const field = fieldOf(type, name)
+    fieldsOf(type)?.add(name)
+    if (field.type === TYPE_MESSAGE) return keepPath(refOf(field), rest)
+    if (rest.length > 0) throw new Error(`grpc-lean.ts, ${where}: ${type}.${name} is not a message`)
+    if (field.type === TYPE_ENUM) enums.add(refOf(field))
+  }
+  const keepRoot = (type: string, root: ReadonlyArray<string>, mask: ReadonlyArray<string>): void => {
+    if (root.length === 0) {
+      fieldsOf(type)
+      for (const p of mask) keepPath(type, p.split("."))
+      return
+    }
+    const [name, ...rest] = root as [string, ...Array<string>]
+    const field = fieldOf(type, name)
+    if (field.type !== TYPE_MESSAGE) throw new Error(`grpc-lean.ts, ${where}: root ${type}.${name} is not a message`)
+    for (const other of raw.get(type)!.proto.field ?? []) {
+      if (other.name !== name) keepPath(type, [other.name])
+    }
+    fieldsOf(type)?.add(name)
+    keepRoot(refOf(field), rest, mask)
+  }
+  const input = method.input.typeName
+  const output = method.output.typeName
+  if (spec.request) {
+    fieldsOf(input)
+    for (const p of spec.request) keepPath(input, p.split("."))
+  } else keepAll(input)
+  if (spec.mask) {
+    keepRoot(output, spec.root ? spec.root.split(".") : [], spec.mask)
+    for (const p of spec.keep ?? []) keepPath(output, p.split("."))
+  } else keepAll(output)
+  return { view, enums }
+}
+
+/** The pruned copy of a message or enum, or undefined if the method reaches nothing in it. */
+const pruneType = (type: string, view: Map<string, Set<string> | "all">, enums: Set<string>): any => {
+  const t = raw.get(type)!
+  if (t.kind === "enum") return enums.has(type) ? strip(t.proto) : undefined
+  const nested = (t.proto.nested_type ?? []).map((n: any) => pruneType(`${type}.${n.name}`, view, enums)).filter(Boolean)
+  const nestedEnums = (t.proto.enum_type ?? []).map((e: any) => pruneType(`${type}.${e.name}`, view, enums)).filter(Boolean)
+  const v = view.get(type)
+  if (v === undefined && nested.length === 0 && nestedEnums.length === 0) return undefined
+  const fields = (t.proto.field ?? []).filter((f: any) => v === "all" || (v !== undefined && v.has(f.name)))
+  // Keep only the oneofs (real or proto3-optional) that still have members, renumbered.
+  const oneofs: Array<number> = []
+  for (const f of fields) if (f.oneof_index !== undefined && !oneofs.includes(f.oneof_index)) oneofs.push(f.oneof_index)
+  oneofs.sort((a, b) => a - b)
+  const { reserved_range: _range, reserved_name: _name, ...rest } = t.proto
+  return strip({
+    ...rest,
+    field: fields.map((f: any) => (f.oneof_index === undefined ? f : { ...f, oneof_index: oneofs.indexOf(f.oneof_index) })),
+    nested_type: nested,
+    enum_type: nestedEnums,
+    oneof_decl: oneofs.map((i) => t.proto.oneof_decl[i])
+  })
+}
+
+let lean = `// Generated by scripts/codegen-grpc.ts from scripts/grpc-lean.ts. Do not edit.
+// The handles the SDK's own services call, with descriptors pruned to the fields
+// they read. For anything else use the full handles in rpc.ts (\`SuiGrpc.Rpc\`).
+import { chunk, file, lean } from "../Rpc.ts"
+import type * as P from "./proto.ts"
+
+`
+const leanFiles = new Map<any, string>()
+const leanChunks = new Map<string, string>()
+const leanChunkNames = new Set<string>()
+let leanHandles = ""
+const leanChunk = (type: string, proto: any) => {
+  const t = raw.get(type)!
+  if (!leanFiles.has(t.file)) {
+    const v = `f${leanFiles.size}`
+    leanFiles.set(t.file, v)
+    lean += `const ${v} = /* @__PURE__ */ file(${literal({ name: t.file.name, package: t.file.package, syntax: t.file.syntax, dependency: t.file.dependency ?? [] })})\n`
+  }
+  const body = `chunk(${leanFiles.get(t.file)}, "${t.kind}", ${literal(proto)})`
+  let name = leanChunks.get(body)
+  if (name === undefined) {
+    const base = chunkName(type)
+    let i = 1
+    name = base
+    while (leanChunkNames.has(name)) name = `${base}_${++i}`
+    leanChunkNames.add(name)
+    leanChunks.set(body, name)
+  }
+  return name
+}
+const unused = new Set(Object.keys(LEAN))
+for (const f of registry.files) {
+  for (const s of f.services) {
+    for (const m of s.methods) {
+      const handle = `${s.name}_${m.name}`
+      const spec = LEAN[handle]
+      if (!spec) continue
+      unused.delete(handle)
+      const { view, enums } = leanView(handle, m, spec)
+      const tops = [...new Set([...view.keys(), ...enums].map((t) => raw.get(t)!.top))].sort()
+      const deps = tops.map((t) => leanChunk(t, pruneType(t, view, enums)))
+      leanHandles += `/** \`${s.typeName}/${m.name}\`, pruned to what the SDK reads */\nexport const ${handle} = /* @__PURE__ */ lean<P.${tsName(m.input)}, P.${tsName(m.output)}, ${m.serverStreaming}>(\n  "${s.typeName}/${m.name}", "${m.input.typeName}", "${m.output.typeName}", ${m.serverStreaming},\n  () => [${deps.join(", ")}],\n  ${spec.mask ? literal(spec.mask) : "undefined"}\n)\n`
+    }
+  }
+}
+if (unused.size > 0) throw new Error(`grpc-lean.ts names unknown methods: ${[...unused].join(", ")}`)
+lean += "\n"
+for (const [body, name] of leanChunks) lean += `const ${name} = /* @__PURE__ */ ${body}\n`
+lean += `\n${leanHandles}`
+await Bun.write(new URL("../src/grpc/generated/lean.ts", import.meta.url), lean)
+console.log(`generated ${Object.keys(LEAN).length} pruned handles from ${leanChunks.size} chunks`)

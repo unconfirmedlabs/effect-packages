@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { TransactionNotFound, Transactions } from "../Transactions.ts"
 import { EFFECTS_PATHS, effects } from "./convert.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
 const prefixed = (prefix: string) => EFFECTS_PATHS.map((p) => (p === "digest" ? `${prefix}digest` : `${prefix}${p}`))

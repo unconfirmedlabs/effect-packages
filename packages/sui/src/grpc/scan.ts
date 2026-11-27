@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect"
 import * as Stream from "effect/Stream"
 import { RpcError } from "../RpcError.ts"
 import type * as P from "./generated/proto.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import type { GrpcWeb } from "./GrpcWeb.ts"
 
 interface Frame<A> {

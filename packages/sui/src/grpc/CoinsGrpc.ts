@@ -6,7 +6,7 @@ import type { Address } from "../Address.ts"
 import { Coins } from "../Coins.ts"
 import { Objects } from "../Objects.ts"
 import * as TypeTag from "../TypeTag.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
 const CoinStruct = Bcs.struct({ id: Bcs.Address, balance: Bcs.u64 })

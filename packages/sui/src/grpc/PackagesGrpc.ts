@@ -5,7 +5,7 @@ import * as RequestResolver from "effect/RequestResolver"
 import { type FunctionTarget, type MoveFunction, Packages, type Parameter, type Reference } from "../Packages.ts"
 import type { RpcError } from "../RpcError.ts"
 import type * as P from "./generated/proto.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { successByKey } from "./cache.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 

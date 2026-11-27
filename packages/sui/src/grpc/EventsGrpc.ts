@@ -4,7 +4,7 @@ import * as Stream from "effect/Stream"
 import { type EventFilter, Events, type Literal, toDnf } from "../Events.ts"
 import { event, EVENT_PATHS } from "./convert.ts"
 import type * as P from "./generated/proto.ts"
-import * as Rpc from "./generated/rpc.ts"
+import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 import { convert, EVENT_LIMIT, eventBounds, pinned, resumable } from "./scan.ts"
 

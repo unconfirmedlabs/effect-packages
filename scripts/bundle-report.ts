@@ -8,6 +8,11 @@
  *   bun scripts/bundle-report.ts            namespace imports (the recommended style)
  *   bun scripts/bundle-report.ts --named    named imports from barrels, for comparison
  *   add --detail for per-package attribution (Rolldown)
+ *
+ * Comments are stripped under every bundler so the columns compare code only:
+ * esbuild `legalComments: "none"`, Rolldown `comments: false` (by default it
+ * keeps every `@__PURE__` annotation), and for Bun, which has no option and
+ * keeps only legal comments, `stripLegal`.
  */
 import * as esbuild from "esbuild"
 import { gzipSync } from "node:zlib"
@@ -50,6 +55,16 @@ const programs: Record<string, string> = {
     const layer = ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(Address.normalize("0x6"))).pipe(Effect.provide(layer))).then(console.log)`,
   "ours: build + resolve + sign + execute": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = SuiGrpc.layerCore({ baseUrl: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Tx.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
+  "ours: the same with SuiGrpc.layer (all nine)": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
     ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
@@ -211,6 +226,9 @@ const bucket = (path: string) => {
   return "other"
 }
 
+/** Bun's minified output keeps `/*! ... *\/` legal comments between statements; drop them. */
+const stripLegal = (code: string) => code.replace(/(?<=^|[;}\n])\/\*![^*]*\*+(?:[^/*][^*]*\*+)*\//g, "")
+
 const kb = (n: number) => (n / 1024).toFixed(1)
 const dir = `${import.meta.dir}/.bundle-probe`
 const detail = process.argv.includes("--detail")
@@ -223,13 +241,13 @@ for (const [name, source] of Object.entries(programs)) {
 
   const bun = await Bun.build({ entrypoints: [entry], minify: true, target: "browser" })
   // Every JS output counts (Bun only splits when asked to, but sum them anyway).
-  const bunCode = (await Promise.all(bun.outputs.filter((o) => o.kind === "entry-point" || o.kind === "chunk").map((o) => o.text()))).join("\n")
+  const bunCode = (await Promise.all(bun.outputs.filter((o) => o.kind === "entry-point" || o.kind === "chunk").map((o) => o.text()))).map(stripLegal).join("\n")
 
-  const es = await esbuild.build({ entryPoints: [entry], bundle: true, minify: true, platform: "browser", format: "esm", write: false, logLevel: "silent" })
+  const es = await esbuild.build({ entryPoints: [entry], bundle: true, minify: true, platform: "browser", format: "esm", write: false, logLevel: "silent", legalComments: "none" })
   const esCode = es.outputFiles.map((f) => f.text).join("\n")
 
   const rd = await rolldown({ input: entry, platform: "browser", logLevel: "silent" })
-  const { output } = await rd.generate({ format: "esm", minify: true })
+  const { output } = await rd.generate({ format: "esm", minify: true, comments: false })
   // Every JS chunk counts: a dynamic import (the WASM glue) is split into its own chunk by Rolldown only.
   const chunks = output.filter((o) => o.type === "chunk")
   const rdCode = chunks.map((c) => c.code).join("\n")

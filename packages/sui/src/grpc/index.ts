@@ -1,9 +1,15 @@
 /**
  * `@unconfirmed/sui/grpc`: every capability over gRPC-web.
  *
- * Take everything with `layer({ baseUrl })`, or compose only what you use:
+ * - `layerCore({ baseUrl })`: Chain, Objects, Coins, Packages and Transactions,
+ *   everything `Tx.run` needs. Prefer it: a program ships only the RPCs it links.
+ * - `layer({ baseUrl })`: all nine, adding Checkpoints, CheckpointData, Events and
+ *   DynamicFields (about 25 KB minified more).
+ * - Or compose exactly what you use; each `*Grpc.layer` needs `GrpcWeb`, which
+ *   `layerCore` also provides:
  *
- *   Layer.mergeAll(ObjectsGrpc.layer, TransactionsGrpc.layer).pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))
+ *     DynamicFieldsGrpc.layer.pipe(Layer.provideMerge(SuiGrpc.layerCore({ baseUrl })))
+ *     Layer.mergeAll(ObjectsGrpc.layer, TransactionsGrpc.layer).pipe(Layer.provide(GrpcWeb.layer({ baseUrl })))
  */
 import * as Layer from "effect/Layer"
 import type * as HttpClient from "effect/http/HttpClient"
@@ -44,6 +50,9 @@ export type * as Proto from "./generated/proto.ts"
 /** Every RPC as a typed handle, for calls the capability services don't cover: `grpc.unary(Rpc.NameService_LookupName, { name })`. */
 export * as Rpc from "./generated/rpc.ts"
 
+/** What `layerCore` provides: the services building, resolving and executing a transaction use. */
+export type CoreServices = Chain | Objects | Coins | Packages | Transactions
+
 export type Services =
   | Chain
   | Objects
@@ -55,7 +64,25 @@ export type Services =
   | Events
   | CheckpointData
 
-/** All capability services over one gRPC-web endpoint. Needs an `HttpClient`. */
+/**
+ * Chain, Objects, Coins, Packages and Transactions over one gRPC-web endpoint,
+ * plus the `GrpcWeb` client itself so further `*Grpc.layer`s can be stacked on
+ * top. Needs an `HttpClient`. Links none of the checkpoint, event or dynamic
+ * field RPCs.
+ */
+export const layerCore = (options: GrpcWebOptions): Layer.Layer<CoreServices | GrpcWeb, never, HttpClient.HttpClient> =>
+  Layer.mergeAll(
+    ChainGrpc.layer,
+    PackagesGrpc.layer,
+    TransactionsGrpc.layer,
+    CoinsGrpc.layer.pipe(Layer.provideMerge(ObjectsGrpc.layer))
+  ).pipe(Layer.provideMerge(GrpcWeb.layer(options)))
+
+/**
+ * All nine capability services over one gRPC-web endpoint. Needs an
+ * `HttpClient`. This links every RPC the services use; a program that only
+ * builds and executes transactions is smaller with `layerCore`.
+ */
 export const layer = (options: GrpcWebOptions): Layer.Layer<Services, never, HttpClient.HttpClient> =>
   Layer.mergeAll(
     ChainGrpc.layer,
