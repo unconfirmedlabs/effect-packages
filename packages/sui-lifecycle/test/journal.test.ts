@@ -15,6 +15,7 @@ import * as SubmitConfig from "../src/SubmitConfig.ts"
 import * as Objects from "@unconfirmed/sui/Objects"
 import * as Resolve from "@unconfirmed/sui/Resolve"
 import * as SenderLock from "../src/SenderLock.ts"
+import { stores } from "./stores.ts"
 import { COIN, layer, makeWorld, ownedObject, signedTx } from "./world.ts"
 
 const fast = SubmitConfig.layer({ lookupTimeout: 0, reconcileRecheck: 0, awaitVisibility: false })
@@ -51,141 +52,17 @@ const checkRoundTrip = (r: Effect.Success<typeof roundTrip>) => {
   expect(r.afterPrune.map(Option.isSome)).toEqual([false, true, true])
 }
 
+const removeRun = (journal: Journal.JournalService) =>
+  Effect.gen(function*() {
+    const signed = yield* signedTx()
+    yield* journal.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now }))
+    yield* journal.remove(signed.digest)
+    return [(yield* journal.listUnresolved).entries.length, Option.isNone(yield* journal.get(signed.digest))] as const
+  })
+
 describe("Journal", () => {
   test("memory round trip", async () => {
     checkRoundTrip(await Effect.runPromise(roundTrip.pipe(Effect.provide(Journal.layerMemory))))
-  })
-
-  test("KeyValueStore round trip, with settled markers", async () => {
-    const { result, keys } = await Effect.runPromise(
-      Effect.gen(function*() {
-        const result = yield* roundTrip
-        const keys = yield* Effect.flatMap(Effect.service(KeyValueStore.KeyValueStore), (s) => s.keys)
-        return { result, keys }
-      }).pipe(
-        Effect.provide(JournalKeyValueStore.layer({ prefix: "j/" }).pipe(Layer.provideMerge(KeyValueStore.layerMemory)))
-      )
-    )
-    checkRoundTrip(result)
-    expect(keys.filter((k) => k.startsWith("j/settled:"))).toEqual(["j/settled:Settled2"])
-  })
-
-  test("entries are JSON", () => {
-    const encoded = Schema.encodeSync(Schema.fromJsonString(JournalEntry))(
-      JournalEntry.cases.NotApplied.make({ digest: "D", evidence: "inputConsumed", at: DateTime.makeUnsafe(5) })
-    )
-    expect(JSON.parse(encoded)).toEqual({ _tag: "NotApplied", digest: "D", evidence: "inputConsumed", at: 5 })
-  })
-
-  test("onUnresolved: fail refuses to build over unresolved entries", async () => {
-    const error = await Effect.runPromise(
-      Effect.gen(function*() {
-        const store = yield* KeyValueStore.KeyValueStore
-        const signed = yield* signedTx()
-        yield* JournalKeyValueStore.make(store).put(
-          JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now })
-        )
-        return yield* Effect.flip(
-          Layer.build(JournalKeyValueStore.layer({ onUnresolved: "fail" })).pipe(Effect.scoped)
-        )
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
-    )
-    expect(error._tag).toBe("JournalError")
-  })
-})
-
-describe("Journal integrity", () => {
-  test("a KeyValueStore entry whose bytes don't hash to its digest is a JournalError", async () => {
-    const error = await Effect.runPromise(
-      Effect.gen(function*() {
-        const store = yield* KeyValueStore.KeyValueStore
-        const signed = yield* signedTx()
-        const other = yield* signedTx({ nonce: 2 })
-        const forged = JournalEntry.cases.Signed.make({ digest: other.digest, signed: { ...signed, digest: other.digest }, at: yield* DateTime.now })
-        yield* store.set(`entry:${other.digest}`, Schema.encodeSync(Schema.fromJsonString(JournalEntry))(forged))
-        return yield* Effect.flip(JournalKeyValueStore.make(store).get(other.digest))
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
-    )
-    expect(error._tag).toBe("JournalError")
-  })
-
-  test("pruneSettled never deletes an entry re-signed after its read", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function*() {
-        const base = yield* KeyValueStore.KeyValueStore
-        const signed = yield* signedTx()
-        const journal0 = JournalKeyValueStore.make(base)
-        yield* journal0.put(JournalEntry.cases.Executed.make({ digest: signed.digest, at: DateTime.makeUnsafe(1) }))
-        // Another writer re-signs the same digest right after prune's bulk read of it.
-        let reads = 0
-        const racing: KeyValueStore.KeyValueStore = {
-          ...base,
-          get: (key) =>
-            Effect.tap(base.get(key), () =>
-              key === `entry:${signed.digest}` && ++reads === 1
-                ? journal0.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: DateTime.makeUnsafe(2) })).pipe(Effect.orDie)
-                : Effect.void)
-        }
-        const pruned = yield* JournalKeyValueStore.make(racing).pruneSettled(DateTime.makeUnsafe(1_000))
-        const entry = yield* journal0.get(signed.digest)
-        return { pruned, tag: Option.map(entry, (e) => e._tag) }
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
-    )
-    expect(result.pruned).toBe(0)
-    expect(result.tag).toEqual(Option.some("Signed"))
-  })
-
-  test("unreadable entries are reported, never strand the others; unversioned entries still read", async () => {
-    const world = makeWorld()
-    const r = await Effect.runPromise(
-      Effect.gen(function*() {
-        const store = yield* KeyValueStore.KeyValueStore
-        const journal = JournalKeyValueStore.make(store)
-        const signed = yield* signedTx()
-        const legacy = yield* signedTx({ nonce: 7 })
-        yield* journal.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now }))
-        // Written before entries carried a version: plain JSON of the entry.
-        yield* store.set(
-          `entry:${legacy.digest}`,
-          Schema.encodeSync(Schema.fromJsonString(JournalEntry))(
-            JournalEntry.cases.Signed.make({ digest: legacy.digest, signed: legacy, at: DateTime.makeUnsafe(10) })
-          )
-        )
-        yield* store.set("entry:somethingElse", "{\"v\":0}")
-        yield* store.set("entry:truncated", "{\"_tag\":\"Sig")
-        const stored = JSON.parse((yield* store.get(`entry:${signed.digest}`))!)
-        const listing = yield* journal.listUnresolved
-        const recovered = yield* Lifecycle.reconcileAll().pipe(Effect.provideService(Journal.Journal, journal))
-        const pruned = yield* Effect.result(journal.pruneSettled(yield* DateTime.now))
-        const failing = yield* Effect.flip(Layer.build(JournalKeyValueStore.layer({ onUnresolved: "fail" })).pipe(Effect.scoped))
-        yield* journal.remove("somethingElse")
-        yield* journal.remove("truncated")
-        const after = yield* journal.listUnresolved
-        return { stored, listing, recovered, pruned, failing, after, signed, legacy }
-      }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast, KeyValueStore.layerMemory)))
-    )
-    expect(r.stored.v).toBe(JournalKeyValueStore.VERSION)
-    expect(r.listing.entries.map((e) => e.digest)).toEqual([r.legacy.digest, r.signed.digest])
-    expect(r.listing.corrupt.map((c) => c.key).sort()).toEqual(["somethingElse", "truncated"])
-    expect(r.listing.corrupt.find((c) => c.key === "somethingElse")!.reason).toContain("unknown journal schema version 0")
-    expect(r.recovered.map((x) => x._tag).sort()).toEqual(["Corrupt", "Corrupt", "SubmissionUnknown", "SubmissionUnknown"])
-    expect(r.pruned._tag).toBe("Success")
-    expect(r.failing.message).toContain("2 unreadable entries")
-    expect(r.after.corrupt).toEqual([])
-    expect(r.after.entries.length).toBe(2)
-  })
-
-  test("remove drops an unresolved entry", async () => {
-    const run = (journal: Journal.JournalService) =>
-      Effect.runPromise(Effect.gen(function*() {
-        const signed = yield* signedTx()
-        yield* journal.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now }))
-        yield* journal.remove(signed.digest)
-        return [(yield* journal.listUnresolved).entries.length, Option.isNone(yield* journal.get(signed.digest))] as const
-      }))
-    expect(await run(Journal.makeMemory())).toEqual([0, true])
-    const kv = await Effect.runPromise(Effect.service(KeyValueStore.KeyValueStore).pipe(Effect.provide(KeyValueStore.layerMemory)))
-    expect(await run(JournalKeyValueStore.make(kv))).toEqual([0, true])
   })
 
   test("the memory journal keeps only the latest settled entries", async () => {
@@ -200,56 +77,191 @@ describe("Journal integrity", () => {
     expect(kept).toEqual({ settled: [false, false, true, true, true], unresolved: 1 })
   })
 
-  test("one successful submit costs 7 store operations, none of them `has`", async () => {
-    const world = makeWorld()
-    const ops: Record<string, number> = {}
-    await Effect.runPromise(
-      Effect.gen(function*() {
-        const base = yield* KeyValueStore.KeyValueStore
-        const count = <K extends "get" | "set" | "remove" | "has">(k: K) =>
-          ((...args: Array<never>) => {
-            ops[k] = (ops[k] ?? 0) + 1
-            return (base[k] as (...a: Array<never>) => unknown)(...args)
-          }) as unknown as KeyValueStore.KeyValueStore[K]
-        const counting: KeyValueStore.KeyValueStore = { ...base, get: count("get"), set: count("set"), remove: count("remove"), has: count("has") }
-        yield* Lifecycle.submit(yield* signedTx()).pipe(Effect.provideService(Journal.Journal, JournalKeyValueStore.make(counting)))
-      }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast, KeyValueStore.layerMemory)))
-    )
-    expect(ops).toEqual({ get: 2, set: 3, remove: 2 })
+  test("remove drops an unresolved entry (memory)", async () => {
+    expect(await Effect.runPromise(removeRun(Journal.makeMemory()))).toEqual([0, true])
   })
+
+  test("entries are JSON", () => {
+    const encoded = Schema.encodeSync(Schema.fromJsonString(JournalEntry))(
+      JournalEntry.cases.NotApplied.make({ digest: "D", evidence: "inputConsumed", at: DateTime.makeUnsafe(5) })
+    )
+    expect(JSON.parse(encoded)).toEqual({ _tag: "NotApplied", digest: "D", evidence: "inputConsumed", at: 5 })
+  })
+
 })
 
-describe("crash recovery", () => {
-  test("signed + journalled, crash before the submit result; reconcileAll recovers", async () => {
-    const world = makeWorld({ script: ["hangAfter"] })
-    const store = KeyValueStore.layerMemory
-    const { before, recovered, after, entry } = await Effect.runPromise(
-      Effect.gen(function*() {
-        const signed = yield* signedTx()
-        // Process 1: submits, the execute lands but the answer never comes; the process dies.
-        const fiber = yield* Effect.forkChild(
-          Lifecycle.submit(signed).pipe(Effect.provide(JournalKeyValueStore.layer()))
+// The durable journal, against every store: Effect's memory store, IndexedDB and OPFS.
+for (const { name, layer: kv } of stores) {
+  describe(`durable journal over ${name}`, () => {
+    test("KeyValueStore round trip, with settled markers", async () => {
+      const { result, keys } = await Effect.runPromise(
+        Effect.gen(function*() {
+          const result = yield* roundTrip
+          const keys = yield* Effect.flatMap(Effect.service(KeyValueStore.KeyValueStore), (s) => s.keys)
+          return { result, keys }
+        }).pipe(
+          Effect.provide(JournalKeyValueStore.layer({ prefix: "j/" }).pipe(Layer.provideMerge(kv())))
         )
-        yield* Effect.yieldNow
-        yield* Effect.sleep(10)
-        yield* Fiber.interrupt(fiber)
-        // Process 2: a fresh journal over the same store.
-        return yield* Effect.gen(function*() {
-          const journal = yield* Journal.Journal
-          const { entries: before } = yield* journal.listUnresolved
-          const recovered = yield* Lifecycle.reconcileAll()
-          const { entries: after } = yield* journal.listUnresolved
-          const entry = yield* journal.get(signed.digest)
-          return { before, recovered, after, entry }
-        }).pipe(Effect.provide(JournalKeyValueStore.layer()))
-      }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast)), Effect.provide(store))
-    )
-    expect(before.map((e) => e._tag)).toEqual(["Signed"])
-    expect(recovered.map((r) => r._tag)).toEqual(["Executed"])
-    expect(after).toEqual([])
-    expect(Option.getOrThrow(entry)._tag).toBe("Executed")
-    expect(world.landed.size).toBe(1)
+      )
+      checkRoundTrip(result)
+      expect(keys.filter((k) => k.startsWith("j/settled:"))).toEqual(["j/settled:Settled2"])
+    })
+
+    test("onUnresolved: fail refuses to build over unresolved entries", async () => {
+      const error = await Effect.runPromise(
+        Effect.gen(function*() {
+          const store = yield* KeyValueStore.KeyValueStore
+          const signed = yield* signedTx()
+          yield* JournalKeyValueStore.make(store).put(
+            JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now })
+          )
+          return yield* Effect.flip(
+            Layer.build(JournalKeyValueStore.layer({ onUnresolved: "fail" })).pipe(Effect.scoped)
+          )
+        }).pipe(Effect.provide(kv()))
+      )
+      expect(error._tag).toBe("JournalError")
+    })
+
+    test("a KeyValueStore entry whose bytes don't hash to its digest is a JournalError", async () => {
+      const error = await Effect.runPromise(
+        Effect.gen(function*() {
+          const store = yield* KeyValueStore.KeyValueStore
+          const signed = yield* signedTx()
+          const other = yield* signedTx({ nonce: 2 })
+          const forged = JournalEntry.cases.Signed.make({ digest: other.digest, signed: { ...signed, digest: other.digest }, at: yield* DateTime.now })
+          yield* store.set(`entry:${other.digest}`, Schema.encodeSync(Schema.fromJsonString(JournalEntry))(forged))
+          return yield* Effect.flip(JournalKeyValueStore.make(store).get(other.digest))
+        }).pipe(Effect.provide(kv()))
+      )
+      expect(error._tag).toBe("JournalError")
+    })
+
+    test("pruneSettled never deletes an entry re-signed after its read", async () => {
+      const result = await Effect.runPromise(
+        Effect.gen(function*() {
+          const base = yield* KeyValueStore.KeyValueStore
+          const signed = yield* signedTx()
+          const journal0 = JournalKeyValueStore.make(base)
+          yield* journal0.put(JournalEntry.cases.Executed.make({ digest: signed.digest, at: DateTime.makeUnsafe(1) }))
+          // Another writer re-signs the same digest right after prune's bulk read of it.
+          let reads = 0
+          const racing: KeyValueStore.KeyValueStore = {
+            ...base,
+            get: (key) =>
+              Effect.tap(base.get(key), () =>
+                key === `entry:${signed.digest}` && ++reads === 1
+                  ? journal0.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: DateTime.makeUnsafe(2) })).pipe(Effect.orDie)
+                  : Effect.void)
+          }
+          const pruned = yield* JournalKeyValueStore.make(racing).pruneSettled(DateTime.makeUnsafe(1_000))
+          const entry = yield* journal0.get(signed.digest)
+          return { pruned, tag: Option.map(entry, (e) => e._tag) }
+        }).pipe(Effect.provide(kv()))
+      )
+      expect(result.pruned).toBe(0)
+      expect(result.tag).toEqual(Option.some("Signed"))
+    })
+
+    test("unreadable entries are reported, never strand the others; unversioned entries still read", async () => {
+      const world = makeWorld()
+      const r = await Effect.runPromise(
+        Effect.gen(function*() {
+          const store = yield* KeyValueStore.KeyValueStore
+          const journal = JournalKeyValueStore.make(store)
+          const signed = yield* signedTx()
+          const legacy = yield* signedTx({ nonce: 7 })
+          yield* journal.put(JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at: yield* DateTime.now }))
+          // Written before entries carried a version: plain JSON of the entry.
+          yield* store.set(
+            `entry:${legacy.digest}`,
+            Schema.encodeSync(Schema.fromJsonString(JournalEntry))(
+              JournalEntry.cases.Signed.make({ digest: legacy.digest, signed: legacy, at: DateTime.makeUnsafe(10) })
+            )
+          )
+          yield* store.set("entry:somethingElse", "{\"v\":0}")
+          yield* store.set("entry:truncated", "{\"_tag\":\"Sig")
+          const stored = JSON.parse((yield* store.get(`entry:${signed.digest}`))!)
+          const listing = yield* journal.listUnresolved
+          const recovered = yield* Lifecycle.reconcileAll().pipe(Effect.provideService(Journal.Journal, journal))
+          const pruned = yield* Effect.result(journal.pruneSettled(yield* DateTime.now))
+          const failing = yield* Effect.flip(Layer.build(JournalKeyValueStore.layer({ onUnresolved: "fail" })).pipe(Effect.scoped))
+          yield* journal.remove("somethingElse")
+          yield* journal.remove("truncated")
+          const after = yield* journal.listUnresolved
+          return { stored, listing, recovered, pruned, failing, after, signed, legacy }
+        }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast, kv())))
+      )
+      expect(r.stored.v).toBe(JournalKeyValueStore.VERSION)
+      expect(r.listing.entries.map((e) => e.digest)).toEqual([r.legacy.digest, r.signed.digest])
+      expect(r.listing.corrupt.map((c) => c.key).sort()).toEqual(["somethingElse", "truncated"])
+      expect(r.listing.corrupt.find((c) => c.key === "somethingElse")!.reason).toContain("unknown journal schema version 0")
+      expect(r.recovered.map((x) => x._tag).sort()).toEqual(["Corrupt", "Corrupt", "SubmissionUnknown", "SubmissionUnknown"])
+      expect(r.pruned._tag).toBe("Success")
+      expect(r.failing.message).toContain("2 unreadable entries")
+      expect(r.after.corrupt).toEqual([])
+      expect(r.after.entries.length).toBe(2)
+    })
+
+    test("one successful submit costs 7 store operations, none of them `has`", async () => {
+      const world = makeWorld()
+      const ops: Record<string, number> = {}
+      await Effect.runPromise(
+        Effect.gen(function*() {
+          const base = yield* KeyValueStore.KeyValueStore
+          const count = <K extends "get" | "set" | "remove" | "has">(k: K) =>
+            ((...args: Array<never>) => {
+              ops[k] = (ops[k] ?? 0) + 1
+              return (base[k] as (...a: Array<never>) => unknown)(...args)
+            }) as unknown as KeyValueStore.KeyValueStore[K]
+          const counting: KeyValueStore.KeyValueStore = { ...base, get: count("get"), set: count("set"), remove: count("remove"), has: count("has") }
+          yield* Lifecycle.submit(yield* signedTx()).pipe(Effect.provideService(Journal.Journal, JournalKeyValueStore.make(counting)))
+        }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast, kv())))
+      )
+      expect(ops).toEqual({ get: 2, set: 3, remove: 2 })
+    })
+
+    test("remove drops an unresolved entry", async () => {
+      const r = await Effect.runPromise(
+        Effect.flatMap(Effect.service(KeyValueStore.KeyValueStore), (store) => removeRun(JournalKeyValueStore.make(store))).pipe(Effect.provide(kv()))
+      )
+      expect(r).toEqual([0, true])
+    })
+
+    test("signed + journalled, crash before the submit result; reconcileAll recovers", async () => {
+      const world = makeWorld({ script: ["hangAfter"] })
+      const store = kv()
+      const { before, recovered, after, entry } = await Effect.runPromise(
+        Effect.gen(function*() {
+          const signed = yield* signedTx()
+          // Process 1: submits, the execute lands but the answer never comes; the process dies.
+          const fiber = yield* Effect.forkChild(
+            Lifecycle.submit(signed).pipe(Effect.provide(JournalKeyValueStore.layer()))
+          )
+          yield* Effect.yieldNow
+          yield* Effect.sleep(10)
+          yield* Fiber.interrupt(fiber)
+          // Process 2: a fresh journal over the same store.
+          return yield* Effect.gen(function*() {
+            const journal = yield* Journal.Journal
+            const { entries: before } = yield* journal.listUnresolved
+            const recovered = yield* Lifecycle.reconcileAll()
+            const { entries: after } = yield* journal.listUnresolved
+            const entry = yield* journal.get(signed.digest)
+            return { before, recovered, after, entry }
+          }).pipe(Effect.provide(JournalKeyValueStore.layer()))
+        }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast)), Effect.provide(store))
+      )
+      expect(before.map((e) => e._tag)).toEqual(["Signed"])
+      expect(recovered.map((r) => r._tag)).toEqual(["Executed"])
+      expect(after).toEqual([])
+      expect(Option.getOrThrow(entry)._tag).toBe("Executed")
+      expect(world.landed.size).toBe(1)
+    })
   })
+}
+
+describe("crash recovery", () => {
 
   test("reconcileAll({ resubmit: true }) re-sends what is still unknown", async () => {
     const world = makeWorld({ script: ["hangAfter"] })
