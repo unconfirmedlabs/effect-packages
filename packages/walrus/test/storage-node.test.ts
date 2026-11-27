@@ -452,7 +452,8 @@ suite("live testnet (SUI_LIVE=1)", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const nodes = [...(yield* committeeNodes)].sort((a, b) => b.shards.length - a.shards.length)
-        const certified = (yield* recentCertified(10)).find((c) => !c.isExtension)!
+        // A node may not have synced the newest blobs yet (seen live: METADATA_NOT_FOUND for the latest one), so try a few.
+        const candidates = (yield* recentCertified(20)).filter((c) => !c.isExtension)
         const s = yield* StorageNode.StorageNodes
         // About a fifth of testnet is unreachable from fetch (§7 risk 1): take the first node that answers.
         const errors: Array<StorageNode.NodeError> = []
@@ -462,9 +463,14 @@ suite("live testnet (SUI_LIVE=1)", () => {
             errors.push(status.failure)
             continue
           }
-          const metadata = yield* s.metadata(node, certified.blobId)
-          const blobStatus = yield* s.status(node, certified.blobId)
-          return { node, unknown: status.success, metadata, blobStatus, certified, errors }
+          for (const certified of candidates) {
+            const metadata = yield* Effect.result(s.metadata(node, certified.blobId))
+            if (Result.isFailure(metadata) && metadata.failure.kind === "NotFound") continue
+            if (Result.isFailure(metadata)) return yield* metadata.failure
+            const blobStatus = yield* s.status(node, certified.blobId)
+            return { node, unknown: status.success, metadata: metadata.success, blobStatus, certified, errors }
+          }
+          return yield* Effect.die(new Error(`${node.url} has none of ${candidates.length} recently certified blobs`))
         }
         return yield* Effect.die(new Error(`no node answered: ${errors.map((e) => e.message).join("; ")}`))
       }).pipe(Effect.provide(Layer.merge(suiLayer, StorageNode.layer({ requestTimeout: "10 seconds" }).pipe(Layer.provide(FetchHttpClient.layer)))))

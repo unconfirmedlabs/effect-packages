@@ -44,7 +44,7 @@ export type NodeErrorKind = typeof NodeErrorKind.Type
 const RETRYABLE: ReadonlySet<NodeErrorKind> = /* @__PURE__ */ new Set<NodeErrorKind>(["Unavailable", "Timeout", "RateLimited", "NotRegistered"])
 
 /** One node's failure. `status` is absent when no HTTP answer arrived; `reason` is the server's `ErrorInfo` reason (N7). */
-export class NodeError extends Schema.TaggedError<NodeError>()("NodeError", {
+export class NodeError extends /* @__PURE__ */ Schema.TaggedError<NodeError>()("NodeError", {
   /** The node's base URL. */
   node: Schema.String,
   kind: NodeErrorKind,

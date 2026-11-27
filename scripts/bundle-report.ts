@@ -59,6 +59,44 @@ const programs: Record<string, string> = {
       const signer = yield* Ed25519.generate
       return yield* Tx.run(Effect.gen(function*() { yield* Ptb.transferObjects([Ptb.gas], yield* Ptb.address(signer.address)) }), { signer })
     }).pipe(Effect.provide(layer))).then(console.log)`,
+  "walrus: read via aggregator": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/walrus", "Aggregator")}
+    const layer = Aggregator.layer({ url: Aggregator.TESTNET_URL }).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Aggregator.blob(process.argv[2]).pipe(Effect.provide(layer))).then(console.log)`,
+  "walrus: Bft + Encoding only": `
+    ${I("@unconfirmed/walrus", "Bft", "Encoding")}
+    console.log(Bft.minCorrect(1000), Encoding.encodedLength(1, 1000))`,
+  "walrus: read a blob (nodes)": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/walrus", "Read", "Walrus")}
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provide(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Read.blob(process.argv[2]).pipe(Effect.provide(layer))).then(console.log)`,
+  "walrus: write a blob (nodes)": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519")}
+    ${I("@unconfirmed/walrus", "Walrus", "Write")}
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Write.run(new Uint8Array(32), { epochs: 1, deletable: true, executor: Write.viaTx(signer) })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
+  "walrus: write a blob (relay)": `
+    ${E("Effect")}; ${E("Layer")}
+    ${I("effect/http", "FetchHttpClient")}
+    ${I("@unconfirmed/sui", "Ed25519")}
+    ${I("@unconfirmed/walrus", "UploadRelay", "Walrus", "Write")}
+    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    const layer = Layer.mergeAll(Walrus.layer({ network: "testnet" }), UploadRelay.layer({ host: UploadRelay.TESTNET_HOST })).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
+    Effect.runPromise(Effect.gen(function*() {
+      const signer = yield* Ed25519.generate
+      return yield* Write.run(new Uint8Array(32), { epochs: 1, deletable: true, executor: Write.viaTx(signer), via: "relay" })
+    }).pipe(Effect.provide(layer))).then(console.log)`,
   "mysten: verify a signature": `
     import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
     verifyPersonalMessageSignature(new Uint8Array([1]), "AA==", { offline: true }).then(console.log)`,
@@ -72,13 +110,31 @@ const programs: Record<string, string> = {
     const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
     const signer = Ed25519Keypair.generate()
     const tx = new Transaction(); tx.transferObjects([tx.gas], signer.toSuiAddress())
-    signer.signAndExecuteTransaction({ transaction: tx, client }).then(console.log)`
+    signer.signAndExecuteTransaction({ transaction: tx, client }).then(console.log)`,
+  "mysten: walrus readBlob": `
+    import { SuiGrpcClient } from "@mysten/sui/grpc"
+    import { walrus } from "@mysten/walrus"
+    const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" }).$extend(walrus())
+    client.walrus.readBlob({ blobId: process.argv[2] }).then(console.log)`,
+  "mysten: walrus writeBlob": `
+    import { SuiGrpcClient } from "@mysten/sui/grpc"
+    import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
+    import { walrus } from "@mysten/walrus"
+    const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" }).$extend(walrus())
+    client.walrus.writeBlob({ blob: new Uint8Array(32), deletable: true, epochs: 1, signer: Ed25519Keypair.generate() }).then(console.log)`
 }
+
+/** What a Walrus program must or must not ship: the WASM glue and the quorum code (§3). */
+const markers = (code: string) =>
+  [code.includes("walrus_wasm_bg.wasm") ? "wasm glue" : "", code.includes("QuorumFailed") ? "quorum" : ""].filter(Boolean).join(" + ") || "neither"
 
 const bucket = (path: string) => {
   if (/[/\\]effect@|node_modules[/\\]effect[/\\]/.test(path)) return "effect"
   if (/@noble[/\\]curves[/\\](abstract[/\\]weierstrass|secp256k1|nist)/.test(path)) return "secp curves"
   if (/@noble|@scure/.test(path)) return "noble/scure"
+  if (/walrus-wasm/.test(path)) return "walrus-wasm glue"
+  if (/packages[/\\]walrus[/\\]src[/\\]generated/.test(path)) return "walrus generated"
+  if (/packages[/\\]walrus/.test(path)) return "walrus"
   if (/packages[/\\]quorum/.test(path)) return "quorum"
   if (/packages[/\\]sui-multisig/.test(path)) return "sui-multisig"
   if (/packages[/\\]sui-secp/.test(path)) return "sui-secp*"
@@ -107,15 +163,17 @@ for (const [name, source] of Object.entries(programs)) {
 
   const rd = await rolldown({ input: entry, platform: "browser", logLevel: "silent" })
   const { output } = await rd.generate({ format: "esm", minify: true })
-  const chunk = output[0]
-  const rdCode = chunk.code
+  // Every JS chunk counts: a dynamic import (the WASM glue) is split into its own chunk by Rolldown only.
+  const chunks = output.filter((o) => o.type === "chunk")
+  const rdCode = chunks.map((c) => c.code).join("\n")
 
   const cell = (code: string) => `${kb(code.length)}/${kb(gzipSync(code).length)}`.padStart(14)
-  console.log(`${name.padEnd(44)} ${cell(bunCode)} ${cell(esCode)} ${cell(rdCode)}`)
+  const ships = name.startsWith("walrus") ? [...new Set([bunCode, esCode, rdCode].map(markers))].join(" | ") : ""
+  console.log(`${name.padEnd(44)} ${cell(bunCode)} ${cell(esCode)} ${cell(rdCode)}  ${ships}`)
 
   if (detail) {
     const sizes = new Map<string, number>()
-    for (const [id, m] of Object.entries(chunk.modules)) {
+    for (const [id, m] of chunks.flatMap((c) => Object.entries(c.modules))) {
       if (id.includes(".bundle-probe")) continue
       sizes.set(bucket(id), (sizes.get(bucket(id)) ?? 0) + m.renderedLength)
     }
@@ -124,4 +182,6 @@ for (const [name, source] of Object.entries(programs)) {
   }
 }
 await Bun.$`rm -rf ${dir}`
-console.log("\nKB minified / KB minified+gzip")
+console.log("\nKB minified / KB minified+gzip, JS only (all chunks)")
+const wasm = Bun.file(`${import.meta.dir}/../node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm`)
+if (await wasm.exists()) console.log(`Walrus programs that encode, decode or verify also load the WASM asset: ${kb(wasm.size)} KB (web/walrus_wasm_bg.wasm), not counted above`)

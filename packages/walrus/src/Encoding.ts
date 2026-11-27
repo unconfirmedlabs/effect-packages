@@ -31,20 +31,26 @@ export const maxBlobSize = (n: number): number => {
   return primary * secondary * MAX_SYMBOL_SIZE
 }
 
-/** `max(len, 1).divCeil(primary × secondary)`, rounded up to a multiple of 2; fails above 65534 (E2). */
-export const symbolSize = (unencodedLength: number, n: number): Result.Result<number, BlobTooLarge> => {
+/** The symbol size before the 65534 limit is applied. */
+const rawSymbolSize = (unencodedLength: number, n: number): number => {
   const { primary, secondary } = sourceSymbols(n)
   const raw = Math.ceil(Math.max(unencodedLength, 1) / (primary * secondary))
-  const size = Math.ceil(raw / SYMBOL_ALIGNMENT) * SYMBOL_ALIGNMENT
+  return Math.ceil(raw / SYMBOL_ALIGNMENT) * SYMBOL_ALIGNMENT
+}
+
+/** `max(len, 1).divCeil(primary × secondary)`, rounded up to a multiple of 2; fails above 65534 (E2). */
+export const symbolSize = (unencodedLength: number, n: number): Result.Result<number, BlobTooLarge> => {
+  const size = rawSymbolSize(unencodedLength, n)
   return size > MAX_SYMBOL_SIZE
     ? Result.fail(new BlobTooLarge({ size: unencodedLength, max: maxBlobSize(n) }))
     : Result.succeed(size)
 }
 
+// Does not go through `symbolSize`: the size helpers below then need no error class (and no `Schema`) in a bundle.
 const symbolSizeOrThrow = (unencodedLength: number, n: number): number => {
-  const r = symbolSize(unencodedLength, n)
-  if (Result.isFailure(r)) throw new RangeError(`blob of ${unencodedLength} bytes exceeds ${r.failure.max} for ${n} shards`)
-  return r.success
+  const size = rawSymbolSize(unencodedLength, n)
+  if (size > MAX_SYMBOL_SIZE) throw new RangeError(`blob of ${unencodedLength} bytes exceeds ${maxBlobSize(n)} for ${n} shards`)
+  return size
 }
 
 /**

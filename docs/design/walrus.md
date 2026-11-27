@@ -182,6 +182,7 @@ packages/walrus/
     StorageNode.ts                                                                               node HTTP
     Read.ts  Recipes.ts  Write.ts                                                                flows
     UploadRelay.ts  Quilt.ts  QuiltRead.ts  Aggregator.ts  Publisher.ts
+    internal/gateway.ts   the request helper the two gateways share (W10; not in the index)
     Walrus.ts      the one-line layer
     index.ts       export * as X from "./X.ts" for each module
   test/            see §6
@@ -671,6 +672,14 @@ export const verified: (blobId: BlobId) => Effect.Effect<Uint8Array, GatewayErro
 
 Routes: `crates/walrus-service/src/client/daemon/routes.rs:85-108`; response type: `crates/walrus-sdk/src/node_client/responses.rs` (`BlobStoreResult`).
 
+As built (W10):
+
+- **Services and accessors.** `Aggregator` (`url`, `blob`, `byObjectId`, `patch`, `byIdentifier`, each `Effect<Uint8Array, GatewayError>`) and `Publisher` (`url`, `store`) are `Context.Service`s; module-level accessors of the same names use the one in context. Layers take `{ url, requestTimeout?, headers?, tracerPropagation? }`: `headers` covers publishers behind JWT auth; default timeouts are 60 s (aggregator) and 5 min (publisher, which stores before answering). `TESTNET_URL` for both, `MAINNET_URL` for the aggregator (there is no public mainnet publisher). The shared request helper is `src/internal/gateway.ts` (not exported from the index).
+- **Errors.** A non-2xx answer is `GatewayError { status, message }`, with the message (and `details[].reason`) taken from the daemon's N7 error envelope when it sends one, else the body text. No answer, a timeout or a defect thrown by the `HttpClient` is `GatewayError` without `status`. Quilt reads return the bytes only: the `X-Quilt-Patch-Identifier` header is not surfaced.
+- **Publisher.** The query carries only `epochs`, `permanent=true` and `send_object_to`, each only when given: the daemon's `PublisherQuery` has `deny_unknown_fields`, and blobs are deletable by default since 1.35 (`deletable` is deprecated there). `StoreResult` is `NewlyCreated { blobObject, resourceOperation (passed through), cost, sharedBlobObject } | AlreadyCertified { blobId, endEpoch, event | object } | MarkedInvalid { blobId, event }`. `BlobStoreResult::Error` (`{ error: { blobId, failurePhase, errorMsg } }`) is a `GatewayError`. `eventSeq` is a string. Exported helpers: `parseStoreResult`, `storePath`, `blobIdOf`.
+- **`verified`** derives the id with `Encoder.blobId` (one WASM call, about 2.5 s at `n = 1000`) using `System`'s `nShards`.
+- Tests: `test/gateway.test.ts` (scripted `HttpClient`; bodies from the Walrus docs) and `test/live.gateway.test.ts` (`SUI_LIVE=1`: a recent blob through `Walrus.layer` + `Read.blob` and through the public aggregator with `verified`, byte-equal; a random id is `GatewayError` 404).
+
 ### 4.11 The one-line layer
 
 ```ts
@@ -690,6 +699,8 @@ export const layer: (options: WalrusOptions)
 const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), Layer.provide(FetchHttpClient.layer))
 const bytes = yield* Read.blob(blobId).pipe(Effect.provide(layer))
 ```
+
+As built (W10): `WalrusOptions` is a union, so exactly one of `network` and `config` is given. Storage-node `requestTimeout` defaults to 15 s in this layer (30 s in `StorageNode.layer`): reads give up on a slow node and ask another. It applies to writes too; pass `nodes: { requestTimeout }` for large blobs on slow links. Building the layer loads the WASM even when a program only calls `Read.status`. The relay is not part of this layer: add `UploadRelay.layer` when `via: "relay"` is used. Exports `WalrusServices` and `DEFAULT_REQUEST_TIMEOUT`.
 
 ### 4.12 Errors not defined above
 
@@ -778,6 +789,23 @@ The address holds about 1.15 SUI (in its address balance; gas resolves through `
 ### 6.5 Bundle report
 
 Add to `scripts/bundle-report.ts`: "walrus: read via aggregator", "walrus: read a blob", "walrus: write a blob", and `@mysten/walrus` `readBlob` / `writeBlob` under Rolldown for comparison. Report JS only, and state the WASM asset size (358 KB) separately. Add the rows to the README table.
+
+As built (W10): rows for the aggregator, `Bft` + `Encoding` only, read, write through the nodes and through the relay, and both `@mysten/walrus` programs (under all three bundlers). Sizes now sum every JS chunk, because Rolldown splits the WASM glue into its own chunk. Each Walrus row says whether the bundle contains the WASM glue (`walrus_wasm_bg.wasm`) or the quorum code (`QuorumFailed`).
+
+Findings, KB minified / gzip:
+
+| Program | Bun | esbuild | Rolldown |
+|---|---|---|---|
+| aggregator | 144 / 49 | 144 / 49 | 145 / 47 |
+| `Bft` + `Encoding` | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 |
+| read | 384 / 110 | 378 / 110 | 388 / 107 |
+| write (nodes) | 453 / 136 | 447 / 135 | 455 / 130 |
+| write (relay) | 458 / 137 | 452 / 137 | 460 / 132 |
+| `@mysten/walrus` `readBlob` / `writeBlob` | 411 / 115, 457 / 133 | 407 / 115, 454 / 133 | 409 / 111, 455 / 128 |
+
+- The aggregator and pure-core programs contain neither the glue nor the quorum, under every bundler and also with barrel imports.
+- `Bft` + `Encoding` was 88 KB: `encodedLength` went through `symbolSize`, which builds a `BlobTooLarge`, and that pulled in `Schema`. The throwing helpers now compute the size directly.
+- `Errors.ts` is **not** split. Every class's `extends` is now marked `/* @__PURE__ */` (also `InvalidBlobId` and `NodeError`), so Bun and esbuild drop unused classes; Rolldown ignores the mark, but drops the module when nothing in it is used. All of this saved 1.3 KB on the aggregator program (145.3 → 144.0 with Bun). The ~76 KB W1 measured is `Schema` itself, which any one error class needs. The aggregator program is the Effect baseline plus about 17 KB.
 
 ## 7. Risks
 
