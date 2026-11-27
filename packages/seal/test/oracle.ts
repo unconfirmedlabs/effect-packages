@@ -110,3 +110,55 @@ export const withRandomValues = <A>(source: (length: number) => Uint8Array, f: (
     crypto.getRandomValues = original
   }
 }
+
+// -----------------------------------------------------------------------------
+// S2: encrypted objects, encrypt and decrypt
+// -----------------------------------------------------------------------------
+
+/** `EncryptedObject` in `@mysten/sui/bcs`'s shape: `id` is hex without `0x`, enums are `{ Variant: {...} }`. */
+export const mystenEncryptedObject = mystenBcs.EncryptedObject as unknown as {
+  parse(bytes: Uint8Array): any
+  serialize(value: any): { toBytes(): Uint8Array }
+}
+
+export const mystenEncrypt = (await import(`${dist}/encrypt.mjs`)) as {
+  encrypt(options: {
+    keyServers: Array<{ objectId: string; pk: Uint8Array }>
+    kemType: 0
+    threshold: number
+    packageId: string
+    id: string
+    encryptionInput: { generateKey(): Promise<Uint8Array>; encrypt(key: Uint8Array): Promise<MystenCiphertext> }
+  }): Promise<{ encryptedObject: Uint8Array; key: Uint8Array }>
+}
+
+export const mystenDecrypt = (await import(`${dist}/decrypt.mjs`)) as {
+  /** `keys` is keyed by `${fullId hex}:${objectId}`. */
+  decrypt(options: {
+    encryptedObject: any
+    keys: Map<string, MystenG1>
+    publicKeys?: Array<MystenG2>
+    checkLEEncoding?: boolean
+  }): Promise<Uint8Array>
+}
+
+/** `withRandomValues` for an async `f`: the stub stays installed until `f` settles (tests run sequentially). */
+export const withRandomValuesAsync = async <A>(
+  source: (length: number) => Uint8Array,
+  f: () => Promise<A>
+): Promise<{ result: A; draws: Array<Uint8Array> }> => {
+  const original = crypto.getRandomValues
+  const draws: Array<Uint8Array> = []
+  crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T): T => {
+    if (array === null) return array
+    const bytes = source(array.byteLength)
+    new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(bytes)
+    draws.push(bytes)
+    return array
+  }) as typeof crypto.getRandomValues
+  try {
+    return { result: await f(), draws }
+  } finally {
+    crypto.getRandomValues = original
+  }
+}
