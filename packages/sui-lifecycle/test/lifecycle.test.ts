@@ -12,7 +12,7 @@ import * as Lifecycle from "../src/Lifecycle.ts"
 import * as Outcome from "../src/Outcome.ts"
 import type { SignedTransaction } from "../src/SignedTransaction.ts"
 import * as SubmitConfig from "../src/SubmitConfig.ts"
-import { COIN, consumer, land, layer, makeWorld, OBJ, ownedObject, signedTx, type World } from "./world.ts"
+import { COIN, consumer, evidence, land, layer, makeWorld, OBJ, ownedObject, signedTx, type World } from "./world.ts"
 
 const fast = SubmitConfig.layer({
   resubmit: Schedule.spaced(0),
@@ -21,15 +21,16 @@ const fast = SubmitConfig.layer({
   awaitVisibility: false
 })
 
-/** A node whose history reaches genesis, so a miss is evidence. */
-const fullHistory = Evidence.layer({
-  lowestAvailableCheckpoint: Effect.succeedSome(0n),
-  epochFirstCheckpoint: () => Effect.succeedNone
-})
+/** An Evidence backend (over the world) whose history reaches genesis, so a miss is evidence. */
+const fullHistory = (world: World) => evidence(world)
 
-const runIn = <A, E>(world: World, effect: Effect.Effect<A, E, Lifecycle.Services>, extra: Layer.Layer<never> = Layer.empty) =>
+const runIn = <A, E>(
+  world: World,
+  effect: Effect.Effect<A, E, Lifecycle.Services>,
+  extra: Layer.Layer<never> | ((world: World) => Layer.Layer<never>) = Layer.empty
+) =>
   Effect.runPromise(
-    effect.pipe(Effect.provide(Layer.mergeAll(layer(world), Journal.layerMemory, fast, extra)))
+    effect.pipe(Effect.provide(Layer.mergeAll(layer(world), Journal.layerMemory, fast, typeof extra === "function" ? extra(world) : extra)))
   )
 
 const journalTag = (digest: string) =>
@@ -410,35 +411,83 @@ describe("reconcile", () => {
     expect(tag).toBe("NotApplied")
   })
 
-  test("expired needs fresh history from Evidence: Chain.info reporting 0 is not enough", async () => {
+  test("without an Evidence service the expiry rule is off, and says so", async () => {
     const world = makeWorld({ epoch: 20n, lowestAvailableCheckpoint: 0n })
     const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)))
     expect(error._tag).toBe("SubmissionUnknown")
+    expect(error._tag === "SubmissionUnknown" && error.reason).toContain("expiry rule is off")
+  })
+
+  test("an Evidence backend that does not report its history cannot vouch for a miss", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const error = await runIn(
+      world,
+      Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)),
+      evidence(world, { lowest: Option.none() })
+    )
     expect(error._tag === "SubmissionUnknown" && error.reason).toContain("does not report how much history")
   })
 
-  test("the node's history is read after the misses it vouches for", async () => {
+  test("each Evidence observation follows a Transactions miss", async () => {
     const world = makeWorld({ epoch: 20n })
-    let getsBefore = -1
-    const evidence = Evidence.layer({
-      lowestAvailableCheckpoint: Effect.sync(() => {
-        getsBefore = world.getCalls
-        return Option.some(0n)
-      }),
-      epochFirstCheckpoint: () => Effect.succeedNone
-    })
-    await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), evidence)
-    expect(getsBefore).toBe(3)
+    await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), fullHistory)
+    expect(world.observedAt).toEqual([2, 3])
   })
 
   test("expired on a pruning node that cannot say where the window starts: SubmissionUnknown", async () => {
     const world = makeWorld({ epoch: 20n })
-    const pruning = Evidence.layer({
-      lowestAvailableCheckpoint: Effect.succeedSome(5000n),
-      epochFirstCheckpoint: () => Effect.succeedNone
-    })
-    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), pruning)
+    const error = await runIn(
+      world,
+      Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)),
+      evidence(world, { lowest: Option.some(5000n) })
+    )
     expect(error._tag).toBe("SubmissionUnknown")
+  })
+
+  test("a lagging Transactions index never turns a late landing into expired (CT-3)", async () => {
+    // Chain says epoch 12 (window 10..11 closed); the transaction landed at the
+    // end of epoch 11; the Evidence backend serves it, `Transactions` (an
+    // indexer behind) does not yet.
+    const world = makeWorld({ epoch: 12n })
+    const result = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ epoch: 10n, pinned: false })
+        land(world, signed.digest)
+        world.hideFor = 4
+        const first = yield* Effect.flip(Lifecycle.reconcile(signed))
+        const later = yield* Lifecycle.reconcile(signed)
+        return { first, later }
+      }),
+      fullHistory
+    )
+    expect(result.first._tag).toBe("SubmissionUnknown")
+    expect(result.first._tag === "SubmissionUnknown" && result.first.reason).toContain("Evidence backend serves this transaction")
+    expect(Outcome.outcome(result.first)).toBe("unknown")
+    expect(result.later.status._tag).toBe("Success")
+  })
+
+  test("an Evidence backend still inside the window blocks expired, whatever Chain says", async () => {
+    const world = makeWorld({ epoch: 20n, evidenceEpoch: 11n })
+    const error = await runIn(world, Effect.flip(Effect.flatMap(signedTx({ epoch: 10n, pinned: false }), Lifecycle.reconcile)), fullHistory)
+    expect(error._tag === "SubmissionUnknown" && error.reason).toContain("has not yet reached the end of its window")
+  })
+
+  test("a transaction that becomes readable between the rounds settles as executed", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const effects = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ epoch: 10n, pinned: false })
+        world.onGet = () =>
+          Effect.sync(() => {
+            if (world.getCalls === 2) land(world, signed.digest)
+          })
+        return yield* Lifecycle.reconcile(signed)
+      }),
+      fullHistory
+    )
+    expect(effects.status._tag).toBe("Success")
   })
 
   test("expiryEvidence: never keeps it unknown", async () => {
@@ -505,5 +554,130 @@ describe("reconcile", () => {
     )
     expect(result.found.status._tag).toBe("Success")
     expect(result.missing._tag === "SubmissionUnknown" && result.missing.signed).toBeUndefined()
+  })
+
+  test("a bare digest uses the signed bytes the journal holds (CT-18)", async () => {
+    const world = makeWorld({ epoch: 20n })
+    const result = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ epoch: 10n, pinned: false })
+        yield* put((at) => JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at }))
+        const byDigest = yield* Effect.flip(Lifecycle.reconcile(signed.digest))
+        return byDigest
+      }),
+      fullHistory
+    )
+    expect(result._tag === "NotApplied" && result.evidence).toBe("expired")
+  })
+
+  test("pinned objects are read concurrently (CT-16)", async () => {
+    const world = makeWorld()
+    world.objects.set(OBJ, ownedObject(OBJ, 5n))
+    world.objects.set(COIN, ownedObject(COIN, 3n))
+    await runIn(world, Effect.flip(Effect.flatMap(signedTx(), Lifecycle.reconcile)))
+    expect(world.objectsMaxInFlight).toBe(2)
+  })
+})
+
+describe("review fixes: submit, resubmit, reconcileAll", () => {
+  test("submit with an unreadable journal is SubmissionUnknown and sends nothing (CT-10)", async () => {
+    const world = makeWorld()
+    const result = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const broken = { ...Journal.makeMemory(), get: () => Effect.fail(new Outcome.JournalError({ message: "store down" })) }
+        return yield* Effect.flip(Lifecycle.submit(signed).pipe(Effect.provideService(Journal.Journal, broken)))
+      })
+    )
+    expect(result._tag).toBe("SubmissionUnknown")
+    expect(Outcome.outcome(result)).toBe("unknown")
+    expect(world.executeCalls).toBe(0)
+  })
+
+  test("a first submit to the wrong chain sends nothing; resubmit on the right chain sends (CT-11)", async () => {
+    const world = makeWorld({ chainId: "11111111111111111111111111111111", script: ["refuse"] })
+    const result = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx()
+        const first = yield* Effect.flip(Lifecycle.submit(signed))
+        const tag = yield* journalTag(signed.digest)
+        world.chainId = (yield* Effect.promise(() => import("./world.ts"))).CHAIN_ID
+        world.script = []
+        const second = yield* Lifecycle.resubmit(signed)
+        return { first, tag, second }
+      })
+    )
+    expect(result.first._tag === "SubmissionUnknown" && result.first.reason).toContain("nothing was sent")
+    expect(result.tag).toBe("none")
+    expect(result.second.status._tag).toBe("Success")
+    expect(world.executeCalls).toBe(1)
+  })
+
+  test("resubmit({ retryRefused: true }) re-sends bytes recorded as refused", async () => {
+    const world = makeWorld({ script: ["refuse"] })
+    const result = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ pinned: false })
+        const refused = yield* Effect.flip(Lifecycle.submit(signed))
+        const kept = yield* Effect.flip(Lifecycle.resubmit(signed))
+        const sentBefore = world.executeCalls
+        const retried = yield* Lifecycle.resubmit(signed, { retryRefused: true })
+        return { refused, kept, sentBefore, retried, tag: yield* journalTag(signed.digest) }
+      })
+    )
+    expect(result.refused._tag === "NotApplied" && result.refused.evidence).toBe("refused")
+    expect(result.kept._tag).toBe("NotApplied")
+    expect(result.sentBefore).toBe(1)
+    expect(result.retried.status._tag).toBe("Success")
+    expect(result.tag).toBe("Executed")
+  })
+
+  test("reconcileAll runs entries concurrently with one lookup each (CT-5)", async () => {
+    const world = makeWorld()
+    const started = Date.now()
+    const out = await Effect.runPromise(
+      Effect.gen(function*() {
+        for (let i = 0; i < 20; i++) {
+          const signed = yield* signedTx({ nonce: i, pinned: false })
+          yield* put((at) => JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at }))
+        }
+        return yield* Lifecycle.reconcileAll({ concurrency: 4 })
+      }).pipe(
+        Effect.provide(Layer.mergeAll(
+          layer(world),
+          Journal.layerMemory,
+          // The defaults: 5 s of polling per digest for a just-sent transaction.
+          SubmitConfig.layer({ awaitVisibility: false })
+        ))
+      )
+    )
+    expect(out.map((r) => r._tag)).toEqual(Array.from({ length: 20 }, () => "SubmissionUnknown"))
+    expect(world.getCalls).toBe(20)
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
+  test("reconcileAll keeps when an unknown entry was first sent and why (CT-25)", async () => {
+    const world = makeWorld()
+    const entry = await runIn(
+      world,
+      Effect.gen(function*() {
+        const signed = yield* signedTx({ pinned: false })
+        const first = DateTime.makeUnsafe(1_000)
+        yield* put(() =>
+          JournalEntry.cases.Unknown.make({ digest: signed.digest, signed, lastError: "RpcError UNAVAILABLE", attempts: 3, at: first })
+        )
+        yield* Lifecycle.reconcileAll()
+        return Option.getOrThrow(yield* Effect.flatMap(Effect.service(Journal.Journal), (j) => j.get(signed.digest)))
+      })
+    )
+    expect(entry._tag).toBe("Unknown")
+    if (entry._tag !== "Unknown") return
+    expect(DateTime.toEpochMillis(entry.at)).toBe(1_000)
+    expect(entry.lastError).toBe("RpcError UNAVAILABLE")
+    expect(entry.attempts).toBe(3)
   })
 })

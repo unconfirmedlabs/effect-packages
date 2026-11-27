@@ -10,7 +10,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only) |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
-| `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence, journal (memory / KeyValueStore), sender lock | — |
+| `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / KeyValueStore), sender lock | — |
 | `@unconfirmed/sui-secp256k1` | Secp256k1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
 | `@unconfirmed/sui-mldsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
@@ -279,6 +279,29 @@ A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` wi
 
 **5. The transport ships only the RPCs you call.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover.
 
+**GraphQL.** `@unconfirmed/sui-graphql` implements every capability over Sui GraphQL. `CheckpointData.subscribe` and `list` fetch up to 16 checkpoints ahead concurrently and deliver them in order, so `CheckpointData.follow` keeps up with mainnet and testnet: measured over 30 s, it stays about 5 checkpoints behind the light `Checkpoints.subscribe`. One request at a time fell 34 (testnet) to 74 (mainnet) behind and kept losing ground. Open-ended `list` calls are pinned to the indexer's tip at the time of the call, as over gRPC. When the indexer answers null where a value must exist (current epoch, latest checkpoint, gas price), the call fails with `RpcError` `UNAVAILABLE`; it never substitutes a default.
+
+**6. Crash-safe submission (`@unconfirmed/sui-lifecycle`).**
+
+```ts
+import * as EvidenceGrpc from "@unconfirmed/sui-lifecycle/EvidenceGrpc"   // or EvidenceGraphQL
+import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/sui-lifecycle"
+
+const layer = Layer.mergeAll(
+  SuiGrpc.layer({ baseUrl }),
+  EvidenceGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ baseUrl }))),   // same backend as Transactions
+  JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
+)
+yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
+const effects = yield* Lifecycle.run(recipe, { signer })
+```
+
+- Every failure lands on one axis: `applied` (`ExecutionFailed`), `not_applied` (`NotApplied`, `JournalError`) or `unknown` (`SubmissionUnknown`, which carries the signed bytes to `resubmit`). Only `not_applied` is safe to rebuild.
+- **The expiry rule needs `Evidence`, and it is off without it.** `NotApplied{expired}` means the transaction's epoch window has closed and it is not on chain. It is concluded only when one `Evidence` backend reports, in a single consistent observation taken twice around a recheck, that its epoch is past the window, that it does not have the transaction, and that its history covers the window. `Transactions.get` must also miss each time. `SuiGrpc.layer` and `SuiGraphQL.layer` do not include `Evidence`. Without it, a transaction that never reached the network stays `SubmissionUnknown` (and unresolved in the journal) until you `resubmit` it or `Journal.remove` it. Point `Evidence` at the same backend as `Transactions`. Behind a load balancer of mixed nodes, set `SubmitConfig` `expiryEvidence: "never"`.
+- `NotApplied{refused}` (`INVALID_ARGUMENT` on the first send) means only that this process will not send those bytes again on its own. Some refusals depend on time (an unfunded address balance, for example). `Lifecycle.resubmit(signed, { retryRefused: true })` re-sends them on request. Bytes built for another chain are never sent.
+- **Journal.** The durable journal stores each entry as versioned JSON (`{"v":1,…}`) and still reads entries written before versioning. An entry it cannot read does not fail the listing: it is reported in `listUnresolved().corrupt` and as `{ _tag: "Corrupt" }` from `reconcileAll`. `Journal.remove(digest)` drops any entry, unresolved or corrupt. The in-memory default keeps the latest 10 000 settled entries.
+- `reconcileAll({ concurrency, resubmit })` makes one lookup per entry, without polling, and keeps the time each unknown entry was first sent and its last send error. `reconcile(digest)` uses the signed bytes the journal holds for that digest.
+
 ## Keys
 
 **Import and export** use the `suiprivkey1…` strings the Sui CLI and wallets exchange. The core can't build a signer for a scheme it doesn't ship, so decoding gives bytes and the scheme package makes the signer:
@@ -330,7 +353,7 @@ import { defineConfig } from "@unconfirmed/sui-codegen/Config"
 export default defineConfig({
   output: "./src/generated",
   packages: [
-    { path: "./move/counter" },                                    // local: runs `sui move summary`
+    { path: "./move/counter", packageId: "0x…" },                  // local: runs `sui move summary`
     { id: "0x…", network: "testnet", name: "deepbook" },           // on-chain, over gRPC GetPackage
     { path: "./move/counter", package: "sui", modules: ["coin"] }  // framework modules, same summaries
   ]
@@ -354,13 +377,16 @@ const recipe = Effect.gen(function*() {
 })
 yield* Tx.run(recipe, { signer }).pipe(Effect.provide(Layer.succeed(counter.Package, testnetId)))  // R needs no Package by default
 const value = yield* counter.Counter.get(id)   // Objects.getAs with the generated schema
-counter.Counter.type()                         // "0x<defining id>::counter::Counter"
+counter.Counter.type()                         // "0x<packageId>::counter::Counter" (`0x0` without packageId/originalId)
 ```
 
 - **Package ids.** Each package has one `Package` (`Context.Reference<string>`) defaulting to the id it was generated from, so calls need nothing in `R`; point them elsewhere with `Layer.succeed` / `Effect.provideService`. Type strings use each type's defining (type-origin) id, which survives upgrades.
+- **Local packages.** `sui move summary` lists an unpublished package at `0x0` and carries no type origins, so give the published ids: `packageId` (calls) and `originalId` (type strings; default `packageId`, right until the first upgrade), plus `typeOrigins: { "module::Type": id }` for types an upgrade added. `.type()` is synchronous and built at generation time, so providing `Package` at run time does not change it. Without either id, calls and type strings say `0x0`. Several unpublished packages can share one config (each is keyed by its name).
+- **Names.** A Move name that would clash in TypeScript is renamed deterministically: a struct named `Move`, `Bcs` or `Package` is bound as `Move_` and still exported as `Move` (a module exporting a type `Package` then leaves the `Package` reference in `$package.ts`); of `foo_bar` and `fooBar` the camelCase one keeps its name and the other keeps its Move name; an argument key taken by an auto-filled object or an earlier argument keeps its Move name if that differs, else gets a numeric suffix (`random: u64` next to `&Random` is `random2`). Functions with a `signer` parameter are skipped with a comment.
+- **Writing.** `generate` replaces `<output>/<package>` and `<output>/deps` only when they hold nothing but generated files (otherwise it fails and writes nothing), and fails when two packages would be written to one path. Directories of packages removed from the config are left in place.
 - **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, ...).
 - **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
-- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2.6 KB min / 0.8 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8).
+- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2.6 KB min / 1.0 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report).
 - Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
 
 ## Importing
@@ -387,6 +413,10 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
 | Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 177 / 64 | 179 / 61 | — |
 | Read one object | 206 / 67 | 205 / 68 | 210 / 66 | 294 / 77 (ships all 30 RPCs) |
 | Build + resolve + sign + execute | 389 / 112 | 384 / 112 | 392 / 109 | 383 / 106 |
+| The same over GraphQL (`SuiGraphQL.layer`) | 309 / 106 | 303 / 106 | 307 / 101 | — |
+| `Lifecycle.run` (gRPC, KeyValueStore journal) | 423 / 124 | 418 / 124 | 424 / 119 | — |
+| Hand-written `Ptb.moveCall` | 89 / 30 | 90 / 31 | 93 / 30 | — |
+| One generated call (Walrus `blob.burn`) | 91 / 31 | 92 / 32 | 96 / 31 | — |
 | Walrus: read via the aggregator | 144 / 49 | 144 / 49 | 145 / 47 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
 | Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |

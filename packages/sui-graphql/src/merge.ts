@@ -42,10 +42,19 @@ export const mergeSorted = <A, E>(
           if (b && b.length > 0 && (best < 0 || compare(b[0]!, buffers[best]![0]!) < 0)) best = i
         }
         if (best < 0) return yield* Cause.done()
-        const value = buffers[best]!.shift()!
-        if (last !== undefined && compare(last.value, value) === 0) continue
-        last = { value }
-        return [value] as const
+        // Every live source has a head now: emit the run of `best` that sorts
+        // no later than any other head, as one chunk.
+        const out: Array<A> = []
+        const source = buffers[best]!
+        const otherHeadsAllow = (value: A) =>
+          buffers.every((b, i) => i === best || b === null || (b.length > 0 && compare(value, b[0]!) <= 0))
+        while (source.length > 0 && otherHeadsAllow(source[0]!)) {
+          const value = source.shift()!
+          if (last !== undefined && compare(last.value, value) === 0) continue
+          last = { value }
+          out.push(value)
+        }
+        if (out.length > 0) return out as unknown as Arr.NonEmptyReadonlyArray<A>
       }
     })
     return Stream.fromPull(Effect.succeed(pull))

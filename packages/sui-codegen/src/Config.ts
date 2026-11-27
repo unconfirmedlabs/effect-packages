@@ -5,7 +5,7 @@
  *   export default defineConfig({
  *     output: "./src/generated",
  *     packages: [
- *       { path: "./move/counter" },                                   // local, from `sui move summary`
+ *       { path: "./move/counter", packageId: "0x…" },                 // local, from `sui move summary`
  *       { id: "0x…", network: "testnet", name: "deepbook" },          // on-chain, over gRPC
  *       { path: "./move/counter", package: "sui", modules: ["coin"] } // framework modules from the same summaries
  *     ]
@@ -25,8 +25,17 @@ export interface LocalPackage {
   readonly package?: string
   /** Output directory name (default: the package's name). */
   readonly name?: string
-  /** The id calls go to by default, e.g. once published (default: the package's address in the summaries). */
+  /** The id calls go to by default, e.g. once published (default: the package's address in the summaries, else `originalId`). */
   readonly packageId?: string
+  /**
+   * The package's original (first published) id, when the summaries list it
+   * as unpublished (`0x0`, the usual case for a local package): type strings
+   * (`Thing.type()`) use it. Default: `packageId`, which is right until the
+   * package is upgraded. Without either, type strings say `0x0`.
+   */
+  readonly originalId?: string
+  /** Defining ids of datatypes added by upgrades, `{ "module::Type": id }` (local summaries carry no type origins). */
+  readonly typeOrigins?: Readonly<Record<string, string>>
   /** Modules to generate call builders for (default: all). */
   readonly modules?: ReadonlyArray<string>
   /** Run `sui move summary` first (default: when `path` has a `Move.toml`). */

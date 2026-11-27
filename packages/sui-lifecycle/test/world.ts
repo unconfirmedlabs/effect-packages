@@ -14,7 +14,32 @@ import { RpcError } from "@unconfirmed/sui/RpcError"
 import type * as T from "@unconfirmed/sui/TransactionData"
 import { type Effects, TransactionNotFound, Transactions } from "@unconfirmed/sui/Transactions"
 import { Effect, Layer, Option, Stream } from "effect"
+import * as Evidence from "../src/Evidence.ts"
 import * as Lifecycle from "../src/Lifecycle.ts"
+
+/**
+ * An `Evidence` backend over the world: its epoch, whether the digest landed,
+ * and history from `lowest` (default 0: full history) and `first` (where the
+ * window's epoch starts).
+ */
+export const evidence = (
+  world: World,
+  history: { readonly lowest?: Option.Option<bigint>; readonly first?: Option.Option<bigint> } = {}
+) =>
+  Evidence.layer({
+    observe: (digest, fromEpoch) =>
+      Effect.gen(function*() {
+        world.observedAt.push(world.getCalls)
+        const hidden = world.evidenceHideFor > 0
+        if (hidden) world.evidenceHideFor--
+        const gap = yield* Evidence.historyGap(
+          history.lowest ?? Option.some(0n),
+          fromEpoch,
+          () => Effect.succeed(history.first ?? Option.none())
+        )
+        return Option.some({ epoch: world.evidenceEpoch ?? world.epoch, found: !hidden && world.landed.has(digest), gap })
+      })
+  })
 
 export const digestOf = (seed: string): T.ObjectDigest => Hash.transactionDigest(new TextEncoder().encode(seed)) as T.ObjectDigest
 export const CHAIN_ID = digestOf("chain")
@@ -56,6 +81,14 @@ export interface World {
   builtDuringExecute: boolean
   /** Runs before every `get` (e.g. another process writing the journal). */
   onGet: (digest: string) => Effect.Effect<void>
+  /** What the `Evidence` backend (see `evidence`) sees: its epoch (default: `epoch`). */
+  evidenceEpoch: bigint | undefined
+  /** `Evidence.observe` reports a miss this many times even when landed. */
+  evidenceHideFor: number
+  /** `getCalls` at each `Evidence.observe`. */
+  observedAt: Array<number>
+  objectsInFlight: number
+  objectsMaxInFlight: number
 }
 
 export const makeWorld = (overrides: Partial<World> = {}): World => ({
@@ -76,6 +109,11 @@ export const makeWorld = (overrides: Partial<World> = {}): World => ({
   maxInFlight: 0,
   builtDuringExecute: false,
   onGet: () => Effect.void,
+  evidenceEpoch: undefined,
+  evidenceHideFor: 0,
+  observedAt: [],
+  objectsInFlight: 0,
+  objectsMaxInFlight: 0,
   ...overrides
 })
 
@@ -187,9 +225,16 @@ export const layer = (world: World) =>
     Layer.succeed(Objects, {
       get: (objectId) =>
         Effect.suspend(() => {
-          const o = world.objects.get(objectId)
-          return o ? Effect.succeed(o) : Effect.fail(new ObjectNotFound({ objectId }))
-        }),
+          world.objectsInFlight++
+          world.objectsMaxInFlight = Math.max(world.objectsMaxInFlight, world.objectsInFlight)
+          return Effect.sleep(1)
+        }).pipe(
+          Effect.andThen(Effect.suspend(() => {
+            const o = world.objects.get(objectId)
+            return o ? Effect.succeed(o) : Effect.fail(new ObjectNotFound({ objectId }))
+          })),
+          Effect.ensuring(Effect.sync(() => void world.objectsInFlight--))
+        ),
       listOwned: () => Stream.empty
     }),
     Layer.succeed(Chain, {

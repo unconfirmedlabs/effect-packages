@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream"
 import * as Checkpoints from "@unconfirmed/sui/Checkpoints"
 import { call, U64 } from "./convert.ts"
 import { noClientRetry, resubscribe } from "./subscription.ts"
+import { rangeOf, Tip } from "./tip.ts"
 
 /** The largest page the server allows for `Query.checkpoints`. */
 const PAGE = 50
@@ -41,13 +42,14 @@ export const SubscribeCheckpoints = GraphQL.subscription("SubscribeCheckpoints",
   result: Schema.Struct({ checkpoints: Schema.Struct({ cursor: Schema.String, node: CheckpointNode }) })
 })
 
-export const group = GraphQLGroup.make(ListCheckpoints, SubscribeCheckpoints)
+export const group = GraphQLGroup.make(ListCheckpoints, SubscribeCheckpoints, Tip)
 
 export { MAX_RECONNECTS } from "./subscription.ts"
 
 /**
- * `Checkpoints` over GraphQL. `list` pages `Query.checkpoints` (`start >= end`
- * is an empty stream; gRPC fails `start > end` with INVALID_ARGUMENT).
+ * `Checkpoints` over GraphQL. `list` pages `Query.checkpoints`, an open end
+ * pinned to the tip as of the call (`start >= end` is an empty stream; gRPC
+ * fails `start > end` with INVALID_ARGUMENT).
  *
  * `subscribe` is the `checkpoints` subscription over graphql-sse. After a
  * retryable failure it reconnects with backoff (honouring `Retry-After`) and
@@ -64,18 +66,27 @@ export const layer: Layer.Layer<Checkpoints.Checkpoints, never, GraphQLProtocol.
     const client = yield* GraphQLClient.make(group, noClientRetry)
     return Checkpoints.Checkpoints.of({
       list: (options) => {
-        if (options?.start !== undefined && options.end !== undefined && options.start >= options.end) return Stream.empty
-        const filter = {
-          ...(options?.start !== undefined && options.start > 0n && { afterCheckpoint: Number(options.start - 1n) }),
-          ...(options?.end !== undefined && { beforeCheckpoint: Number(options.end) })
-        }
-        return Stream.paginate(null as string | null, (after) =>
-          client.ListCheckpoints({ first: PAGE, after, filter }).pipe(
-            call,
-            Effect.map(({ checkpoints: c }) =>
-              [c.nodes, Option.fromNullishOr(c.pageInfo.hasNextPage ? c.pageInfo.endCursor : null)] as const
-            )
-          ))
+        const start = options?.start
+        if (start !== undefined && options?.end !== undefined && start >= options.end) return Stream.empty
+        // Pin the open end to the tip as of the call, like gRPC, so the listing
+        // ends there instead of chasing a moving tip.
+        const end = options?.end !== undefined
+          ? Effect.succeed(options.end)
+          : client.Tip().pipe(call, Effect.flatMap(rangeOf), Effect.map((r) => r.end))
+        return Stream.unwrap(Effect.map(end, (end) => {
+          if (start !== undefined && start >= end) return Stream.empty
+          const filter = {
+            ...(start !== undefined && start > 0n && { afterCheckpoint: Number(start - 1n) }),
+            beforeCheckpoint: Number(end)
+          }
+          return Stream.paginate(null as string | null, (after) =>
+            client.ListCheckpoints({ first: PAGE, after, filter }).pipe(
+              call,
+              Effect.map(({ checkpoints: c }) =>
+                [c.nodes, Option.fromNullishOr(c.pageInfo.hasNextPage ? c.pageInfo.endCursor : null)] as const
+              )
+            ))
+        }))
       },
       subscribe: resubscribe((after) =>
         client.SubscribeCheckpoints({ after }).pipe(Stream.map(({ checkpoints }) => checkpoints))

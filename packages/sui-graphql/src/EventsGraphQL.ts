@@ -15,6 +15,7 @@ import * as TypeTag from "@unconfirmed/sui/TypeTag"
 import { call, event, EVENT_FIELDS, eventCursorPosition, EventNode, U64 } from "./convert.ts"
 import { mergeSorted } from "./merge.ts"
 import { noClientRetry, resubscribe } from "./subscription.ts"
+import { rangeOf, Tip } from "./tip.ts"
 
 /** The largest page the server allows for `Query.events`. */
 const PAGE = 50
@@ -54,11 +55,6 @@ export const ListEvents = GraphQL.query("ListEvents", {
     filter: FilterVariables
   },
   result: Schema.Struct({ events: Schema.Struct({ pageInfo: PageInfo, edges: Schema.Array(Edge) }) })
-})
-
-export const Tip = GraphQL.query("Tip", {
-  document: "query Tip{checkpoint{sequenceNumber}}",
-  result: Schema.Struct({ checkpoint: Schema.NullOr(Schema.Struct({ sequenceNumber: U64 })) })
 })
 
 /** Fallback for an event cursor that doesn't carry its transaction's position. */
@@ -111,6 +107,13 @@ export const plan = (f: Events.EventFilter): Result.Result<ReadonlyArray<Plan>, 
     if (term.some((l) => l.predicate._tag === "StreamHead")) {
       return Result.fail("StreamHead filters are not supported over GraphQL")
     }
+    // Sender addresses are compared normalized client-side: reject a bad one
+    // here, as INVALID_ARGUMENT, not as a throw inside the stream.
+    for (const l of term) {
+      if (l.predicate._tag === "Sender" && !isAddress(l.predicate.address)) {
+        return Result.fail(`invalid sender address: ${l.predicate.address}`)
+      }
+    }
     const positive = term.filter((l) => !l.negated)
     const sender = positive.find((l) => l.predicate._tag === "Sender")
     const typed = positive.find((l) => l.predicate._tag === "EventType") ?? positive.find((l) => l.predicate._tag === "EmitModule")
@@ -129,7 +132,16 @@ export const plan = (f: Events.EventFilter): Result.Result<ReadonlyArray<Plan>, 
   return Result.succeed(plans)
 }
 
-const emittedBy = (path: string, e: Events.Event) => {
+const isAddress = (s: string): boolean => {
+  try {
+    Address.normalize(s)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const emittedBy =(path: string, e: Events.Event) => {
   const p = TypeTag.normalizePath(path)
   return p.includes("::") ? p === `${e.packageId}::${e.module}` : p === e.packageId
 }
@@ -254,7 +266,7 @@ export const layer: Layer.Layer<Events.Events, never, GraphQLProtocol.GraphQLPro
         // Pin the open end to the tip as of the call, like gRPC.
         const end = options?.end !== undefined
           ? Effect.succeed(options.end)
-          : client.Tip().pipe(call, Effect.map((r) => (r.checkpoint?.sequenceNumber ?? 0n) + 1n))
+          : client.Tip().pipe(call, Effect.flatMap(rangeOf), Effect.map((r) => r.end))
         return Stream.unwrap(Effect.map(end, (end) => {
           const range = { start: options?.start, end }
           if (range.start !== undefined && range.start >= end) return Stream.empty

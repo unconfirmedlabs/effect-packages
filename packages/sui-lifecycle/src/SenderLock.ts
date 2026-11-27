@@ -26,23 +26,39 @@ export interface SenderLockService {
   ) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
-export const makeMemory = (): SenderLockService => {
-  const locks = new Map<string, Semaphore.Semaphore>()
-  const lockOf = (address: string) => {
-    let lock = locks.get(address)
-    if (lock === undefined) {
-      lock = Semaphore.makeUnsafe(1)
-      locks.set(address, lock)
-    }
-    return lock
-  }
+/**
+ * One semaphore per address, kept only while some fiber holds or waits for it
+ * (a count of users per address), so a long-lived process does not keep a
+ * lock for every sender it has ever seen.
+ */
+export const makeMemory = (): SenderLockService & { readonly size: () => number } => {
+  const locks = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>()
+  const acquire = (address: string) =>
+    Effect.sync(() => {
+      let lock = locks.get(address)
+      if (lock === undefined) {
+        lock = { semaphore: Semaphore.makeUnsafe(1), users: 0 }
+        locks.set(address, lock)
+      }
+      lock.users++
+      return lock
+    })
+  const release = (address: string, lock: { users: number }) =>
+    Effect.sync(() => {
+      lock.users--
+      if (lock.users === 0 && locks.get(address) === lock) locks.delete(address)
+    })
+  const withLock = (address: string) => <A, E, R>(inner: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.acquireUseRelease(
+      acquire(address),
+      (lock) => lock.semaphore.withPermits(1)(inner),
+      (lock) => release(address, lock)
+    )
   return {
     withLocks: (addresses) => (effect) =>
       // Ascending order, so two runs needing the same pair cannot deadlock.
-      [...new Set(addresses)].sort().reverse().reduce(
-        (inner, address) => lockOf(address).withPermits(1)(inner),
-        effect
-      )
+      [...new Set(addresses)].sort().reverse().reduce((inner, address) => withLock(address)(inner), effect),
+    size: () => locks.size
   }
 }
 

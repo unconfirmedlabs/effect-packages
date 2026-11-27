@@ -112,7 +112,18 @@ export const layer: Layer.Layer<Transactions.Transactions, never, GraphQLProtoco
           .pipe(
             call,
             Effect.flatMap(({ executeTransaction: r }) =>
-              r.effects === null ? noEffects("ExecuteTransaction") : allChanges("ExecuteTransaction", r.effects, true)
+              r.effects === null ? noEffects("ExecuteTransaction") : allChanges("ExecuteTransaction", r.effects, true).pipe(
+                // The transaction executed; only reading the rest of its object
+                // changes failed. Say so, with the digest, so the caller can
+                // reconcile instead of reading it as a failed submission.
+                Effect.mapError((e) =>
+                  new RpcError({
+                    method: e.method,
+                    code: e.code,
+                    message: `transaction ${r.effects!.digest} executed, but its object changes could not be read: ${e.message}`
+                  })
+                )
+              )
             ),
             Effect.withSpan("Transactions.execute")
           ),

@@ -10,6 +10,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import type { Address } from "@unconfirmed/sui/Address"
 import * as Coins from "@unconfirmed/sui/Coins"
 import * as Objects from "@unconfirmed/sui/Objects"
+import { RpcError } from "@unconfirmed/sui/RpcError"
 import * as TypeTag from "@unconfirmed/sui/TypeTag"
 import { call, U64 } from "./convert.ts"
 
@@ -33,6 +34,7 @@ export const group = GraphQLGroup.make(GetBalance)
 
 const CoinStruct = Bcs.struct({ id: Bcs.Address, balance: Bcs.u64 })
 const decodeCoin = Bcs.decodeSync(CoinStruct)
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 /** `Coins` over GraphQL. Coin listing goes through `Objects.listOwned`. */
 export const layer: Layer.Layer<Coins.Coins, never, GraphQLProtocol.GraphQLProtocol | Objects.Objects> = Layer.effect(
@@ -55,13 +57,26 @@ export const layer: Layer.Layer<Coins.Coins, never, GraphQLProtocol.GraphQLProto
           })
         ),
       list: (owner: Address, coinType = TypeTag.SUI) =>
-        objects.listOwned(owner, { type: `0x2::coin::Coin<${TypeTag.normalizeString(coinType)}>` }).pipe(
-          Stream.map((o) => ({
-            ref: Objects.refOf(o),
-            coinType,
-            balance: decodeCoin(o.contents).balance
-          }))
-        )
+        Stream.unwrap(Effect.map(
+          Effect.try({
+            try: () => TypeTag.normalizeString(coinType),
+            catch: (e) => new RpcError({ method: "ListOwnedObjects", code: "INVALID_ARGUMENT", message: messageOf(e) })
+          }),
+          (normalized) =>
+            objects.listOwned(owner, { type: `0x2::coin::Coin<${normalized}>` }).pipe(
+              Stream.mapEffect((o) =>
+                Effect.try({
+                  try: () => ({ ref: Objects.refOf(o), coinType, balance: decodeCoin(o.contents).balance }),
+                  catch: (e) =>
+                    new RpcError({
+                      method: "ListOwnedObjects",
+                      code: "DATA_LOSS",
+                      message: `coin ${o.objectId} does not decode: ${messageOf(e)}`
+                    })
+                })
+              )
+            )
+        ))
     })
   })
 )

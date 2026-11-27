@@ -84,15 +84,15 @@ describe("Objects.get batching", () => {
     expect(missing._tag === "Failure" && missing.failure).toEqual(new Objects.ObjectNotFound({ objectId: A("0xdead") }))
   })
 
-  test("more than 50 ids split into batches", async () => {
+  test("more than 200 ids split into batches", async () => {
     const { layer, requests } = scripted((req) => {
       const { keys } = req.variables as { keys: Array<{ address: string }> }
       return Effect.succeed({ body: { data: { multiGetObjects: keys.map((k) => objectJson(k.address)) } } })
     })
-    const ids = Array.from({ length: 120 }, (_, i) => `0x${(i + 1).toString(16)}`)
+    const ids = Array.from({ length: 450 }, (_, i) => `0x${(i + 1).toString(16)}`)
     const results = await run(getObjects(ids), layer)
     expect(results.every((r) => r._tag === "Success")).toBe(true)
-    expect(requests.map((r) => (r.variables as any).keys.length)).toEqual([50, 50, 20])
+    expect(requests.map((r) => (r.variables as any).keys.length)).toEqual([200, 200, 50])
   })
 
   test("a GraphQL error under one entry fails only that lookup", async () => {
@@ -402,16 +402,15 @@ describe("failures are not cached", () => {
     const { layer } = scripted((req) => {
       calls++
       if (calls <= 2) return transportDown()
+      expect(req.operationName).toBe("ChainInfo")
       return Effect.succeed({
         body: {
-          data: req.operationName === "ChainInfo"
-            ? {
-              chainIdentifier: "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD",
-              epoch: { epochId: 3, checkpoints: { nodes: [{ sequenceNumber: 7 }] } },
-              checkpoint: { sequenceNumber: 9 },
-              serviceConfig: { availableRange: { first: { sequenceNumber: 0 } } }
-            }
-            : { epoch: { referenceGasPrice: "750" } }
+          data: {
+            chainIdentifier: "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD",
+            epoch: { epochId: 3, referenceGasPrice: "750", checkpoints: { nodes: [{ sequenceNumber: 7 }] } },
+            checkpoint: { sequenceNumber: 9 },
+            serviceConfig: { availableRange: { first: { sequenceNumber: 0 } } }
+          }
         }
       })
     })
@@ -427,6 +426,29 @@ describe("failures are not cached", () => {
     expect(out[2].epochFirstCheckpoint).toBe(7n)
     expect(out[2].lowestAvailableCheckpoint).toBe(0n)
     expect(out[3]).toBe(750n)
+    // Info and gas price share one query: two failures, then one success feeds both.
+    expect(calls).toBe(3)
+  })
+
+  test("Chain over GraphQL fails UNAVAILABLE on a null epoch, checkpoint or gas price", async () => {
+    const { layer } = scripted(() =>
+      Effect.succeed({
+        body: {
+          data: {
+            chainIdentifier: "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD",
+            epoch: null,
+            checkpoint: null,
+            serviceConfig: { availableRange: { first: null } }
+          }
+        }
+      })
+    )
+    const out = await Effect.runPromise(
+      Effect.flatMap(Effect.service(Chain.Chain), (c) => Effect.all([Effect.flip(c.info), Effect.flip(c.referenceGasPrice)])).pipe(
+        Effect.provide(SuiGraphQL.ChainGraphQL.layer.pipe(Layer.provide(layer)))
+      )
+    )
+    expect(out.map((e) => e.code)).toEqual(["UNAVAILABLE", "UNAVAILABLE"])
   })
 })
 

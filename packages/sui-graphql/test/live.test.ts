@@ -231,6 +231,9 @@ const withoutAccumulators = (c: CheckpointData.Checkpoint): CheckpointData.Check
   ...c,
   transactions: c.transactions.map((t) => ({
     ...t,
+    // The abort text differs by transport (gRPC sends the node's debug form,
+    // GraphQL a sentence); the command and abort code are compared.
+    status: t.status._tag === "Failure" ? { ...t.status, description: "<abort>" } : t.status,
     changedObjects: t.changedObjects
       .filter((o) => o.type !== undefined || o.version !== undefined)
       .slice()
@@ -334,6 +337,44 @@ suite("testnet parity with gRPC: new services", () => {
     expect(events[0]!.transactionDigest.length).toBeGreaterThan(0)
     expect(cps[1]!.sequenceNumber - cps[0]!.sequenceNumber).toBe(1n)
   }, 120_000)
+
+  test("CheckpointData.subscribe keeps up with the chain (lag stays bounded)", async () => {
+    // Reference: the light `Checkpoints.subscribe` over the same window. Before
+    // fetching ahead, the full stream fell ~35 (testnet) to ~75 (mainnet)
+    // checkpoints behind per 30 s, growing without bound.
+    const { layer } = graphqlLayer(GQL_TESTNET)
+    const seconds = 20
+    const result = await Effect.runPromise(
+      Effect.gen(function*() {
+        const data = yield* CheckpointData.CheckpointData
+        const cps = yield* Checkpoints.Checkpoints
+        const t0 = Date.now()
+        const until = () => Effect.sync(() => Date.now() - t0 > seconds * 1000)
+        let light: bigint | undefined
+        let full: bigint | undefined
+        let previous: bigint | undefined
+        let gaps = 0
+        yield* Effect.all([
+          cps.subscribe.pipe(Stream.takeUntilEffect(until), Stream.runForEach((c) => Effect.sync(() => void (light = c.sequenceNumber)))),
+          data.subscribe.pipe(
+            Stream.takeUntilEffect(until),
+            Stream.runForEach((c) =>
+              Effect.sync(() => {
+                if (previous !== undefined && c.sequenceNumber !== previous + 1n) gaps++
+                previous = c.sequenceNumber
+                full = c.sequenceNumber
+              })
+            )
+          )
+        ], { concurrency: 2 })
+        return { light, full, gaps }
+      }).pipe(Effect.provide(layer), Effect.timeout("60 seconds"))
+    )
+    expect(result.gaps).toBe(0)
+    expect(result.light).toBeDefined()
+    expect(result.full).toBeDefined()
+    expect(Number(result.light! - result.full!)).toBeLessThan(20)
+  }, 90_000)
 })
 
 suite("mixing transports", () => {
