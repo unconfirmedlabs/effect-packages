@@ -1,0 +1,178 @@
+{
+  "source": "GET responses from https://storage.testnet.walrus.mirai.cloud:9185 (testnet, epoch 594), recorded 2026-11-27",
+  "node": "https://storage.testnet.walrus.mirai.cloud:9185",
+  "epoch": 594,
+  "nShards": 1000,
+  "nodeShards": [
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    10
+  ],
+  "randomBlobId": "II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8",
+  "permanent": {
+    "epoch": 594,
+    "blobId": "CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI",
+    "endEpoch": 595,
+    "deletable": false,
+    "objectId": "0x24e476df5d79c1464976dc8f3333527137038c79bc1aeced64950d0bc1c2ac38",
+    "isExtension": false
+  },
+  "deletable": {
+    "epoch": 594,
+    "blobId": "c0LG3zI0CTcW9-WlGyRWKTfyCiOjfG7xk2gPo9GHLEk",
+    "endEpoch": 595,
+    "deletable": true,
+    "objectId": "0xffcbab33283c1aa4e01b00e55307f5532367c5b07e348dd491c8a579bb7b9c0e",
+    "isExtension": false
+  },
+  "shard": 45,
+  "pair": 107,
+  "pairNotAssigned": 62,
+  "responses": {
+    "status-random": {
+      "method": "GET",
+      "path": "/v1/blobs/II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8/status",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":\"nonexistent\"}}"
+    },
+    "status-permanent": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/status",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":{\"permanent\":{\"endEpoch\":595,\"isCertified\":true,\"statusEvent\":{\"txDigest\":\"7EK6vyti1bS9sHyiF9adNTTPQrT7s6DPap5TrAFHEL5A\",\"eventSeq\":\"0\"},\"deletableCounts\":{\"count_deletable_total\":0,\"count_deletable_certified\":0},\"initialCertifiedEpoch\":594}}}}"
+    },
+    "status-deletable": {
+      "method": "GET",
+      "path": "/v1/blobs/c0LG3zI0CTcW9-WlGyRWKTfyCiOjfG7xk2gPo9GHLEk/status",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":{\"deletable\":{\"initialCertifiedEpoch\":594,\"deletableCounts\":{\"count_deletable_total\":1,\"count_deletable_certified\":1}}}}}"
+    },
+    "metadata": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/metadata",
+      "status": 200,
+      "contentType": "application/octet-stream",
+      "bodyFile": "metadata.bin"
+    },
+    "metadata-random": {
+      "method": "GET",
+      "path": "/v1/blobs/II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8/metadata",
+      "status": 404,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"NOT_FOUND\",\"code\":404,\"message\":\"the requested metadata is unavailable\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"METADATA_NOT_FOUND\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "metadata-status": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/metadata/status",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":\"stored\"}}"
+    },
+    "metadata-status-random": {
+      "method": "GET",
+      "path": "/v1/blobs/II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8/metadata/status",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":\"nonexistent\"}}"
+    },
+    "sliver-primary": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/slivers/107/primary",
+      "status": 200,
+      "contentType": "application/octet-stream",
+      "bodyFile": "sliver-primary.bin"
+    },
+    "sliver-secondary": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/slivers/107/secondary",
+      "status": 200,
+      "contentType": "application/octet-stream",
+      "bodyFile": "sliver-secondary.bin"
+    },
+    "sliver-not-assigned": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/slivers/62/primary",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"FAILED_PRECONDITION\",\"code\":400,\"message\":\"shard 0 is not assigned to this node in epoch 594\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"SHARD_NOT_ASSIGNED\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "sliver-random": {
+      "method": "GET",
+      "path": "/v1/blobs/II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8/slivers/14/primary",
+      "status": 404,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"NOT_FOUND\",\"code\":404,\"message\":\"the requested sliver is unavailable\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"SLIVER_NOT_FOUND\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "sliver-status": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/slivers/107/primary/status",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":\"stored\"}}"
+    },
+    "sliver-status-random": {
+      "method": "GET",
+      "path": "/v1/blobs/II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8/slivers/107/primary/status",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"FAILED_PRECONDITION\",\"code\":400,\"message\":\"shard 138 is not assigned to this node in epoch 594\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"SHARD_NOT_ASSIGNED\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "confirmation-permanent": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/confirmation/permanent",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":{\"signed\":{\"serializedMessage\":\"AQADUgIAAAl/jzD3FH4D/EikT/BHlifHRNtqr6SMIAlvAkPZAjoiAA==\",\"signature\":\"is/v763YOydluPU1R5XQ2poIedSknGZd1Mo7jfaD4Te5fJlyVDrXvqskovIgfAbtDH+za6LCCLYvHrUQdZ00EGcpznrKpWwyYxIiTc9b674aSKu2Sjjc26J2Qye2wf5N\"}}}}"
+    },
+    "confirmation-deletable": {
+      "method": "GET",
+      "path": "/v1/blobs/c0LG3zI0CTcW9-WlGyRWKTfyCiOjfG7xk2gPo9GHLEk/confirmation/deletable/0xffcbab33283c1aa4e01b00e55307f5532367c5b07e348dd491c8a579bb7b9c0e",
+      "status": 200,
+      "contentType": "application/json",
+      "body": "{\"success\":{\"code\":200,\"data\":{\"signed\":{\"serializedMessage\":\"AQADUgIAAHNCxt8yNAk3FvflpRskVik38gojo3xu8ZNoD6PRhyxJAf/LqzMoPBqk4BsA5VMH9VMjZ8WwfjSN1JHIpXm7e5wO\",\"signature\":\"tWgnpefNgamjcwAgOQd4BjZZhvS1qSO8qQNuS2kTJh03hTQrhAgRSplIOFFtAKlMEBDTk5MLELq/yEjyvV8Q39C3VTCjjimwwspiz586nKUJM/HoC1Vf6hdt0r2rAxj3\"}}}}"
+    },
+    "confirmation-random": {
+      "method": "GET",
+      "path": "/v1/blobs/II1Ji6jSpluCABuwCAsAtDhSMH2ejJR6HTZxnLsRCG8/confirmation/permanent",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"FAILED_PRECONDITION\",\"code\":400,\"message\":\"the blob has not been registered or has already expired\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"NOT_REGISTERED\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    },
+    "bad-blob-id": {
+      "method": "GET",
+      "path": "/v1/blobs/not-a-blob-id/status",
+      "status": 400,
+      "contentType": "text/plain; charset=utf-8",
+      "body": "Invalid URL: Cannot parse `blob_id` with value `not-a-blob-id`: failed to parse a blob ID"
+    },
+    "bad-pair-index": {
+      "method": "GET",
+      "path": "/v1/blobs/CX-PMPcUfgP8SKRP8EeWJ8dE22qvpIwgCW8CQ9kCOiI/slivers/5000/primary",
+      "status": 400,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"status\":\"INVALID_ARGUMENT\",\"code\":400,\"message\":\"the requested sliver index is out of range: requires 0 <= index (5000) < 1000\",\"details\":[{\"@type\":\"ErrorInfo\",\"reason\":\"INDEX_OUT_OF_RANGE\",\"domain\":\"storage.walrus.space\",\"metadata\":{}}]}}"
+    }
+  }
+}

@@ -59,11 +59,11 @@ Base URL `https://<network_address>`; `network_address` is `host:port` from the 
 
 | # | Endpoint | Notes | Source |
 |---|---|---|---|
-| N1 | `GET /v1/blobs/{id}/metadata` | BCS `BlobMetadataWithId`. Unknown blob: `404`, reason `METADATA_NOT_FOUND`. | `crates/walrus-service/src/node/server/routes.rs:75`, `:137-150`; live |
+| N1 | `GET /v1/blobs/{id}/metadata` | BCS `BlobMetadataWithId`, `content-type: application/octet-stream`. Unknown blob: `404`, reason `METADATA_NOT_FOUND`. | `crates/walrus-service/src/node/server/routes.rs:75`, `:137-150`; live |
 | N2 | `PUT /v1/blobs/{id}/metadata` | Body: BCS `BlobMetadata` (no id). `201` stored, `200` already stored, `202` buffered (only with `?pending=true`). Not yet registered: `400`, reason `NOT_REGISTERED`. | `routes.rs:188-225`; `crates/walrus-service/src/node/errors.rs:180`, `:199` |
-| N3 | `GET` / `PUT /v1/blobs/{id}/slivers/{pairIndex}/{primary\|secondary}` | BCS `SliverData`. A shard the node does not hold: `400`, reason `SHARD_NOT_ASSIGNED`. Blocked: `451`, reason `FORBIDDEN_BLOB`. Storing before metadata: `400`, reason `METADATA_NOT_FOUND`. | `routes.rs:79`, `:246-345`; `errors.rs:88`, `:153-158`, `:301-340`; live |
+| N3 | `GET` / `PUT /v1/blobs/{id}/slivers/{pairIndex}/{primary\|secondary}` | BCS `SliverData`. A shard the node does not hold: `400`, reason `SHARD_NOT_ASSIGNED`. Blocked: `451`, reason `FORBIDDEN_BLOB`. Storing before metadata: `400`, reason `METADATA_NOT_FOUND`. Unknown sliver: `404`, reason `SLIVER_NOT_FOUND`; pair index `≥ n`: `400`, reason `INDEX_OUT_OF_RANGE` (live). An unparsable blob id in any path: `400` with a `text/plain` body (live). | `routes.rs:79`, `:246-345`; `errors.rs:88`, `:153-158`, `:301-340`; live |
 | N4 | `GET /v1/blobs/{id}/metadata/status`, `GET .../slivers/{pairIndex}/{type}/status` | JSON `"nonexistent" \| "buffered" \| "stored"`, **lower-case**. | `crates/walrus-storage-node-client/src/api.rs:208-218`; live (`"stored"`) |
-| N5 | `GET /v1/blobs/{id}/confirmation/permanent`, `GET .../confirmation/deletable/{objectId}` | JSON `{ signed: { serializedMessage: base64, signature: base64 } }`. Optional `?wait_for_registration=true&wait_millis=`. | `routes.rs:84-88`, `:405-470`; `crates/walrus-core/src/messages.rs` (`SignedMessage`); live |
+| N5 | `GET /v1/blobs/{id}/confirmation/permanent`, `GET .../confirmation/deletable/{objectId}` | JSON `{ signed: { serializedMessage: base64, signature: base64 } }`. Optional `?wait_for_registration=true&wait_millis=`. Unregistered blob: `400`, reason `NOT_REGISTERED` (live); slivers missing: `400`, reason `MISSING_SLIVERS`. | `routes.rs:84-88`, `:405-470`; `crates/walrus-core/src/messages.rs` (`SignedMessage`); live |
 | N6 | `GET /v1/blobs/{id}/status` | JSON `BlobStatus` (S1). **An unknown blob is `200` with `"nonexistent"`, not `404`** (live-verified). | `routes.rs:97`; `api.rs:43-78`; live |
 | N7 | Success envelope `{ "success": { "code", "data" } }`; error envelope `{ "error": { "status", "code", "message", "details": [{ "@type": "ErrorInfo", "reason", "domain", "metadata" }] } }`. | `api.rs:21-33`; live |
 | N8 | All 77 reachable testnet nodes advertise `pending` and `wait_for_registration` in `/v1/api`. The Rust client leaves both off by default. | live; `crates/walrus-sdk/src/config/communication_config.rs:266-268` |
@@ -363,25 +363,34 @@ export class NodeError extends Schema.TaggedError<NodeError>()("NodeError", {
   reason: Schema.optionalKey(Schema.String),             // the server's ErrorInfo reason (N7)
   message: Schema.String
 }) { get retryable(): boolean /* Unavailable | Timeout | RateLimited | NotRegistered */ }
+export const retryable: (error: NodeError) => boolean     // the same, as a predicate for `while:` options
+export const fromResponse: (node: string, operation: Operation, status: number, body: string) => NodeError   // the mapping below, pure
 
+/** What a call needs: the base URL. Structural, so `Committee.StorageNode` fits without this module importing chain state. */
+export interface Node { readonly url: string }
 export interface StorageNodesOptions {
-  readonly requestTimeout?: Duration.Input               // default 30 seconds; a timeout is NodeError "Timeout"
+  readonly requestTimeout?: Duration.Input               // default 30 seconds, body included; a timeout is NodeError "Timeout"
   readonly tracerPropagation?: boolean                    // default false: nodes do not list trace headers for CORS
 }
 export class StorageNodes extends Context.Service<StorageNodes, {
-  readonly metadata: (node: StorageNode, blobId: BlobId) => Effect.Effect<Uint8Array, NodeError>            // N1, raw BCS
-  readonly sliver: (node: StorageNode, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary") => Effect.Effect<Uint8Array, NodeError>
-  readonly status: (node: StorageNode, blobId: BlobId) => Effect.Effect<BlobStatus, NodeError>              // N6
-  readonly putMetadata: (node: StorageNode, blobId: BlobId, metadata: Uint8Array) => Effect.Effect<"stored" | "alreadyStored", NodeError>
-  readonly putSliver: (node: StorageNode, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary", sliver: Uint8Array) => Effect.Effect<"stored" | "alreadyStored", NodeError>
-  readonly sliverStatus: (node: StorageNode, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary") => Effect.Effect<"nonexistent" | "buffered" | "stored", NodeError>
+  readonly metadata: (node: Node, blobId: BlobId) => Effect.Effect<Uint8Array, NodeError>            // N1, raw BCS
+  readonly metadataStatus: (node: Node, blobId: BlobId) => Effect.Effect<"nonexistent" | "buffered" | "stored", NodeError>   // N4
+  readonly sliver: (node: Node, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary") => Effect.Effect<Uint8Array, NodeError>
+  readonly status: (node: Node, blobId: BlobId) => Effect.Effect<BlobStatus, NodeError>              // N6
+  readonly putMetadata: (node: Node, blobId: BlobId, metadata: Uint8Array) => Effect.Effect<"stored" | "alreadyStored", NodeError>
+  readonly putSliver: (node: Node, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary", sliver: Uint8Array) => Effect.Effect<"stored" | "alreadyStored", NodeError>
+  readonly sliverStatus: (node: Node, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary") => Effect.Effect<"nonexistent" | "buffered" | "stored", NodeError>
   /** The raw signed confirmation; the caller verifies it. */
-  readonly confirmation: (node: StorageNode, blobId: BlobId, persistence: Persistence) => Effect.Effect<{ readonly serializedMessage: Uint8Array; readonly signature: Uint8Array }, NodeError>
+  readonly confirmation: (node: Node, blobId: BlobId, persistence: Persistence) => Effect.Effect<{ readonly serializedMessage: Uint8Array; readonly signature: Uint8Array }, NodeError>
 }>()("@unconfirmed/walrus/StorageNodes") {}
 export const layer: (options?: StorageNodesOptions) => Layer.Layer<StorageNodes, never, HttpClient.HttpClient>
 ```
 
-Mapping, decided once in this module: transport failure → `Unavailable`; timeout → `Timeout`; `429` → `RateLimited`; `5xx` → `Unavailable`; `404` → `NotFound`; `451` → `Blocked`; `400` with reason `NOT_REGISTERED` (or `METADATA_NOT_FOUND` on a sliver `PUT`) → `NotRegistered`; reason `SHARD_NOT_ASSIGNED` → `ShardNotAssigned`; other `4xx` → `Rejected`; a body that does not decode → `Malformed`. The service does no retrying; the quorum's per-member schedule does.
+Mapping, decided once in this module (`fromResponse`): transport failure → `Unavailable`; timeout → `Timeout`; `429` → `RateLimited`; `5xx` → `Unavailable`; `404` → `NotFound`; `451` → `Blocked`; `4xx` with reason `NOT_REGISTERED` (or `METADATA_NOT_FOUND` on a sliver `PUT`) → `NotRegistered`; reason `SHARD_NOT_ASSIGNED` → `ShardNotAssigned`; other `4xx` → `Rejected`; any other non-2xx status (an unfollowed redirect) → `Malformed`; a 2xx body that does not decode → `Malformed`. A defect raised by the `HttpClient` becomes `Unavailable`, so nothing escapes as a defect (the quorum treats defects as fatal). `InvalidSignature` is never produced here; the write path uses it after checking a confirmation. A `PUT` answering `201` or `202` is `"stored"`, `200` is `"alreadyStored"` (N2; bodies are `{"success":{"code":201,"data":"sliver stored successfully"}}` and the like). The service does no retrying; the quorum's per-member schedule does, with `while: StorageNode.retryable`.
+
+Not in the table but seen: a confirmation before every held sliver is stored is `400 MISSING_SLIVERS` → `Rejected` (not retried; the Rust node stores synchronously before answering `201`, so after a successful upload it means the node lost data). `CACHE_SATURATED` only occurs with `?pending=true`, which we never send.
+
+Tests reuse `test/support.ts`: `scripted(route)` (a recording `HttpClient`; a route answers a reply, `"network-error"` or `"hang"`), `fakeNode({ url, nShards, shards, epoch, sign, intercept })` with `fakeNodes(nodes)` (an in-memory network implementing N1–N7 with the real bodies; seed `registered`, `blocked`, `statuses`; `intercept` injects failures per request), and the recorded fixtures in `test/fixtures/storage-node/`.
 
 ### 4.5 Read
 
@@ -629,7 +638,7 @@ Conventions as in the other packages: `bun:test`; offline tests always run; live
 | `messages.test.ts` | `verifyMetadata` accepts a real metadata fixture and rejects a flipped hash, a wrong id, a wrong hash count, encoding type 0, an oversized length; `checkSliver`; `confirmationMessage` equals the live sample in M1. |
 | `status.test.ts` | Decoding every `BlobStatus` shape including snake_case counts; `order` against a table transcribed from `api.rs:138-200`; `canonical` is insensitive to key order. |
 | `encoder.test.ts` | Round trip for lengths 0, 1, 32, 100 kB; `decode` with too few or duplicate slivers is a typed `EncoderError`; `sliverRoots` equals the metadata hashes for random primary and secondary slivers (systematic and repair) and differs exactly for corrupted ones; BLS verify with 48- and 96-byte keys; aggregate equals `@noble/curves`. Slow (about 2.5 s per WASM call): keep `n = 1000` cases few and use `n = 10` elsewhere. |
-| `storage-node.test.ts` | A scripted `HttpClient` (pattern of `packages/sui-enoki/test/support.ts`): request method, path, headers and body for every endpoint; every row of the error mapping in §4.4 from recorded bodies; timeout → `Timeout`. |
+| `storage-node.test.ts` | A scripted `HttpClient` (pattern of `packages/sui-enoki/test/support.ts`): request method, path, headers and body for every endpoint; every row of the error mapping in §4.4 from recorded bodies (`fixtures/storage-node/recorded.json`, GETs against a testnet node; `PUT`, `451`, `429` and `5xx` bodies, which reads cannot produce on demand, are built from the Rust node's messages in `synthesized.json`); timeout → `Timeout` under `TestClock`. |
 | `committee.test.ts` | Building committees from recorded testnet objects (fixtures under `test/fixtures/`, written by `scripts/record-fixtures.ts`); `readCommittee` for the four cases of C6; `checkAgainstSystem` mismatches; cache and `refresh`. |
 | `read.test.ts` | An in-memory network of fake nodes over a small committee (`n = 10`, real WASM): happy path; exactly `n − 2f` nodes answer; one node returns a corrupted sliver → blamed, replaced, read succeeds; a wrongly encoded blob → `InconsistentBlob`; quorum of 404 → `BlobNotFound`; quorum of 451 → `BlobBlocked`; mixed failures → `NotEnoughSlivers` with every node's failure; metadata from a lying node is rejected and another node's is used; previous committee during `EpochChangeSync`; `maxSize`. With `TestClock`: a hung node does not delay the result; retries follow the schedule. |
 | `write.test.ts` | Fake nodes that sign with `@noble/curves` keys: certificate at exactly `n − f` weight by shards (few heavy nodes; many light nodes are not enough: item 5); linger collects late confirmations and the result's virtual time is `1.5t + 500 ms`; `NotRegistered` then success; a node signing the wrong message or epoch is a failure; fail fast above `f` failed weight; the global semaphore bounds in-flight `PUT`s; status check skips stored slivers. Steps: resume from each saved step; register reuses an existing uncertified `Blob`; a stale certificate goes back to upload; an already certified blob is not certified twice; `ResumeMismatch`. |
