@@ -14,7 +14,7 @@ export type BlobId = string & Brand.Brand<"BlobId">
 export const LENGTH = 32
 
 /** `InvalidBlobId` lives here (not in `Errors.ts`) so that `Errors.ts` can import `BlobId` without a cycle. */
-export class InvalidBlobId extends Schema.TaggedError<InvalidBlobId>()("InvalidBlobId", {
+export class InvalidBlobId extends /* @__PURE__ */ Schema.TaggedError<InvalidBlobId>()("InvalidBlobId", {
   input: Schema.String
 }) {}
 

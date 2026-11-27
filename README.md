@@ -22,8 +22,9 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app` (+ types from `@wallet-standard/base`) |
 | `@unconfirmed/quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order and an optional linger window. Knows nothing about Sui; used by Walrus and Seal | — |
 | `@unconfirmed/sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/bcs` and `@unconfirmed/sui` (runtime: `@unconfirmed/sui/Move`) | — (dev-time) |
+| `@unconfirmed/walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@mysten/walrus-wasm`, loaded on first use | `@mysten/walrus-wasm`, `@noble/hashes` |
 
-Next: Seal and Walrus.
+Next: Seal.
 
 ### Passkeys
 
@@ -61,6 +62,68 @@ const { winner } = yield* Quorum.agree(nodes, { weight, run: getStatus, key: can
 - Results and errors carry every success, failure (with its typed error) and unsettled member, so callers can classify failures (`Quorum.failedWeight`).
 - A defect in a member fails the whole call; it is not counted as a member failure. Timeouts go inside `run` (per attempt) or around the call (overall).
 - `QuorumFailed` / `AgreementFailed` are `Data.TaggedError`s (generic in your member and error types, no `Schema`); convert them at your boundary. Design: [docs/design/quorum.md](docs/design/quorum.md).
+
+### Walrus
+
+```ts
+import * as Read from "@unconfirmed/walrus/Read"
+import * as Walrus from "@unconfirmed/walrus/Walrus"
+import * as Write from "@unconfirmed/walrus/Write"
+import * as SuiGrpc from "@unconfirmed/sui/grpc"
+
+// System, committees, storage nodes and the encoder for one network; needs an HttpClient and a Sui client.
+const layer = Walrus.layer({ network: "testnet" }).pipe(          // or { config: { systemObjectId, stakingObjectId } }
+  Layer.provideMerge(SuiGrpc.layer({ baseUrl: "https://fullnode.testnet.sui.io:443" })),
+  Layer.provideMerge(FetchHttpClient.layer)
+)
+
+const bytes = yield* Read.blob(blobId)                            // straight from the storage nodes, verified
+const status = yield* Read.status(blobId)                         // { _tag: "Permanent", endEpoch, isCertified, ... }, f + 1 shards agreeing
+
+// Write through the nodes: encode, register, upload, certify (two transactions, signed by `signer`).
+const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor: Write.viaTx(signer) })
+// { _tag: "Certified", blobId, blobObjectId, certifiedEpoch, endEpoch, deletable, digest }
+```
+
+- **Reads** verify the metadata against the blob id before using it, check each sliver's shape, decode from `n − 2f` shards and re-derive the blob id (`consistency: "strict"`, the default). If the bytes don't match, the slivers are checked one by one: a node that served a bad one is blamed and replaced. Only a blob the writer encoded wrongly is `InconsistentBlob`. A blob unknown to `2f + 1` shards is `BlobNotFound` (`BlobBlocked` for blocked blobs), typically within seconds. During an epoch change the read committee is chosen per blob from its certified epoch.
+- **Writes** count weight in shards, as the chain does. The certificate is built at `n − f` (`@mysten/walrus` counts nodes, so it can refuse a valid certificate or build one the chain rejects). Each confirmation's signature is checked. In-flight sliver bytes are capped (12.5 MB), retries are per request, and the write lingers `0.5 × elapsed + 500 ms` after the quorum for stragglers, as the Rust client does. [docs/design/walrus.md](docs/design/walrus.md) §1.8 and §2 list what differs from `@mysten/walrus` and why.
+- **Steps are resumable.** `onStep` receives each step as plain JSON (`Schema.encode(Write.Step)`), and `resume` continues from it in another process. Each step checks the chain before acting, so a crash between register and persist reuses the registration rather than paying again. For the transactions themselves, any `Executor` works: `Write.viaTx(signer)` (a key or a wallet), or `sui-lifecycle`'s `Lifecycle.run` for a journal.
+- **Through the upload relay** the blob goes to a relay that encodes and stores it for a tip in SUI. The relay's certificate is verified before the certify transaction is built. Only relay writes need the relay layer (`via: "relay"` adds `UploadRelay` to the requirements):
+
+  ```ts
+  const layer = Layer.mergeAll(
+    Walrus.layer({ network: "testnet" }),
+    UploadRelay.layer({ host: UploadRelay.TESTNET_HOST, maxTip: 1_000n })   // tips above maxTip (MIST) are TipTooHigh
+  ).pipe(Layer.provideMerge(SuiGrpc.layer({ baseUrl })), Layer.provideMerge(FetchHttpClient.layer))
+  yield* Write.run(bytes, { epochs: 5, deletable: true, executor: Write.viaTx(signer), via: "relay" })
+  ```
+
+- **Gateways**, for apps that trust an aggregator or publisher, have their own layers and ship neither WASM nor quorum code:
+
+  ```ts
+  const gateways = Layer.mergeAll(
+    Aggregator.layer({ url: Aggregator.TESTNET_URL }),
+    Publisher.layer({ url: Publisher.TESTNET_URL })            // `headers` for a publisher behind JWT auth
+  ).pipe(Layer.provide(FetchHttpClient.layer))
+  const bytes = yield* Aggregator.blob(blobId)                 // also byObjectId, patch, byIdentifier
+  const result = yield* Publisher.store(bytes, { epochs: 5 })  // NewlyCreated | AlreadyCertified | MarkedInvalid
+  const checked = yield* Aggregator.verified(blobId)           // re-derives the id locally: needs Encoder and System
+  ```
+
+  A gateway failure is `GatewayError { status?, message }` (`status: 404` for an unknown blob).
+- **Quilts** (many small files in one blob, read back one at a time) are in `Quilt` / `QuiltRead`.
+- Every failure is a typed `Schema.TaggedError` (`BlobNotFound`, `NotEnoughSlivers`, `NotEnoughConfirmations`, `EncoderError`, ...). Nothing a node, gateway or the WASM throws escapes as a defect.
+
+**The WASM.** Erasure coding and BLS run in `@mysten/walrus-wasm`. Each call takes about 2.5 s at testnet's 1000 shards, synchronously, whatever the blob size up to a few MB: a read costs two calls, a write one. The module is imported only when an `Encoder` layer is built, so importing the package costs nothing until then. How to load it depends on the runtime:
+
+| Runtime | What to do |
+|---|---|
+| Bun, Node (unbundled) | Nothing. |
+| Server bundle | Keep `@mysten/walrus-wasm` external (`--external @mysten/walrus-wasm`). A Bun bundle that inlines it works only on the machine that built it, and esbuild's ESM output fails (no `__dirname`). |
+| Browser, Vite / webpack 5 | Nothing (they emit the `.wasm`), or pass `wasmUrl` from `import wasmUrl from "@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url"` (Vite). |
+| Browser, esbuild / Rolldown / Bun | Serve `node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm` (358 KB) and pass its URL: `Walrus.layer({ network, wasmUrl: "/walrus_wasm_bg.wasm" })` (or `Encoder.layer({ wasmUrl })`). |
+
+**Live tests.** `SUI_LIVE=1 bun test packages/walrus` reads testnet without spending anything: committees, a recently certified blob through the nodes and through the public aggregator, and a random id. Add `WALRUS_LIVE=1` to also write. That uses the Sui CLI's active address (`~/.sui/sui_config`): direct, resumed and relay writes of 32-byte blobs, each burned afterwards, about 0.003–0.005 SUI and 0.0009 WAL per write.
 
 ## How it composes
 
@@ -275,15 +338,21 @@ The barrels (`import { Address } from "@unconfirmed/sui"`) exist for convenience
 
 KB minified / minified+gzip, browser target, the app using namespace imports. Add `--named` to compare barrel imports, or `--detail` for a per-package breakdown.
 
-| Program | Bun | esbuild | Rolldown | `@mysten/sui` 3.0.1 (Rolldown) |
+| Program | Bun | esbuild | Rolldown | `@mysten/*` (Rolldown) |
 |---|---|---|---|---|
 | Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 127 / 41 | — |
 | `Quorum.run`, three members (no Schema) | 59 / 20 | 58 / 20 | 58 / 19 | — |
 | Verify, Ed25519 only | 146 / 52 | 144 / 52 | 149 / 50 | 131 / 44 (ships every scheme) |
-| Verify, Ed25519 + k1 + r1 + multisig | 177 / 63 | 175 / 63 | 177 / 61 | — |
-| Read one object | 205 / 67 | 204 / 68 | 210 / 66 | 294 / 77 (ships all 30 RPCs) |
-| Build + resolve + sign + execute | 355 / 103 | 351 / 103 | 360 / 101 | 383 / 106 |
+| Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 177 / 64 | 179 / 61 | — |
+| Read one object | 206 / 67 | 205 / 68 | 210 / 66 | 294 / 77 (ships all 30 RPCs) |
+| Build + resolve + sign + execute | 389 / 112 | 384 / 112 | 392 / 109 | 383 / 106 |
+| Walrus: read via the aggregator | 144 / 49 | 144 / 49 | 145 / 47 | — |
+| Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
+| Walrus: read a blob from the nodes | 384 / 110 | 378 / 110 | 388 / 107 | 409 / 111 (`readBlob`) |
+| Walrus: write a blob through the nodes | 453 / 136 | 447 / 135 | 455 / 130 | 455 / 128 (`writeBlob`) |
+| Walrus: write a blob through the relay | 458 / 137 | 452 / 137 | 460 / 132 | — |
 
+- **Walrus.** JS only. Programs that read or write from the nodes also fetch the 358 KB WASM, which no bundler counts. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
 - **With barrel imports in the app,** esbuild grows by ~40 KB per program; before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.
