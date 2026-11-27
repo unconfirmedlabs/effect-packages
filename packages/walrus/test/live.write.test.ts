@@ -3,8 +3,8 @@
  * with SUI_LIVE=1 and WALRUS_LIVE=1; with SUI_LIVE=1 alone this file spends
  * nothing (every test is skipped).
  *
- * The signer is the Sui CLI's active address, loaded from
- * `~/.sui/sui_config/sui.keystore`. The key is never printed, logged or
+ * The signer is `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key of a funded
+ * testnet account holding SUI and WAL). The key is never printed, logged or
  * written; any error while loading it becomes one fixed message.
  *
  * Blobs are 32 random bytes, deletable, 1 epoch, and burned afterwards.
@@ -66,7 +66,7 @@ import type * as Signer from "@unconfirmed/sui/Signer"
 import type * as Transactions from "@unconfirmed/sui/Transactions"
 import * as Tx from "@unconfirmed/sui/Tx"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
-import { loadCliSigner } from "@unconfirmed/test-support/keystore"
+import { loadLiveSigner } from "@unconfirmed/test-support/funded"
 import * as BlobId from "../src/BlobId.ts"
 import * as Committee from "../src/Committee.ts"
 import * as Config from "../src/Config.ts"
@@ -90,7 +90,7 @@ const TIMEOUT = 300_000
 // Signer (never print the key)
 // -----------------------------------------------------------------------------
 
-const loadSigner = loadCliSigner
+const loadSigner = loadLiveSigner
 
 // -----------------------------------------------------------------------------
 // Layers and helpers
