@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Result, Stream } from "effect"
 import { GraphQLClientError, GraphQLProtocol } from "effect/graphql"
-import { Address, CheckpointData, DynamicFields, Events, Objects } from "@unconfirmed/sui"
+import { Address, CheckpointData, Checkpoints, Coins, DynamicFields, Events, Objects } from "@unconfirmed/sui"
+import { mergeSorted } from "../src/merge.ts"
 import * as SuiGraphQL from "../src/index.ts"
 import { eventCursorPosition } from "../src/convert.ts"
 import { plan } from "../src/EventsGraphQL.ts"
@@ -358,5 +359,161 @@ describe("DynamicFields", () => {
       layer
     )
     expect(bad._tag).toBe("InvalidDynamicFieldName")
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Review fixes (CT-1, CT-12, CT-14, CT-23, CT-25)
+// -----------------------------------------------------------------------------
+
+const emptyCheckpoint = (n: number, extra: { timestamp?: string; epoch?: unknown } = {}) => ({
+  checkpoint: {
+    sequenceNumber: n,
+    digest: `CP${n}`,
+    timestamp: extra.timestamp ?? "2026-11-27T00:00:00.000Z",
+    epoch: "epoch" in extra ? extra.epoch : { epochId: 1 },
+    transactions: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] }
+  }
+})
+
+describe("CheckpointData.list and subscribe", () => {
+  test("list enumerates the numbers (no listing query) and pins open ends to the served range", async () => {
+    const { layer, requests } = scripted((req) => {
+      if (req.operationName === "Tip") {
+        return { checkpoint: { sequenceNumber: 9 }, serviceConfig: { availableRange: { first: { sequenceNumber: 7 } } } }
+      }
+      if (req.operationName === "GetCheckpoint") return emptyCheckpoint((req.variables as any).sequenceNumber)
+      throw new Error(`unexpected ${req.operationName}`)
+    })
+    const [closed, open] = await run(
+      Effect.flatMap(Effect.service(CheckpointData.CheckpointData), (c) =>
+        Effect.all([c.list({ start: 3n, end: 6n }).pipe(Stream.runCollect), c.list().pipe(Stream.runCollect)])),
+      layer
+    )
+    expect(closed.map((c) => c.sequenceNumber)).toEqual([3n, 4n, 5n])
+    expect(open.map((c) => c.sequenceNumber)).toEqual([7n, 8n, 9n])
+    expect(requests.filter((r) => r.operationName !== "GetCheckpoint").map((r) => r.operationName)).toEqual(["Tip"])
+  })
+
+  test("subscribe fetches ahead concurrently and delivers in order", async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+    const layer = Layer.succeed(GraphQLProtocol.GraphQLProtocol, {
+      execute: (request) =>
+        Effect.gen(function*() {
+          const n = (request.variables as any).sequenceNumber as number
+          inFlight++
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          // Later checkpoints answer sooner, so the order has to be restored.
+          yield* Effect.sleep(`${(20 - n) * 2} millis`)
+          inFlight--
+          return { body: { data: emptyCheckpoint(n) } }
+        }),
+      subscribe: () =>
+        Stream.fromIterable(Array.from({ length: 20 }, (_, n) => ({
+          body: { data: { checkpoints: { cursor: `c${n}`, node: { sequenceNumber: n } } } }
+        })))
+    })
+    const got = await run(
+      Effect.flatMap(Effect.service(CheckpointData.CheckpointData), (c) => c.subscribe.pipe(Stream.take(20), Stream.runCollect)),
+      layer
+    )
+    expect(got.map((c) => Number(c.sequenceNumber))).toEqual(Array.from({ length: 20 }, (_, n) => n))
+    expect(maxInFlight).toBeGreaterThan(4)
+  })
+
+  test("a null epoch or an unparsable timestamp is DATA_LOSS, not a default or a throw", async () => {
+    const { layer } = scripted((req) =>
+      (req.variables as any).sequenceNumber === 1 ? emptyCheckpoint(1, { epoch: null }) : emptyCheckpoint(2, { timestamp: "yesterday" })
+    )
+    const errors = await run(
+      Effect.flatMap(Effect.service(CheckpointData.CheckpointData), (c) => Effect.all([Effect.flip(c.get(1n)), Effect.flip(c.get(2n))])),
+      layer
+    )
+    expect(errors.map((e) => e._tag === "RpcError" && e.code)).toEqual(["DATA_LOSS", "DATA_LOSS"])
+  })
+})
+
+describe("Checkpoints.list over GraphQL", () => {
+  test("an open end is pinned to the tip as of the call", async () => {
+    const { layer, requests } = scripted((req) =>
+      req.operationName === "Tip"
+        ? { checkpoint: { sequenceNumber: 41 } }
+        : {
+          checkpoints: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [{ sequenceNumber: 40, digest: "D40" }, { sequenceNumber: 41, digest: "D41" }]
+          }
+        }
+    )
+    const got = await Effect.runPromise(
+      Effect.flatMap(Effect.service(Checkpoints.Checkpoints), (c) => c.list({ start: 40n }).pipe(Stream.runCollect)).pipe(
+        Effect.provide(SuiGraphQL.CheckpointsGraphQL.layer.pipe(Layer.provide(layer)))
+      )
+    )
+    expect(got.map((c) => c.sequenceNumber)).toEqual([40n, 41n])
+    expect(requests.map((r) => [r.operationName, (r.variables as any)?.filter])).toEqual([
+      ["Tip", undefined],
+      ["ListCheckpoints", { afterCheckpoint: 39, beforeCheckpoint: 42 }]
+    ])
+  })
+})
+
+describe("bad input and bad data are typed errors, not defects", () => {
+  test("Events: an invalid sender address is INVALID_ARGUMENT for list and subscribe", async () => {
+    const { layer, requests } = scripted(() => {
+      throw new Error("unexpected request")
+    })
+    const bad = Events.sender("0xnot-an-address" as Address.Address)
+    const errors = await run(
+      Effect.flatMap(Effect.service(Events.Events), (e) =>
+        Effect.all([
+          Effect.flip(e.list({ start: 1n, end: 2n, filter: Events.not(bad) }).pipe(Stream.runCollect)),
+          Effect.flip(e.subscribe(Events.all(Events.emitModule("0x2::coin"), Events.not(bad))).pipe(Stream.runCollect))
+        ])),
+      layer
+    )
+    expect(errors.map((e) => e.code)).toEqual(["INVALID_ARGUMENT", "INVALID_ARGUMENT"])
+    expect(requests.length).toBe(0)
+  })
+
+  test("Coins.list: a malformed coin type is INVALID_ARGUMENT, an undecodable coin DATA_LOSS", async () => {
+    const coin = {
+      address: A("0xc0"),
+      version: 3,
+      digest: "4DJfuRY7y2Y9gmatQMyXiMpLVy2awKFMxdSqgBkvmmig",
+      owner: { __typename: "AddressOwner", address: { address: A("0x1") } },
+      contents: { type: { repr: "0x2::coin::Coin<0x2::sui::SUI>" }, bcs: "AQI=" },
+      previousTransaction: { digest: "D1" }
+    }
+    const { layer } = scripted(() => ({ address: { objects: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [coin] } } }))
+    const errors = await Effect.runPromise(
+      Effect.flatMap(Effect.service(Coins.Coins), (c) =>
+        Effect.all([
+          Effect.flip(c.list(A("0x1"), "0x2::sui::SUI<").pipe(Stream.runCollect)),
+          Effect.flip(c.list(A("0x1")).pipe(Stream.runCollect))
+        ])).pipe(
+          Effect.provide(SuiGraphQL.CoinsGraphQL.layer.pipe(Layer.provideMerge(SuiGraphQL.ObjectsGraphQL.layer), Layer.provide(layer)))
+        )
+    )
+    expect(errors.map((e) => e.code)).toEqual(["INVALID_ARGUMENT", "DATA_LOSS"])
+  })
+})
+
+describe("mergeSorted", () => {
+  test("emits runs as chunks, in order, duplicates once", async () => {
+    const chunks: Array<number> = []
+    const merged = mergeSorted([Stream.make(1, 2, 3, 7, 8), Stream.make(3, 9)], (a, b) => a - b)
+    const all = await Effect.runPromise(
+      merged.pipe(
+        Stream.mapArray((c) => {
+          chunks.push(c.length)
+          return c
+        }),
+        Stream.runCollect
+      )
+    )
+    expect(all).toEqual([1, 2, 3, 7, 8, 9])
+    expect(chunks.length).toBeLessThan(all.length)
   })
 })

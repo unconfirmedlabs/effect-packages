@@ -15,7 +15,7 @@ import { RpcError } from "@unconfirmed/sui/RpcError"
 import { call, MOVE_OBJECT_FIELDS, MoveObjectNode, moveObject, OBJECT_FIELDS, ObjectNode, object } from "./convert.ts"
 
 /** The largest batch sent (the server accepts up to `serviceConfig.maxMultiGetSize`, 200 on Mysten's endpoints). */
-const MAX_BATCH = 50
+const MAX_BATCH = 200
 /** The largest page the server allows for `Address.objects`. */
 const MAX_PAGE = 50
 

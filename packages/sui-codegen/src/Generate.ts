@@ -11,7 +11,7 @@ import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
 import type { RpcError } from "@unconfirmed/sui/RpcError"
 import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import * as Config from "./Config.ts"
 import * as FromGrpc from "./FromGrpc.ts"
@@ -28,27 +28,60 @@ export const summarize = (path: string): Effect.Effect<void, M.CodegenError> =>
       : Effect.fail(new M.CodegenError({ message: `sui move summary failed in ${path}: ${r.error ?? r.stderr}` }))
   })
 
-/** Load one configured package. */
-export const loadPackage = (
+/** Whether a local entry runs `sui move summary` first. */
+const summarizes = (p: Config.LocalPackage, path: string) => p.summarize ?? existsSync(join(path, "Move.toml"))
+
+const loadWith = (
   p: Config.PackageConfig,
-  dir: string = process.cwd()
+  dir: string,
+  runSummary: boolean
 ): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> => {
   if (Config.isOnChain(p)) {
     const baseUrl = p.url ?? Config.FULLNODES[p.network ?? "mainnet"]
     return FromGrpc.load(p.id, { name: p.name }).pipe(Effect.provide(GrpcWeb.layer({ baseUrl })))
   }
   const path = resolve(dir, p.path)
-  const run = p.summarize ?? existsSync(join(path, "Move.toml"))
   return Effect.andThen(
-    run ? summarize(path) : Effect.void,
-    Summary.load(path, { package: p.package, name: p.name, packageId: p.packageId })
+    runSummary && summarizes(p, path) ? summarize(path) : Effect.void,
+    Summary.load(path, {
+      package: p.package,
+      name: p.name,
+      packageId: p.packageId,
+      originalId: p.originalId,
+      typeOrigins: p.typeOrigins
+    })
   )
 }
 
-/** Merge models: the first copy of a package wins. */
+/** Load one configured package. */
+export const loadPackage = (
+  p: Config.PackageConfig,
+  dir: string = process.cwd()
+): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> => loadWith(p, dir, true)
+
+const datatypeCount = (p: M.Package) => p.modules.reduce((n, m) => n + m.datatypes.length, 0)
+
+/**
+ * Merge models into one package per identity. A model's root copy wins over
+ * any dependency copy (so a configured root keeps its `name` and `packageId`
+ * whatever the entry order); between roots, the first. Between dependency
+ * copies (two roots linking different versions), the one with the most
+ * datatypes wins (a later version only adds types), then the first.
+ */
 export const merge = (models: ReadonlyArray<M.Model>): ReadonlyArray<M.Package> => {
   const out = new Map<string, M.Package>()
-  for (const m of models) for (const p of m.packages) if (!out.has(p.address)) out.set(p.address, p)
+  for (const m of models) {
+    const root = m.packages.find((p) => p.address === m.root)
+    if (root !== undefined && !out.has(root.address)) out.set(root.address, root)
+  }
+  const roots = new Set(out.keys())
+  for (const m of models) {
+    for (const p of m.packages) {
+      if (roots.has(p.address)) continue
+      const have = out.get(p.address)
+      if (have === undefined || datatypeCount(p) > datatypeCount(have)) out.set(p.address, p)
+    }
+  }
   return [...out.values()]
 }
 
@@ -58,13 +91,26 @@ const renderOptions = (config: Config.Config): Render.RenderOptions => ({
   docs: config.docs
 })
 
-/** Load every configured package and render. */
+/** Configured packages loaded at once. */
+const LOAD_CONCURRENCY = 4
+
+/**
+ * Load every configured package and render. `sui move summary` runs once per
+ * directory, however many entries read it; entries then load concurrently.
+ */
 export const files = (
   config: Config.Config,
   dir: string = process.cwd()
 ): Effect.Effect<ReadonlyArray<Render.File>, M.CodegenError | RpcError, HttpClient.HttpClient> =>
   Effect.gen(function*() {
-    const models = yield* Effect.forEach(config.packages, (p) => loadPackage(p, dir))
+    const toSummarize = new Set<string>()
+    for (const p of config.packages) {
+      if (Config.isOnChain(p)) continue
+      const path = resolve(dir, p.path)
+      if (summarizes(p, path)) toSummarize.add(path)
+    }
+    for (const path of toSummarize) yield* summarize(path)
+    const models = yield* Effect.forEach(config.packages, (p) => loadWith(p, dir, false), { concurrency: LOAD_CONCURRENCY })
     const roots: Array<Render.Root> = []
     for (let i = 0; i < models.length; i++) {
       const root = models[i]!.root
@@ -80,11 +126,43 @@ export const files = (
     })
   })
 
-/** Write rendered files under `output`, replacing the generated package directories and `deps`. */
+/** Every file under `dir` that does not start with the generated header. */
+const foreignFiles = async (dir: string): Promise<Array<string>> => {
+  const out: Array<string> = []
+  for (const e of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, e.name)
+    if (e.isDirectory()) out.push(...await foreignFiles(path))
+    else if (!e.isFile() || !(await readFile(path, "utf-8")).startsWith(Render.HEADER)) out.push(path)
+  }
+  return out
+}
+
+/**
+ * Write rendered files under `output`, replacing the generated package
+ * directories and `deps`. A directory about to be replaced must hold only
+ * generated files (they start with `Render.HEADER`), otherwise nothing is
+ * written; two files at one path fail too. Directories of packages no longer
+ * configured are left alone.
+ */
 export const write = (output: string, rendered: ReadonlyArray<Render.File>): Effect.Effect<ReadonlyArray<string>, M.CodegenError> =>
   Effect.tryPromise({
     try: async () => {
-      const tops = new Set(rendered.map((f) => f.path.split("/")[0]!))
+      const paths = new Set<string>()
+      for (const f of rendered) {
+        if (paths.has(f.path)) throw new M.CodegenError({ message: `two generated files at ${f.path}` })
+        paths.add(f.path)
+      }
+      const tops = [...new Set(rendered.map((f) => f.path.split("/")[0]!))]
+      for (const top of tops) {
+        const path = join(output, top)
+        if (!existsSync(path)) continue
+        const foreign = await foreignFiles(path)
+        if (foreign.length > 0) {
+          throw new M.CodegenError({
+            message: `refusing to replace ${path}: ${foreign[0]} was not generated by sui-codegen (move it, or choose another output)`
+          })
+        }
+      }
       for (const top of tops) await rm(join(output, top), { recursive: true, force: true })
       const written: Array<string> = []
       for (const f of rendered) {
@@ -95,7 +173,7 @@ export const write = (output: string, rendered: ReadonlyArray<Render.File>): Eff
       }
       return written
     },
-    catch: (e) => new M.CodegenError({ message: `writing ${output}: ${String(e)}` })
+    catch: (e) => e instanceof M.CodegenError ? e : new M.CodegenError({ message: `writing ${output}: ${String(e)}` })
   })
 
 /** Load, render and write. Relative paths resolve against `dir` (the config file's directory). */

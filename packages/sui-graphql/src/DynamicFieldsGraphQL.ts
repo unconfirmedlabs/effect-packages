@@ -11,6 +11,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "@unconfirmed/sui/Address"
 import * as DynamicFields from "@unconfirmed/sui/DynamicFields"
 import * as Objects from "@unconfirmed/sui/Objects"
+import { RpcError } from "@unconfirmed/sui/RpcError"
 import * as TypeTag from "@unconfirmed/sui/TypeTag"
 import { Bytes, call } from "./convert.ts"
 
@@ -132,7 +133,15 @@ export const layer: Layer.Layer<DynamicFields.DynamicFields, never, GraphQLProto
         getObject: (parent, name) =>
           readField(parent, DynamicFields.objectFieldNameType(name.type), name).pipe(
             Effect.flatMap((f) =>
-              objects.get(Address.fromBytes(f.value.subarray(0, 32))).pipe(
+              f.value.length < 32
+                ? Effect.fail(
+                  new RpcError({
+                    method: "GetObject",
+                    code: "DATA_LOSS",
+                    message: `dynamic object field ${f.fieldId} holds ${f.value.length} bytes, not an object id`
+                  })
+                )
+                : objects.get(Address.fromBytes(f.value.subarray(0, 32))).pipe(
                 Effect.catchTag("ObjectNotFound", () =>
                   Effect.fail(new DynamicFields.DynamicFieldNotFound({ parent, nameType: name.type, fieldId: f.fieldId })))
               )
