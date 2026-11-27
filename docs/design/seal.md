@@ -1,6 +1,6 @@
 # `@unconfirmed/seal` — design
 
-Status: design, 2026-11-27. Not implemented. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
+Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
 
 A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
 
@@ -277,8 +277,9 @@ export type Input =
   | { readonly _tag: "Hmac256Ctr"; readonly data: Uint8Array; readonly aad?: Uint8Array }
   | { readonly _tag: "Plain" }
 export const AES_IV: Uint8Array
-export const encrypt: (input: Input, key: Uint8Array) => Effect.Effect<EncryptedObject.Ciphertext, CryptoUnavailable>
-export const decrypt: (ciphertext: EncryptedObject.Ciphertext, key: Uint8Array) => Effect.Effect<Uint8Array, DecryptionFailed | CryptoUnavailable>
+export type Ciphertext /* the decoded type of EncryptedObject.Ciphertext: { _tag: "Aes256Gcm", blob, aad: Option } | { _tag: "Hmac256Ctr", blob, aad: Option, mac } | { _tag: "Plain" } */
+export const encrypt: (input: Input, key: Uint8Array) => Effect.Effect<Ciphertext, CryptoUnavailable>
+export const decrypt: (ciphertext: Ciphertext, key: Uint8Array) => Effect.Effect<Uint8Array, DecryptionFailed | CryptoUnavailable>
 /** The synchronous half, also usable on its own. */
 export const hmacCtr: {
   readonly encrypt: (key: Uint8Array, data: Uint8Array, aad: Uint8Array) => { readonly blob: Uint8Array; readonly mac: Uint8Array }
@@ -292,6 +293,18 @@ export const bytes: (length: number) => Effect.Effect<Uint8Array>
 ```
 
 AES-GCM runs on `crypto.subtle` (`Effect.tryPromise`); a runtime without it (a browser page not served over HTTPS) gets `CryptoUnavailable`, and HMAC-CTR still works there. The MAC comparison is constant-time. `aad` absent is written as `Some(empty)` (§1.7).
+
+**As built (S1).** Differences from the declarations above, each the smallest call that fills a gap:
+
+- `Dem.Ciphertext` is a plain TypeScript union declared in `Dem.ts` (`EncryptedObject` does not exist before S2). S2's BCS `Ciphertext` must decode to exactly this shape (`@unconfirmed/bcs` enum: flattened struct variants, `aad: Option<Uint8Array>`), so `Dem.decrypt(object.ciphertext, key)` type-checks without a conversion.
+- Because only `Bls.ts` may touch the curve, it also exports `ORDER`, `g1Zero`, `g2Zero` and `g1Multiply` / `g2Multiply`. Use these rather than noble's `point.multiply`: they accept a zero scalar (noble throws) and are otherwise noble's constant-time multiplication. Other point methods (`add`, `subtract`, `equals`, `is0`, `negate`) are used directly on the values.
+- `Bls.pairingsEqual` treats a pair containing the point at infinity as the identity; `Ibe.verifyUserSecretKey` refuses infinity explicitly (C18). `Bls.pairingBytes` needs finite points (the decoders guarantee it).
+- `ElGamal.decrypt` also fails (`InvalidEncoding`, `"point at infinity"`) when the recovered key is the point at infinity.
+- `Dem.encrypt` / `decrypt` with a key that is not 32 bytes is a defect (keys always come from `Kdf.deriveKey`).
+- The full Rust object vector (`lib.rs:666-712`) already passes at the primitive level in `test/ibe.test.ts` (BCS parsed by the oracle, then `Ibe`, `Shamir`, `Kdf`, `Dem`), with and without the consistency check; S2 still owes it through `EncryptedObject.parse` and `Envelope.open`.
+- Internal helpers exported with `@internal`: `Kdf.addressBytes`, `Kdf.concat`, `Shamir.tables`, `Shamir.mul`, `Shamir.div`.
+- `Kdf.ts` imports `Bls.ts` (for `gid`). A module that must stay curve-free in every bundler (`EncryptedObject`) should build the full id itself rather than import `Kdf.fullId`; with `sideEffects: false` the bundlers drop it anyway, but there is no reason to depend on that.
+- Noble 2.4's constant-time `multiply` draws 16 bytes from `crypto.getRandomValues` per call, for blinding (`abstract/curve.js` `mulCTBlinded`). It does not affect any result and does not go through `Entropy`, but it shows up among the draws a stubbed `getRandomValues` records (see §6.2, "Encryption").
 
 ### 4.2 Encrypted objects and the envelope
 
@@ -655,7 +668,7 @@ const program = Effect.gen(function*() {
 
 ### 4.9 Errors
 
-All in `Errors.ts` except `KeyServerError` (`KeyServerApi.ts`) and `InvalidEncoding` (`Bls.ts`), which `Errors.ts` re-exports.
+All in `Errors.ts`. **As built (S1):** `Errors.ts` is a leaf that imports only `effect/Schema`, so importing any error never pulls in curve or HTTP code. `InvalidEncoding` and `KeyServerError` (with `KeyServerErrorKind`) are therefore *defined* in `Errors.ts` and re-exported by `Bls.ts` and `KeyServerApi.ts`, the reverse of the direction first planned; `Shamir` and `Dem` re-export their own errors the same way. `NotFirstVersion.version` is a `bigint` (as `Objects` reports versions). Every field schema built by a call is marked `/* @__PURE__ */` too, or esbuild keeps the class.
 
 ```ts
 export class ThresholdNotMet extends Schema.TaggedError<ThresholdNotMet>()("ThresholdNotMet", {
@@ -742,9 +755,9 @@ Conventions as in the other packages: `bun:test`; offline tests always run; `@my
 
 Byte for byte wherever both sides are deterministic.
 
-- **Primitives.** `hashToG1`, `kdf`, `deriveKey`, GT bytes, `createFullId`, `verifyUserSecretKey` (valid and invalid), ElGamal decrypt, Shamir `combine` / `interpolate` on shares produced by the other side, both DEMs in both directions, over property-generated inputs.
+- **Primitives** (S1: `test/parity.primitives.test.ts`, which also checks `Ibe.encryptShares` against `encryptBatched` under recorded randomness). Note that `@mysten/seal`'s `Hmac256Ctr` throws when constructed without an `aad` (its client always passes one). `hashToG1`, `kdf`, `deriveKey`, GT bytes, `createFullId`, `verifyUserSecretKey` (valid and invalid), ElGamal decrypt, Shamir `combine` / `interpolate` on shares produced by the other side, both DEMs in both directions, over property-generated inputs.
 - **BCS.** `EncryptedObject`, `KeyServerMove`, `KeyServerMoveV1`, `KeyServerMoveV2` (`seal/dist/bcs.mjs`): same bytes for the same value, and each side parses the other's output.
-- **Encryption.** `seal/dist/encrypt.mjs` `encrypt()` is deterministic when called with an `encryptionInput` whose `generateKey` returns a chosen base key and with `crypto.getRandomValues` stubbed (verified). It draws, in order, `t − 1` bytes for each of the 32 secret bytes, then 48 bytes that noble maps to `r` with `mapHashToField`. The oracle records those draws; `Envelope.seal` with `Randomness { baseKey, coefficients: the 32 draws concatenated, r: Bls.scalarFromEntropy(the 48) }` must return the same bytes and the same key, for both DEMs, thresholds 1–5, repeated servers, with and without `aad`.
+- **Encryption.** `seal/dist/encrypt.mjs` `encrypt()` is deterministic when called with an `encryptionInput` whose `generateKey` returns a chosen base key and with `crypto.getRandomValues` stubbed (verified). It draws, in order, `t − 1` bytes for each of the 32 secret bytes, then 48 bytes that noble maps to `r` with `mapHashToField`, then 16 bytes per constant-time point multiplication (noble's blinding, irrelevant to the output; observed in S1). The oracle records those draws and keeps the first 32 draws and the 48-byte one; `Envelope.seal` with `Randomness { baseKey, coefficients: the 32 draws concatenated, r: Bls.scalarFromEntropy(the 48) }` must return the same bytes and the same key, for both DEMs, thresholds 1–5, repeated servers, with and without `aad`.
 - **Decryption.** Objects from each side decrypt on the other; `checkShareConsistency` and `checkLEEncoding` agree on crafted objects.
 - **Session.** For the same address, package, TTL and creation time: the personal message bytes; `toExported` of ours imports into `SessionKey.import` and the reverse.
 - **Requests.** With `SessionKey.import` of a known session and the ElGamal draw stubbed, the JSON body captured from `SealClient`'s `fetch` option equals `KeyServerApi.requestBody` of the same request, and the headers match except `Request-Id`.
