@@ -713,6 +713,8 @@ export interface Options<M, A, E, R> extends Common<M, A, E, R> {
 
 Semantics: checked after every final failure (retries do not count until they are exhausted), after the success and unreachable checks. Without `grace` the call fails at once with `reason: "gaveUp"`. With it, the run continues unchanged until the threshold is reached (success), every member has settled, or the window (measured with `Clock`) ends; then `gaveUp`. `weight` not finite or `≤ 0`, or a negative or `NaN` grace, is a defect like the other argument checks. `Reached` and `QuorumFailed` are otherwise unchanged. In the engine this is one more branch in `run`'s `decide` plus the timer that `linger` already has. Walrus could then replace its tally with `giveUp: { when: notFoundOrBlocked, weight: 2f + 1 }` (not part of this work; its widening metadata window is a separate mechanism and stays).
 
+*As built (Q3):* as proposed, exported as `Quorum.GiveUp<M, E>`. Two calls the text left open (`quorum.md` §3.2, §10): the counted weight is compared with `>=`, and if the threshold becomes unreachable during the grace window the call ends at once, still as `gaveUp`. Walrus metadata reads now use it (`walrus.md` §4.5); their widening window stays in `Read.ts`.
+
 Seal does not copy the quorum's reason: `ThresholdNotMet.reason` is derived from the failures (§4.7 step 6), so a denial reads the same whichever check ended the run. If Q3 is declined, `Keys.fetch` ships without it and the cost is bounded by the choices already made in §4.4: `Timeout` is not retried, so the worst case for a denied request under a low threshold is one `requestTimeout`.
 
 ## 6. Test plan

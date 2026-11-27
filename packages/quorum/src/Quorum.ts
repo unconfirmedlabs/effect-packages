@@ -64,6 +64,25 @@ export interface Options<M, A, E, R> extends Common<M, A, E, R> {
    * A function receives the time it took to reach the threshold. Default: none.
    */
   readonly linger?: Duration.Input | ((elapsed: Duration.Duration) => Duration.Input)
+  /**
+   * Stop early on failures that make success pointless rather than impossible (a member that judges
+   * the request itself: not found, access denied). Checked on every final failure, after the success
+   * and unreachable checks; ends in `QuorumFailed` with `reason: "gaveUp"`. Default: none.
+   */
+  readonly giveUp?: GiveUp<M, E>
+}
+
+export interface GiveUp<M, E> {
+  /** Which final failures count. Retried errors count only once the member has failed for good. */
+  readonly when: (error: E, member: M) => boolean
+  /** Give up once the counted failures weigh at least this much. Finite and > 0. */
+  readonly weight: number
+  /**
+   * Keep running this long after that point; reaching the threshold meanwhile still succeeds, and the
+   * call gives up when the window ends, every member has settled, or the threshold becomes unreachable.
+   * Default: none (give up at once).
+   */
+  readonly grace?: Duration.Input
 }
 
 export interface Reached<M, A, E> {
@@ -109,7 +128,7 @@ export interface Agreed<M, A, K extends Key, E> {
 
 const describe = (
   what: string,
-  reason: "insufficientWeight" | "unreachable",
+  reason: "insufficientWeight" | "unreachable" | "gaveUp",
   reached: number,
   needed: number,
   failed: number,
@@ -118,15 +137,16 @@ const describe = (
 ) =>
   reason === "insufficientWeight"
     ? `${what} insufficient weight: total ${total} is below ${needed}`
-    : `${what} unreachable: ${reached} of ${needed} reached, ${failed} failed, ${unsettled} unsettled (total ${total})`
+    : `${what} ${reason === "gaveUp" ? "gave up" : reason}: ${reached} of ${needed} reached, ${failed} failed, ${unsettled} unsettled (total ${total})`
 
 /** `run` could not reach its threshold. Carries every success, failure and unsettled member. */
 export class QuorumFailed<M, A, E> extends Data.TaggedError("QuorumFailed")<{
   /**
    * `insufficientWeight`: the members' total weight was below the threshold; nothing ran.
    * `unreachable`: failures left too little weight to reach it.
+   * `gaveUp`: failures matching `giveUp.when` reached `giveUp.weight` (and its grace, if any, ran out).
    */
-  readonly reason: "insufficientWeight" | "unreachable"
+  readonly reason: "insufficientWeight" | "unreachable" | "gaveUp"
   readonly threshold: number
   readonly totalWeight: number
   /** Weight of `successes`. */
@@ -204,11 +224,11 @@ interface Tally<M, A, E> {
   readonly failures: Array<Failure<M, E>>
 }
 
-type Decision = "continue" | "done" | "fail"
+type Decision = "continue" | "done" | "fail" | "gaveUp"
 
 interface Outcome<M, A, E> {
   readonly tally: Tally<M, A, E>
-  readonly decision: "done" | "fail"
+  readonly decision: Exclude<Decision, "continue">
   readonly unsettled: ReadonlyArray<Unsettled<M>>
 }
 
@@ -268,15 +288,18 @@ interface Settled<A, E> {
 
 /**
  * Runs `entries` (already ordered) at most `concurrency` at a time, folding each settlement into the
- * tally and asking `decide` after each one. Ends on `done` or `fail`; after `done`, `lingerFor` may keep
- * the run going for a window. Every attempt still in flight is interrupted, and awaited, before it returns.
+ * tally and asking `decide` after each one. Ends on `done`, `fail` or `gaveUp`; after `done`, `lingerFor`
+ * may keep the run going for a window, and after `gaveUp`, `grace` (ms) may, ending early on `done` (a
+ * success) or `fail` (still gave up). Every attempt still in flight is interrupted, and awaited, before it
+ * returns.
  */
 const drive = <M, A, E, R>(
   entries: Array<Entry<M>>,
   total: number,
   common: Common<M, A, E, R>,
   decide: (tally: Tally<M, A, E>, success: Success<M, A> | undefined) => Decision,
-  lingerFor?: (elapsed: Duration.Duration) => Duration.Input
+  lingerFor?: (elapsed: Duration.Duration) => Duration.Input,
+  grace = 0
 ): Effect.Effect<Outcome<M, A, E>, never, R> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function*() {
@@ -341,28 +364,47 @@ const drive = <M, A, E, R>(
         }
       })
 
-      const linger = Effect.gen(function*() {
-        if (!lingerFor) return
-        const now = yield* Clock.currentTimeMillis
-        const window = Duration.toMillis(lingerFor(Duration.millis(now - startedAt)))
-        const deadline = now + window
-        if (!(window > 0)) return
-        yield* fill
-        while (!allSettled()) {
-          const left = deadline - (yield* Clock.currentTimeMillis)
-          if (!(left > 0)) return
-          const settled = left === Infinity
-            ? Option.some(yield* Queue.take(queue))
-            : yield* Effect.timeoutOption(Queue.take(queue), left)
-          if (Option.isNone(settled)) return
-          yield* settle(settled.value)
+      /**
+       * Keeps settling (and starting queued members) for `window` ms or until everything has settled.
+       * `check`, when given, may end it early with its decision; otherwise the result is "continue".
+       */
+      const extend = (window: number, check?: (success: Success<M, A> | undefined) => Decision) =>
+        Effect.gen(function*() {
+          const deadline = (yield* Clock.currentTimeMillis) + window
+          if (!(window > 0)) return "continue"
           yield* fill
-        }
-      })
+          while (!allSettled()) {
+            const left = deadline - (yield* Clock.currentTimeMillis)
+            if (!(left > 0)) break
+            const settled = left === Infinity
+              ? Option.some(yield* Queue.take(queue))
+              : yield* Effect.timeoutOption(Queue.take(queue), left)
+            if (Option.isNone(settled)) break
+            const success = yield* settle(settled.value)
+            const decision = check ? check(success) : "continue"
+            if (decision !== "continue") return decision
+            yield* fill
+          }
+          return "continue"
+        })
 
-      const exit = yield* Effect.exit(
-        restore(Effect.flatMap(race, (decision) => decision === "done" ? Effect.as(linger, decision) : Effect.succeed(decision)))
-      )
+      // After `done`: the linger window, still a success. After `gaveUp`: the grace window, a success if the
+      // threshold is reached in it, otherwise (window over, all settled, or unreachable) still `gaveUp`.
+      const after = (decision: Exclude<Decision, "continue">): Effect.Effect<Exclude<Decision, "continue">, never, R> =>
+        decision === "done" && lingerFor
+          ? Effect.as(
+            Effect.flatMap(Clock.currentTimeMillis, (now) =>
+              extend(Duration.toMillis(lingerFor(Duration.millis(now - startedAt))))),
+            decision
+          )
+          : decision === "gaveUp"
+          ? Effect.map(extend(grace, (s) => {
+            const d = decide(tally, s)
+            return d === "gaveUp" ? "continue" : d
+          }), (d) => d === "done" ? d : decision)
+          : Effect.succeed(decision)
+
+      const exit = yield* Effect.exit(restore(Effect.flatMap(race, after)))
       yield* Scope.close(scope, Exit.void)
       const decision = yield* exit
       const unsettled: Array<Unsettled<M>> = []
@@ -398,7 +440,25 @@ export const run = <M, A, E, R>(
   options: Options<M, A, E, R>
 ): Effect.Effect<Reached<M, A, E>, QuorumFailed<M, A, E>, R> =>
   Effect.flatMap(prepare(members, options, { threshold: options.threshold }), ({ entries, unstarted, total }) => {
-    const { threshold, linger } = options
+    const { threshold, linger, giveUp } = options
+    let grace = 0
+    let given = 0
+    if (giveUp) {
+      if (!(giveUp.weight > 0 && giveUp.weight < Infinity)) {
+        return invalid(`giveUp.weight must be a finite number > 0, got ${giveUp.weight}`)
+      }
+      grace = Number.isNaN(giveUp.grace) ? NaN : Duration.toMillis(giveUp.grace ?? 0)
+      if (!(grace >= 0)) return invalid(`giveUp.grace must be a duration >= 0, got ${giveUp.grace}`)
+    }
+    const decide = (t: Tally<M, A, E>, success: Success<M, A> | undefined): Decision => {
+      if (t.reached >= threshold) return "done"
+      if (t.total - t.failed < threshold) return "fail"
+      if (giveUp && !success) {
+        const f = t.failures[t.failures.length - 1]!
+        if (giveUp.when(f.error, f.member) && (given += f.weight) >= giveUp.weight) return "gaveUp"
+      }
+      return "continue"
+    }
     const body: Effect.Effect<Reached<M, A, E>, QuorumFailed<M, A, E>, R> = threshold <= 0
       ? Effect.succeed({ successes: [], weight: 0, totalWeight: total, failures: [], unsettled: unstarted })
       : threshold > total
@@ -421,8 +481,9 @@ export const run = <M, A, E, R>(
               ordered,
               total,
               options,
-              (t) => t.reached >= threshold ? "done" : t.total - t.failed < threshold ? "fail" : "continue",
-              linger === undefined ? undefined : typeof linger === "function" ? linger : () => linger
+              decide,
+              linger === undefined ? undefined : typeof linger === "function" ? linger : () => linger,
+              grace
             ),
             ({ tally, decision, unsettled }) =>
               Effect.andThen(
@@ -437,7 +498,7 @@ export const run = <M, A, E, R>(
                   })
                   : Effect.fail(
                     new QuorumFailed({
-                      reason: "unreachable",
+                      reason: decision === "gaveUp" ? decision : "unreachable",
                       threshold,
                       totalWeight: total,
                       weight: tally.reached,

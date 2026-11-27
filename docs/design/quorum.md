@@ -1,6 +1,6 @@
 # `@unconfirmed/quorum` — design
 
-Status: implemented (Q1 and Q2), 2026-11-27; open questions decided as recommended (§9). Differences from the original draft are listed in §10. Implementers: read this whole file, then `EXPLORATION.md` §7.
+Status: implemented (Q1, Q2 and Q3: `giveUp`, from `seal.md` §5), 2026-11-27; open questions decided as recommended (§9). Differences from the original draft are listed in §10. Implementers: read this whole file, then `EXPLORATION.md` §7.
 
 A generic weighted first-threshold-of-n combinator. It depends only on `effect` 4.1.6 and knows nothing about Sui, Walrus or Seal. Two entry points share one engine:
 
@@ -61,6 +61,24 @@ export interface Options<M, A, E, R> extends Common<M, A, E, R> {
    * A function receives the time it took to reach the threshold. Default: none.
    */
   readonly linger?: Duration.Input | ((elapsed: Duration.Duration) => Duration.Input)
+  /**
+   * Stop early on failures that make success pointless rather than impossible (§3.2). Ends in
+   * `QuorumFailed` with `reason: "gaveUp"`. Default: none.
+   */
+  readonly giveUp?: GiveUp<M, E>
+}
+
+export interface GiveUp<M, E> {
+  /** Which final failures count. Retried errors count only once the member has failed for good. */
+  readonly when: (error: E, member: M) => boolean
+  /** Give up once the counted failures weigh at least this much. Finite and > 0. */
+  readonly weight: number
+  /**
+   * Keep running this long after that point; reaching the threshold meanwhile still succeeds, and the
+   * call gives up when the window ends, every member has settled, or the threshold becomes unreachable.
+   * Default: none (give up at once).
+   */
+  readonly grace?: Duration.Input
 }
 
 export interface Reached<M, A, E> {
@@ -120,8 +138,9 @@ Errors (`effect/Data`, see §4):
 ```ts
 export class QuorumFailed<M, A, E> extends Data.TaggedError("QuorumFailed")<{
   /** `insufficientWeight`: the members' total weight was below the threshold; nothing ran.
-   *  `unreachable`: failures left too little weight to reach it. */
-  readonly reason: "insufficientWeight" | "unreachable"
+   *  `unreachable`: failures left too little weight to reach it.
+   *  `gaveUp`: failures matching `giveUp.when` reached `giveUp.weight` (and its grace, if any, ran out). */
+  readonly reason: "insufficientWeight" | "unreachable" | "gaveUp"
   readonly threshold: number
   readonly totalWeight: number
   /** Weight of `successes`. */
@@ -131,7 +150,8 @@ export class QuorumFailed<M, A, E> extends Data.TaggedError("QuorumFailed")<{
   readonly failures: ReadonlyArray<Failure<M, E>>
   readonly unsettled: ReadonlyArray<Unsettled<M>>
 }> {
-  /** e.g. "quorum unreachable: 412 of 667 reached, 421 failed, 167 unsettled (total 1000)". No member values. */
+  /** e.g. "quorum unreachable: 412 of 667 reached, 421 failed, 167 unsettled (total 1000)", or "quorum gave up: …"
+   *  in the same format. No member values. */
   get message(): string
 }
 
@@ -181,7 +201,17 @@ const { winner, groups } = yield* Quorum.agree(committee.nodes, {
 })
 
 // Seal: key shares from servers weighing t in total; shares already cached lower the threshold.
-yield* Quorum.run(uncachedServers, { weight: (s) => s.weight, threshold: t - cachedWeight, run: fetchAndVerifyKey })
+// Refusals that judge the request weigh t: an honest server refused, so stop (after a 2 s grace for lagging fullnodes).
+yield* Quorum.run(uncachedServers, {
+  weight: (s) => s.weight, threshold: t - cachedWeight, run: fetchAndVerifyKey,
+  giveUp: { when: (e) => e.definitive, weight: t, grace: "2 seconds" }
+})
+
+// Walrus: metadata from any one node, but stop once not-found / blocked answers weigh 2f + 1.
+yield* Quorum.run(committee.nodes, {
+  weight: (node) => node.shards.length, threshold: 1, run: fetchMetadata,
+  giveUp: { when: (e) => e.kind === "NotFound" || e.kind === "Blocked", weight: 2 * f + 1 }
+})
 ```
 
 ## 3. Semantics
@@ -201,6 +231,7 @@ Terms: `total` is the sum of all member weights. At any moment `reached` is the 
 | Duplicate members | Not detected. Each element of the input is its own member, identified by `index`; equal values each run and each count. Callers that need distinct members deduplicate first. (Seal lists a server once per unit of weight, `seal/dist/client.mjs:152`; with this package it passes each server once with its weight.) |
 | `weight` or `key` throws | **Defect**. |
 | `linger` returns `NaN` or a non-positive duration | No window. |
+| `giveUp.weight` is not finite or `<= 0`; `giveUp.grace` is negative or `NaN` | **Defect**, checked before anything runs (also when `threshold <= 0`). A zero grace is no grace. |
 
 Defects from validation are `Cause.IllegalArgumentError`s whose message starts with `Quorum:`.
 
@@ -213,6 +244,7 @@ Defects from validation are `Cause.IllegalArgumentError`s whose message starts w
 - **Success** is checked on every member success: `reached >= threshold`. The check happens on the success that crosses the line, not on the next one (the off-by-one in `walrus/dist/client.mjs:286-291` and `:337-346`).
 - **Fail fast** is checked on every final failure: `reached + remaining < threshold`. All outstanding attempts are interrupted and `QuorumFailed` (`reason: "unreachable"`) is returned at once, without waiting for members that cannot change the answer.
 - The success check runs before the failure check, so a run in which the last member to settle reaches the threshold succeeds (the bug in `walrus/dist/client.mjs:355-358`).
+- **Give up** (`giveUp`, `run` only) is checked on every final failure, after the success and fail-fast checks: when the weight of final failures for which `when(error, member)` holds reaches `weight`. Retries do not count until the member's schedule is exhausted or `while` says no; `when` is called once per final failure. Without `grace` (or with a zero grace) the call fails at once with `QuorumFailed` (`reason: "gaveUp"`). With `grace`, the run continues exactly as before (in-flight members keep going, queued members still start) for that long, measured with `Clock` from the moment of giving up; the threshold reached in the window is a success (linger does not apply to it); the window ends early, still as `gaveUp`, when every member has settled or the threshold becomes unreachable; when it runs out the rest are interrupted and the call fails with `gaveUp`. "Unreachable" wins when it fires on the same failure or earlier. The use case is failures that judge the request rather than the member (Walrus: not found / blocked at `2f + 1`; Seal: access denied at weight `t`), where a low threshold would otherwise wait for every slow member to fail.
 - `while` only matters together with `schedule`; without a schedule every member gets one attempt.
 - Result lists: `successes` and `failures` are in completion order, `unsettled` in input (`index`) order.
 - When the run ends, every attempt still in flight is interrupted, and `run` returns only after those interruptions have completed (their finalizers have run). No fiber outlives the call.
@@ -254,7 +286,8 @@ After every success, with `responded` the weight of all successes and `best` the
 ### 3.7 Not included, deliberately
 
 - No progress callback. Wrap `run` if you need per-member events.
-- No "give up" predicate over failures. For both consumers "unreachable" already coincides with the condition they care about: a Walrus read needs `n - 2f` (slivers) or weight 1 (metadata), so it is unreachable exactly when `2f + 1` weight has failed, and the caller classifies `failures` afterwards with `failedWeight` (not found vs. blocked vs. unavailable).
+- ~~No "give up" predicate over failures.~~ Reversed by Q3 (`giveUp`, §3.2). The original argument was that "unreachable" coincides with what both consumers care about; it holds for Walrus slivers (`n - 2f` needed, so unreachable exactly at `2f + 1` failed) but not for Walrus metadata (threshold 1, `walrus.md` §4.5 "As built (W5)") nor for Seal with `2t <= total` (`seal.md` §5). Callers still classify `failures` afterwards with `failedWeight`.
+- No `giveUp` for `agree`, and no per-member weight or several predicates in one `giveUp`: no consumer needs them.
 - No detached tail (see open question 1).
 
 ## 4. Why `Data.TaggedError`, not `Schema.TaggedError`
@@ -317,6 +350,10 @@ All offline, `bun:test`, driven by `TestClock` (`import { TestClock } from "effe
 18. `"shuffle"` and `"weightedShuffle"` are deterministic under `Random.withSeed` and are permutations of the input.
 19. Over 2,000 seeds, a member of weight 10 starts before a member of weight 1 in roughly 10/11 of the runs (tolerance ±3%).
 
+`run.test.ts`, `giveUp` (Q3, all under `TestClock` with the virtual time asserted)
+
+20. Fails at once without grace when matching failures reach the weight (and a zero grace is no grace); non-matching failures do not count; a retrying member counts only when final (`when` called once); with grace, a threshold reached inside the window succeeds, and the window keeps starting queued members; the window ends in `gaveUp` at the exact time; it ends early as `gaveUp` once the threshold is unreachable; "unreachable" still wins when it comes first; invalid `weight` or `grace` dies before anything runs.
+
 Type tests (in `run.test.ts`, compile-time only): the error channel is `QuorumFailed<M, A, E>` and `R` is the members' `R`; a `schedule` whose input is not `E` does not compile.
 
 Bundle: add a program to `scripts/bundle-report.ts` (`Quorum.run` over three `Effect.succeed` members) and record Bun / esbuild / Rolldown sizes next to the "Effect baseline" row. Expectation: under 3 KB minified on top of `Effect`, and no `Schema` in the output.
@@ -347,4 +384,5 @@ Differences from the draft above (the sections have been updated to match):
 - **`agree` insufficient weight** is `max(threshold, quorum) > total` (§3.1), since a quorum above the total weight can never be met.
 - **Fail-fast checks run after every settlement**, success or failure. For `run` this is equivalent to checking only on failures (a success never lowers `reached + remaining`); for `agree` it is required (§3.5). If every member has settled and neither condition fired, the call fails as `unreachable` (defensive; not reachable with the conditions above).
 - **Linger keeps starting queued members** during the window (as §3.4 says), including the ones whose slots freed up before the threshold was reached.
+- **`giveUp` (Q3)**, added after Q1/Q2 as designed in `seal.md` §5, with three calls the design left open: the counted weight is checked with `>=`; during the grace window, the threshold becoming unreachable ends the call at once, as `gaveUp` (nothing in the window can change the outcome, and the give-up came first); validation runs even when `threshold <= 0`. The engine change is a fourth decision (`gaveUp`) and the linger loop generalised to take an optional check. `Quorum.ts` alone (esbuild, minified, `effect` external) went from 6121 / 2459 to 6775 / 2722 bytes (+0.26 KB gzip).
 - **Tests** record events in plain arrays rather than `Ref`s (they run in one fiber per member under `TestClock`, so order is deterministic); helpers live in `test/world.ts`.

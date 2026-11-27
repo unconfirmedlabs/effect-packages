@@ -20,7 +20,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/sui-zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite` |
 | `@unconfirmed/sui-enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
 | `@unconfirmed/sui-wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app` (+ types from `@wallet-standard/base`) |
-| `@unconfirmed/quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order and an optional linger window. Knows nothing about Sui; used by Walrus and Seal | — |
+| `@unconfirmed/quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order, an optional linger window and an optional early give-up. Knows nothing about Sui; used by Walrus and Seal | — |
 | `@unconfirmed/sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/bcs` and `@unconfirmed/sui` (runtime: `@unconfirmed/sui/Move`) | — (dev-time) |
 | `@unconfirmed/walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@mysten/walrus-wasm`, loaded on first use | `@mysten/walrus-wasm`, `@noble/hashes` |
 
@@ -60,6 +60,7 @@ const { winner } = yield* Quorum.agree(nodes, { weight, run: getStatus, key: can
 
 - It returns on the success that crosses the threshold and fails fast (`QuorumFailed`, `reason: "unreachable"`) the moment failures leave too little weight; everything still in flight is interrupted and awaited before it returns.
 - Results and errors carry every success, failure (with its typed error) and unsettled member, so callers can classify failures (`Quorum.failedWeight`).
+- `giveUp: { when, weight, grace? }` (`run` only) stops early once final failures matching `when` weigh `weight` (`reason: "gaveUp"`), for failures that make success pointless rather than impossible: Walrus metadata stops at `2f + 1` not-found weight instead of waiting for every node; Seal stops once denials weigh `t`. An optional `grace` keeps going for a moment, and a threshold reached in it still succeeds.
 - A defect in a member fails the whole call; it is not counted as a member failure. Timeouts go inside `run` (per attempt) or around the call (overall).
 - `QuorumFailed` / `AgreementFailed` are `Data.TaggedError`s (generic in your member and error types, no `Schema`); convert them at your boundary. Design: [docs/design/quorum.md](docs/design/quorum.md).
 
@@ -350,7 +351,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
 | Program | Bun | esbuild | Rolldown | `@mysten/*` (Rolldown) |
 |---|---|---|---|---|
 | Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 127 / 41 | — |
-| `Quorum.run`, three members (no Schema) | 59 / 20 | 58 / 20 | 58 / 19 | — |
+| `Quorum.run`, three members (no Schema) | 60 / 20 | 59 / 21 | 59 / 20 | — |
 | Verify, Ed25519 only | 146 / 52 | 144 / 52 | 149 / 50 | 131 / 44 (ships every scheme) |
 | Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 177 / 64 | 179 / 61 | — |
 | Read one object | 206 / 67 | 205 / 68 | 210 / 66 | 294 / 77 (ships all 30 RPCs) |
@@ -368,7 +369,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports. Ad
   - `HttpClient` (which brings `Stream`): +52 / +16.
   - `Schema` (from `Schema.TaggedError` errors and BCS-as-Schema): +40 / +13.
   - The protobuf codec: ~20 KB.
-  - `Quorum.run` is 58 KB against 26 KB for a bare `Effect.runPromise(Effect.succeed(1))`: the quorum code itself is ~6 / 2.4 KB (both entry points); the rest is the Effect modules it uses (`Schedule` via retry, spans, `Queue`, `Scope`, `Duration`), which an app with `HttpClient` already ships.
+  - `Quorum.run` is 59 KB against 26 KB for a bare `Effect.runPromise(Effect.succeed(1))`: the quorum code itself is ~6.8 / 2.7 KB (both entry points); the rest is the Effect modules it uses (`Schedule` via retry, spans, `Queue`, `Scope`, `Duration`), which an app with `HttpClient` already ships.
 - **For an app already on Effect,** that cost is shared, and the Sui-specific code is a small part of these numbers.
 
 ## Develop
