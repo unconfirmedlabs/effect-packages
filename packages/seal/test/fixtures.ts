@@ -13,6 +13,9 @@ import * as Objects from "@unconfirmed/sui/Objects"
 import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Move from "@unconfirmed/sui/Move"
+import * as KeyServer from "../src/KeyServer.ts"
 import { KeyServerApi, KeyServerError } from "../src/KeyServerApi.ts"
 
 export interface RecordedObject {
@@ -164,3 +167,82 @@ export const serviceStub = (services: Readonly<Record<string, RecordedService>>)
   )
   return { layer, calls }
 }
+
+// -----------------------------------------------------------------------------
+// Synthesized chain objects (S7): key server objects for fake servers, packages
+// -----------------------------------------------------------------------------
+
+/** The package the synthesized key server types live in (any address works, K4). */
+const KEY_SERVER_PACKAGE = "0x" + "5e".repeat(32)
+
+const synthesized = (objectId: string, type: string, contents: Uint8Array, version = 1n): Objects.SuiObject => ({
+  objectId: objectId as Address,
+  version,
+  digest: "11111111111111111111111111111111" as ObjectDigest,
+  owner: { _tag: "Shared", initialSharedVersion: 1n },
+  type,
+  contents,
+  previousTransaction: undefined
+})
+
+/** A package object (`type: "package"`, empty contents) at `version`: 1 for a first version (I1). */
+export const packageObject = (objectId: string, version = 1n): Objects.SuiObject =>
+  synthesized(objectId, "package", new Uint8Array(0), version)
+
+/** What `keyServerObjects` needs of a server: `fakeKeyServers`' servers fit. */
+export interface SynthesizedKeyServer {
+  readonly objectId: string
+  readonly name: string
+  readonly url: string
+  readonly publicKey: Uint8Array
+  readonly type: "Independent" | "Committee"
+}
+
+/**
+ * The on-chain objects of key servers shaped like `fakeKeyServers`' servers:
+ * an independent server as `KeyServerV1` (name, URL, public key), a committee
+ * as `KeyServerV2` with one member (whose URL is not used: the aggregator
+ * comes from configuration, K5). Two objects per server: the `KeyServer` and
+ * its versioned field.
+ */
+export const keyServerObjects = (servers: ReadonlyArray<SynthesizedKeyServer>): ReadonlyArray<Objects.SuiObject> =>
+  servers.flatMap((s) => {
+    const id = s.objectId as Address
+    const version = s.type === "Committee" ? 2 : 1
+    const outer = synthesized(
+      id,
+      `${KEY_SERVER_PACKAGE}::key_server::KeyServer`,
+      Bcs.encodeSync(KeyServer.KeyServerBcs)({ id, firstVersion: BigInt(version), lastVersion: BigInt(version) })
+    )
+    const fieldId = KeyServer.fieldId(id, version)
+    const field = s.type === "Committee"
+      ? synthesized(
+        fieldId,
+        `0x2::dynamic_field::Field<u64, ${KEY_SERVER_PACKAGE}::key_server::KeyServerV2>`,
+        Bcs.encodeSync(Move.Field(Bcs.u64, KeyServer.KeyServerV2Bcs))({
+          id: fieldId,
+          name: 2n,
+          value: {
+            name: s.name,
+            keyType: 0,
+            pk: s.publicKey,
+            serverType: {
+              _tag: "Committee",
+              version: 0,
+              threshold: 1,
+              partialKeyServers: [{ name: `${s.name}-member`, url: s.url, partialPk: s.publicKey, partyId: 0 }]
+            }
+          }
+        })
+      )
+      : synthesized(
+        fieldId,
+        `0x2::dynamic_field::Field<u64, ${KEY_SERVER_PACKAGE}::key_server::KeyServerV1>`,
+        Bcs.encodeSync(Move.Field(Bcs.u64, KeyServer.KeyServerV1Bcs))({
+          id: fieldId,
+          name: 1n,
+          value: { name: s.name, url: s.url, keyType: 0, pk: s.publicKey }
+        })
+      )
+    return [outer, field]
+  })

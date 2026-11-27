@@ -8,8 +8,10 @@
  *   twelve (name, URL or aggregator, public key, server type).
  * - `layerVerified` passes for Mysten's two servers; the other independent
  *   servers are probed best effort (a warning, not a failure, when one is
- *   down). The `/v1/service` client here is a minimal `fetch` stand-in for
- *   S4's `KeyServerApi.layer`.
+ *   down). Proofs come through `KeyServerApi.layer` over `FetchHttpClient`.
+ * - The aggregators do not implement `/v1/service`: testnet's answers `400
+ *   Unsupported` (`Rejected`), mainnet's gateway `401` without an API key
+ *   (`Unauthorized`).
  */
 import { SealClient } from "@mysten/seal"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
@@ -18,12 +20,11 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import { base64 } from "@scure/base"
 import type { Address } from "@unconfirmed/sui/Address"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
 import * as Config from "../src/Config.ts"
 import * as KeyServer from "../src/KeyServer.ts"
-import { KeyServerApi, KeyServerError } from "../src/KeyServerApi.ts"
+import * as KeyServerApi from "../src/KeyServerApi.ts"
 import { TESTNET_INDEPENDENT } from "./fixtures.ts"
 
 const live = process.env.SUI_LIVE === "1"
@@ -43,34 +44,12 @@ const NETWORKS = {
 const chain = (network: keyof typeof NETWORKS) =>
   SuiGrpc.layer({ baseUrl: NETWORKS[network].url }).pipe(Layer.provide(FetchHttpClient.layer))
 
-/** `GET /v1/service` over `fetch`, 10 s timeout; any failure is `Unavailable`. */
-const fetchService = Layer.succeed(
-  KeyServerApi,
-  KeyServerApi.of({
-    fetchKey: () => Effect.die("not used"),
-    service: (server) =>
-      Effect.tryPromise({
-        try: async () => {
-          const r = await fetch(`${server.url}/v1/service?service_id=${server.objectId}`, {
-            headers: { "Client-Sdk-Type": "typescript", "Client-Sdk-Version": "2.0.1", "Request-Id": crypto.randomUUID() },
-            signal: AbortSignal.timeout(10_000)
-          })
-          if (!r.ok) throw new Error(`HTTP ${r.status}`)
-          const json = (await r.json()) as { service_id: string; pop: string }
-          return {
-            serviceId: json.service_id as Address,
-            pop: base64.decode(json.pop),
-            version: r.headers.get("x-keyserver-version") ?? undefined
-          }
-        },
-        catch: (e) => new KeyServerError({ server: server.objectId, url: server.url, kind: "Unavailable", message: String(e) })
-      })
-  })
-)
+/** The real key server client (S4) over `fetch`. */
+const api = KeyServerApi.layer().pipe(Layer.provide(FetchHttpClient.layer))
 
 const keyServers = (network: keyof typeof NETWORKS, verified: boolean, servers: ReadonlyArray<Config.ServerInput>) =>
   (verified ? KeyServer.layerVerified() : KeyServer.layer()).pipe(
-    Layer.provide(Layer.mergeAll(Config.layer(servers), chain(network), fetchService))
+    Layer.provide(Layer.mergeAll(Config.layer(servers), chain(network), api))
   )
 
 const hex = (b: Uint8Array | ReadonlyArray<number>) => Buffer.from(b).toString("hex")
@@ -141,4 +120,20 @@ suite("live key servers", () => {
     })
     console.log(`${ok} of ${others.length} other independent servers verified`)
   }, 60_000)
+
+  for (const [network, committee, kind] of [
+    ["testnet", Config.testnet.committee, "Rejected"],
+    ["mainnet", Config.mainnet.committee, "Unauthorized"]
+  ] as const) {
+    test(`${network}: the aggregator's /v1/service is ${kind}`, async () => {
+      const exit = await Effect.runPromiseExit(
+        Effect.flatMap(Effect.service(KeyServerApi.KeyServerApi), (k) =>
+          k.service({ objectId: committee.objectId as Address, url: committee.aggregatorUrl! })).pipe(Effect.provide(api))
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      const error = Exit.isFailure(exit) ? (exit.cause.reasons.find((r) => r._tag === "Fail") as { error: KeyServerApi.KeyServerError } | undefined)?.error : undefined
+      expect(error?.kind).toBe(kind)
+      expect(error?.status).toBe(network === "testnet" ? 400 : 401)
+    }, 30_000)
+  }
 })

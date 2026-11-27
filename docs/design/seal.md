@@ -1,6 +1,6 @@
 # `@unconfirmed/seal` — design
 
-Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. S2 (`EncryptedObject`, `Envelope`) implemented; see "As built (S2)" in §4.2. S3 (configuration, key servers) implemented; see "As built (S3)" in §4.3. S4 (`KeyServerApi` layer, recorder, `fakeKeyServers`) implemented; see "As built (S4)" in §4.4 and §6. S5 (`SessionKey`, `Approval`) implemented; see "As built (S5)" in §4.5 and §4.6. S6 (`Keys`) implemented; see "As built (S6)" in §4.7 and §6.1. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
+Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. S2 (`EncryptedObject`, `Envelope`) implemented; see "As built (S2)" in §4.2. S3 (configuration, key servers) implemented; see "As built (S3)" in §4.3. S4 (`KeyServerApi` layer, recorder, `fakeKeyServers`) implemented; see "As built (S4)" in §4.4 and §6. S5 (`SessionKey`, `Approval`) implemented; see "As built (S5)" in §4.5 and §4.6. S6 (`Keys`) implemented; see "As built (S6)" in §4.7 and §6.1. S7 (`Seal`, live tests, bundle report, README) implemented; see "As built (S7)" in §4.8 and §6. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
 
 A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
 
@@ -735,6 +735,16 @@ const program = Effect.gen(function*() {
   Effect.provide(layer))
 ```
 
+**As built (S7).** Differences from the declarations above, each the smallest call that fills a gap:
+
+- **`denialGrace`** is an option of `decrypt`, `fetchKeys` and `derivedKeys` too, passed to `Keys.fetch` (default 2 s). The declarations exposed `retry` but not the grace.
+- **Named shapes**: `Encrypted` (the `encrypt` result), `FetchKeysOptions`, `DerivedKeysOptions`, `FetchKeysError` (`FetchError | InvalidCiphertext | ApprovalMismatch`).
+- **`encrypt` validates before any read.** The package id and every `servers` id must be `0x` + 64 hex digits (lower-cased), as for sessions. A server listed twice, a weight that is not a positive integer, a total outside 1–255 and a threshold outside `1..total` are all `InvalidEncryption`, before the package check and before `Envelope.randomness`. A huge threshold would otherwise ask `Entropy` for `32(t − 1)` bytes first.
+- **`checkFirstVersion`.** An id that is not `0x` + 64 hex digits, or an object whose type is not `package`, is `ObjectNotFound`: there is no such package, and the declared error union has nothing closer. The cache is a `WeakMap` keyed by the `Objects` service value, holding the package's version, so a `NotFirstVersion` is cached too and two networks never share entries. Read failures are not cached. `@mysten/seal` reads the package on every `encrypt` (item 16).
+- **`decrypt` of an already-parsed object** re-applies `EncryptedObject.validate`. The consistency check loads each distinct server once (concurrently) and passes `Envelope.open` one public key per `services` entry, repeats included.
+- **`fetchKeys`** groups objects by `(threshold, askable servers with their weights)`, where the askable servers are those after the configuration filter of step 3, since that list is what `Keys.fetch` receives. It runs the groups one after another, so later groups find their servers complete in the cache. Every object is parsed and checked (`ApprovalMismatch`) before the first request.
+- `layer` is `KeyServer.layer` (or `layerVerified`) provided with, and merged with, `Config.layer(servers)` and `KeyServerApi.layer(api)`.
+
 ### 4.9 Errors
 
 All in `Errors.ts`. **As built (S1):** `Errors.ts` is a leaf that imports only `effect/Schema`, so importing any error never pulls in curve or HTTP code. `InvalidEncoding` and `KeyServerError` (with `KeyServerErrorKind`) are therefore *defined* in `Errors.ts` and re-exported by `Bls.ts` and `KeyServerApi.ts`, the reverse of the direction first planned; `Shamir` and `Dem` re-export their own errors the same way. `NotFirstVersion.version` is a `bigint` (as `Objects` reports versions). Every field schema built by a call is marked `/* @__PURE__ */` too, or esbuild keeps the class.
@@ -834,7 +844,7 @@ Byte for byte wherever both sides are deterministic.
 - **Decryption.** Objects from each side decrypt on the other; `checkShareConsistency` and `checkLEEncoding` agree on crafted objects.
 - **Session.** For the same address, package, TTL and creation time: the personal message bytes; `toExported` of ours imports into `SessionKey.import` and the reverse.
 - **Requests.** With `SessionKey.import` of a known session and the ElGamal draw stubbed, the JSON body captured from `SealClient`'s `fetch` option equals `KeyServerApi.requestBody` of the same request, and the headers match except `Request-Id`. *As built (S6):* in `test/keys.test.ts`: `SealClient.fetchKeys` runs against a stub `suiClient` serving one V1 key server (encoded with `@mysten/seal`'s own BCS) and a capturing `fetch`; `Keys.fetch` runs on the session `fromExported(theirs.export())` with `Entropy` returning the same 48 bytes that the stubbed `getRandomValues` gives `randomSecretKey`. The bodies are equal as strings; headers are compared lower-cased without `Request-Id` and `Content-Length` (§4.4 "As built (S4)").
-- **End to end.** `SealClient` (through its `fetch` option) and our layer against the same `fakeKeyServers` world: each decrypts the other's objects; the same key servers are loaded from the same recorded objects.
+- **End to end.** `SealClient` (through its `fetch` option) and our layer against the same `fakeKeyServers` world: each decrypts the other's objects; the same key servers are loaded from the same recorded objects. *As built (S7):* `test/parity.e2e.test.ts`. The recorded testnet objects carry public keys whose master keys we don't have, so the chain objects are synthesized for the fake servers (`fixtures.ts` `keyServerObjects`, V1 independent and V2 committee, and `packageObject`). Our side reads them through `Seal.layer` and an `Objects` stub; `SealClient` gets a `suiClient` stub (`core.getObject`, `core.getDynamicField`) over the same objects, and a `fetch` routed into the fake `HttpClient`. Both DEMs, with `aad`: object layouts agree, each side decrypts the other's object, ours also with `checkShareConsistency`. `test/seal.test.ts` uses the same synthesized objects, so every `Seal` test goes through the real layer. Sessions use `clockSkew: 0`. Neither file needs the `TestClock` harness of `keys.test.ts`, so it stays there.
 - **Live** (`SUI_LIVE=1`): `KeyServers.get` equals `SealClient.getKeyServers()` for the twelve objects of §0.1.
 
 ### 6.3 Live, without funds (`SUI_LIVE=1`)
@@ -857,6 +867,14 @@ Nothing here signs with the wallet or submits a transaction: users are fresh in-
 
 Budget: about 25 `fetch_key` requests per run, spaced to stay under Mysten's 10 per second (H11). Test timeout 60 s.
 
+*As built (S7):* all nine cases pass in about 14 s. Notes:
+
+- `live.chain.test.ts` now uses `KeyServerApi.layer` over `FetchHttpClient` (the `fetch` stand-in is gone) and asserts the aggregators' `/v1/service`: testnet `Rejected` (400), mainnet `Unauthorized` (401).
+- Cases 1 and 4 share one session. The first decrypt sends three requests (all servers are asked at once and two answers suffice); the HMAC and consistency-checked decrypts that follow send none. Requests are counted with `HttpClient.tapRequest` on `FetchHttpClient`.
+- Case 3 with 2 of 3: the second `NoAccess` already leaves too little weight, so the third request may be interrupted. The test asserts at least two failures, all `NoAccess` naming `account_based`.
+- Case 8: the extra server is ruby-nodes (§0.1) with its on-chain public key and the URL `https://192.0.2.1` (TEST-NET-1, connections hang), served by `layerFromServers` with the real servers read from chain. The 1-of-3 denial ended 2.6 s after the requests went out, against 10 s for the timeout. The certificate is signed before timing starts.
+- Case 9 uses `SessionKey.make` and `Keys.fetch` directly (package `0x…02` is not a first version, so `Seal.session` refuses it), with threshold 1 so that the second `InvalidPtb` arrives within the grace.
+
 ### 6.4 Live, with funds (`SEAL_LIVE=1` in addition to `SUI_LIVE=1`)
 
 `live.owned.test.ts`. The signer is the Sui CLI's active address, loaded exactly as `packages/walrus/test/live.write.test.ts` does (`client.yaml` for the address, `PrivateKey.decodeKeystore` on `sui.keystore`, the scheme's `fromSecretKey`); any error while loading becomes one fixed message; the key is never printed, logged or written. The test reads the balance first and skips below 0.05 SUI.
@@ -865,11 +883,15 @@ Budget: about 25 `fetch_key` requests per run, spaced to stay under Mysten's 10 
 
 Cost per run, simulated on testnet on 2026-11-27 with a 16-byte nonce and 32 bytes of data: computation 1,000,000 MIST and storage about 1,990,000. **About 0.003 SUI, not refundable**: the published canary predates `private_data::destroy` (it is in the repository's source, not in the on-chain module), so each run leaves one small object behind. The wallet's 1.1 SUI covers about 350 runs. The measured figures and digests go in the test file's header, as in the Walrus tests.
 
+*As built (S7):* passed on the first funded run (2026-11-27): `store_entry` digest `3hekLPTi13dttyMaba1Qb2B5VZ9A8w5Fhh4ZGrmvnX5X`, gas 2,991,200 MIST (computation 1,000,000, storage 1,991,200, no rebate), as simulated. The id format `bcs(sender) ‖ nonce` is confirmed by the servers releasing the keys. `Approval.fromRecipe` is retried (1 s apart, 15 times) in case the fullnode has not indexed the new object yet.
+
 Not covered live: a policy package that has been upgraded (I1, P3), because no such package exists on testnet and publishing one is no longer cheap. **Publishing a package on testnet now costs about 1.045 SUI**: for a 1,138-byte module both the fullnode's simulation and `sui client publish --dry-run` (CLI 1.84.1) report computation 1,031,000,000 MIST and storage 13,436,800; devnet agrees; mainnet reports computation 1,000,000 for the same bytes, and testnet publishes from mid-2026 paid 1,000,000 (for example `5dbDEGeZ…`, 2026-07-28). A publish plus an upgrade would take about 2.1 SUI, twice the wallet. See open question 7.
 
 ### 6.5 Bundle report
 
 Add to `scripts/bundle-report.ts`, for Bun, esbuild and Rolldown: "seal: parse an encrypted object" (expect no curve code), "seal: encrypt with pinned keys" (`Envelope.seal`; expect the Effect baseline plus about 80 KB of noble), "seal: encrypt + decrypt" (the layer, gRPC `Objects`, `FetchHttpClient`), and `@mysten/seal` with a `SuiGrpcClient` under Rolldown for comparison (esbuild today: 428 / 128 KB). Add the rows to the README table. Acceptance: the first program contains neither `bls12-381` nor `quorum`; the second contains neither `HttpClient` nor `quorum`.
+
+*As built (S7):* the markers are strings that survive minification: noble's hash-to-curve DST (`BLS12381G1_XMD`) for BLS12-381, `QuorumFailed` for the quorum, and the service key `effect/HttpClient`. The script sets a non-zero exit code if a forbidden marker shows up under any bundler, and now sums every JS output for Bun and esbuild as it already did for Rolldown. Measured (KB min / gzip; Bun, esbuild, Rolldown): parse 91/31, 90/31, 97/31 (no BLS, quorum or `HttpClient`); pinned-key encryption 177/63, 175/63, 183/62 (BLS only); encrypt + decrypt 487/150, 481/150, 490/145; `@mysten/seal` encrypt + decrypt with `SuiGrpcClient` 471/141, 469/141, 470/136.
 
 ## 7. Risks
 
