@@ -8,6 +8,7 @@
  * stop in between: sponsorship, multi-party signing, offline signing.
  */
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import type { Address } from "./Address.ts"
 import * as Ptb from "./Ptb.ts"
@@ -22,6 +23,8 @@ export interface ResolveOptions<E = never, R = never> {
   readonly gasOwner?: Address
   readonly gasPrice?: bigint
   readonly gasBudget?: bigint
+  /** Refuse a resolved budget above this (`GasBudgetExceeded`). Without it the node's budget is still refused above 50 SUI. */
+  readonly maxGasBudget?: bigint
   readonly expiration?: T.TransactionExpiration
   /**
    * Default: `Resolve.auto` (address balance when it covers the budget, else coins).
@@ -29,29 +32,40 @@ export interface ResolveOptions<E = never, R = never> {
    * `Resolve.fixed(refs)`, or your own step.
    */
   readonly payment?: Resolve.PaymentStrategy<E, R>
+  /**
+   * Where the transaction is completed.
+   *
+   * - `"auto"` (default): on the node, as `"server"`, when the transport can
+   *   (`Transactions.resolve`: gRPC and GraphQL) and `payment` is the default,
+   *   `Resolve.auto` or `Resolve.fixed`; otherwise client-side. A server
+   *   attempt that fails with a non-retryable `RpcError` (a missing object,
+   *   gas the node can't select, an old node) is redone client-side, whose
+   *   errors are precise (`ObjectNotFound`, `InsufficientGas`).
+   * - `"server"`: `Resolve.balances` (coin/balance intents), then one verified
+   *   simulation on the node (`Resolve.server`). `Incomplete` if the transport
+   *   can't, `InvalidTransaction` with a custom payment strategy.
+   * - `"client"`: the client-side steps only (`Resolve.inputs`, `balances`,
+   *   `gasPrice`, `budget`, the payment strategy), every answer read here:
+   *   for independent verification, or a transport without `resolve`.
+   */
+  readonly resolve?: "auto" | "server" | "client"
 }
 
-/**
- * Draft -> TransactionData with the default pipeline.
- *
- * Object lookups and everything independent of them (gas price, chain info,
- * the gas owner's SUI balance and coins: `Resolve.prefetch`) run in one round
- * trip; then intents, the budget dry run and payment. The error type always
- * includes the default payment strategy's (`InsufficientGas`), which is what
- * runs when `payment` is not given.
- */
-export const resolve = <E = never, R = never>(draft: Ptb.Draft, options: ResolveOptions<E, R>) => {
-  const strategy: Resolve.PaymentStrategy<E | Resolve.DefaultPaymentError, R | Resolve.DefaultPaymentServices> = options.payment ??
+const basePlan = (draft: Ptb.Draft, options: ResolveOptions<any, any>): Resolve.Plan => ({
+  sender: options.sender,
+  draft,
+  ...(options.gasOwner && { gasOwner: options.gasOwner }),
+  ...(options.gasPrice !== undefined && { gasPrice: options.gasPrice }),
+  ...(options.gasBudget !== undefined && { gasBudget: options.gasBudget }),
+  ...(options.maxGasBudget !== undefined && { maxGasBudget: options.maxGasBudget }),
+  ...(options.expiration && { expiration: options.expiration })
+})
+
+/** The client-side pipeline. */
+const resolveClient = <E, R>(plan: Resolve.Plan, payment: Resolve.PaymentStrategy<E, R> | undefined) => {
+  const strategy: Resolve.PaymentStrategy<E | Resolve.DefaultPaymentError, R | Resolve.DefaultPaymentServices> = payment ??
     Resolve.auto
-  const plan: Resolve.Plan = {
-    sender: options.sender,
-    draft,
-    ...(options.gasOwner && { gasOwner: options.gasOwner }),
-    ...(options.gasPrice !== undefined && { gasPrice: options.gasPrice }),
-    ...(options.gasBudget !== undefined && { gasBudget: options.gasBudget }),
-    ...(options.expiration && { expiration: options.expiration })
-  }
-  return Effect.all([Resolve.inputs(plan), Resolve.prefetch(plan, { payment: options.payment === undefined })], {
+  return Effect.all([Resolve.inputs(plan), Resolve.prefetch(plan, { payment: payment === undefined })], {
     concurrency: "unbounded"
   }).pipe(
     Effect.map(([resolved, pre]): Resolve.Plan => ({
@@ -63,9 +77,79 @@ export const resolve = <E = never, R = never>(draft: Ptb.Draft, options: Resolve
     Effect.flatMap(Resolve.gasPrice),
     Effect.flatMap(Resolve.budget),
     Effect.flatMap(strategy),
-    Effect.flatMap(Resolve.finish),
-    Effect.withSpan("Tx.resolve")
+    Effect.flatMap(Resolve.finish)
   )
+}
+
+/**
+ * The payment the node can be handed: none (it selects), or a fixed non-empty
+ * one; `undefined` for a custom strategy, or `fixed([])`, which the node can't
+ * tell from "select one".
+ */
+const serverPayment = (
+  payment: Resolve.PaymentStrategy<any, any> | undefined
+): { readonly refs?: ReadonlyArray<T.ObjectRef> } | undefined =>
+  payment === undefined || payment === Resolve.auto
+    ? {}
+    : Array.isArray((payment as Partial<Resolve.FixedPayment>).payment) && (payment as Resolve.FixedPayment).payment.length > 0
+    ? { refs: (payment as Resolve.FixedPayment).payment }
+    : undefined
+
+/** Nothing to look up: every input resolved, no intents, price, budget and payment fixed. */
+const complete = (plan: Resolve.Plan) =>
+  plan.gasPrice !== undefined && plan.gasBudget !== undefined && plan.gasPayment !== undefined &&
+  Ptb.toProgrammable(plan.draft) !== undefined
+
+/**
+ * Draft -> TransactionData.
+ *
+ * By default on the node, in one verified `SimulateTransaction` with gas
+ * selection (`Resolve.server`, after `Resolve.balances` for coin/balance
+ * intents), as `@mysten/sui` does; see `resolve` in `ResolveOptions` for when
+ * it resolves client-side instead. Client-side, object lookups and everything
+ * independent of them (gas price, chain info, the gas owner's SUI balance and
+ * coins: `Resolve.prefetch`) run in one round trip; then intents, the budget
+ * dry run and payment. The error type always includes the default payment
+ * strategy's (`InsufficientGas`), which is what runs when `payment` is not given.
+ */
+export const resolve = <E = never, R = never>(draft: Ptb.Draft, options: ResolveOptions<E, R>) => {
+  const mode = options.resolve ?? "auto"
+  const plan = basePlan(draft, options)
+  const client = resolveClient(plan, options.payment)
+  const capped = (data: T.TransactionData) =>
+    options.maxGasBudget !== undefined && data.gasData.budget > options.maxGasBudget
+      ? Effect.fail(new Resolve.GasBudgetExceeded({ budget: data.gasData.budget, max: options.maxGasBudget }))
+      : Effect.succeed(data)
+  const payment = serverPayment(options.payment)
+  const withPayment: Resolve.Plan = payment?.refs ? { ...plan, gasPayment: payment.refs } : plan
+  // The node refuses gas selection for a sponsored transaction that uses the gas coin
+  // ("Gas object is not an owned object with owner: <sender>"), so that resolves client-side.
+  const sponsoredGasCoin = plan.gasOwner !== undefined && plan.gasOwner !== plan.sender && payment?.refs === undefined &&
+    Resolve.usesGasCoin(draft)
+  if (mode === "client" || (mode === "auto" && (payment === undefined || sponsoredGasCoin || complete(withPayment)))) {
+    return client.pipe(Effect.flatMap(capped), Effect.withSpan("Tx.resolve"))
+  }
+  const resolved = Effect.flatMap(Effect.serviceOption(Transactions), (service) => {
+    const transactions = Option.getOrUndefined(service)
+    if (mode === "auto" && transactions?.resolve === undefined) return client
+    if (transactions?.resolve === undefined) {
+      return Effect.fail(new Resolve.Incomplete({ missing: "server-side resolution (this Transactions transport has no resolve)" }))
+    }
+    if (payment === undefined) {
+      return Effect.fail(new Resolve.InvalidTransaction({
+        reason: "resolve: \"server\" lets the node pick the gas payment; a custom payment strategy needs resolve: \"client\""
+      }))
+    }
+    const serverSide = Effect.flatMap(Resolve.balances(withPayment), Resolve.server)
+    return mode === "server"
+      ? Effect.flatMap(serverSide, Resolve.finish)
+      : serverSide.pipe(
+        Effect.map(Option.some),
+        Effect.catchIf((e) => e._tag === "RpcError" && !e.retryable, () => Effect.succeedNone),
+        Effect.flatMap(Option.match({ onNone: () => client, onSome: Resolve.finish }))
+      )
+  })
+  return resolved.pipe(Effect.flatMap(capped), Effect.withSpan("Tx.resolve"))
 }
 
 /** Build a recipe and resolve it. */

@@ -10,6 +10,9 @@ import { HttpClient, HttpClientResponse } from "effect/http"
 import { Address, Chain, Checkpoints, Objects, Packages, RpcError, Transactions } from "@unconfirmed/sui"
 import * as SuiGraphQL from "../src/index.ts"
 import { rpcCode } from "../src/convert.ts"
+import { protoJson } from "../src/TransactionsGraphQL.ts"
+import { toProto } from "@unconfirmed/sui/grpc/transaction"
+import * as Bcs from "@unconfirmed/bcs/Bcs"
 
 const A = Address.normalize
 
@@ -685,5 +688,31 @@ describe("Objects.listOwned", () => {
       { owner: A("0x1"), first: 2, after: "a", type: "0x2::coin::Coin" },
       { owner: A("0x1"), first: 2, after: "b", type: "0x2::coin::Coin" }
     ])
+  })
+})
+
+describe("server-side resolution", () => {
+  const sender = Address.normalize("0x5e4d")
+  const CLOCK = Address.normalize("0x6")
+  const u64 = Bcs.encodeSync(Bcs.u64)
+  test("as proto3 JSON for GraphQL: camelCase keys, oneofs by member, u64 as strings, bytes as base64", () => {
+    const json = protoJson(toProto({
+      sender,
+      gasOwner: sender,
+      inputs: [{ _tag: "UnresolvedObject", objectId: CLOCK }, { _tag: "Pure", bytes: u64(1000n) }],
+      commands: [{ _tag: "SplitCoins", coin: { _tag: "GasCoin" }, amounts: [{ _tag: "Input", value: 1 }] }],
+      gasBudget: 5n
+    }))
+    expect(json).toEqual({
+      version: 1,
+      kind: {
+        programmableTransaction: {
+          inputs: [{ objectId: CLOCK }, { kind: 1, pure: "6AMAAAAAAAA=" }],
+          commands: [{ splitCoins: { coin: { kind: 1 }, amounts: [{ kind: 2, input: 1 }] } }]
+        }
+      },
+      sender,
+      gasPayment: { objects: [], owner: sender, budget: "5" }
+    })
   })
 })
