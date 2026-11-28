@@ -32,6 +32,7 @@ import type { Coins } from "./Coins.ts"
 import * as Allowances from "./internal/allowances.ts"
 import type { Objects } from "./Objects.ts"
 import type { AllowanceError, InsufficientBalance, InvalidBalanceIntent, Plan } from "./Resolve.ts"
+import * as Resolve from "./Resolve.ts"
 import type { RpcError } from "./RpcError.ts"
 import * as T from "./TransactionData.ts"
 import * as TypeTag from "./TypeTag.ts"
@@ -117,10 +118,15 @@ export class InvalidPureValue extends /* @__PURE__ */ Schema.TaggedError<Invalid
 const attempt = <A>(f: () => A): Effect.Effect<A, InvalidPureValue> =>
   Effect.try({ try: f, catch: (e) => new InvalidPureValue({ issue: e instanceof Error ? e.message : String(e) }) })
 
+/**
+ * The builder's state for one build. Internal: recipes use the `Ptb`
+ * functions, and `memo` for anything that must happen once per build.
+ */
 interface MutableDraft {
   inputs: Array<Input>
   commands: Array<Command>
   objectIndex: Map<string, number>
+  memo?: Map<unknown, Effect.Effect<any, any, any>>
 }
 
 export class PtbBuilder extends /* @__PURE__ */ Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/sui/PtbBuilder") {}
@@ -191,17 +197,59 @@ export const object = (objectId: string, options?: { readonly mutable?: boolean 
  * An already-resolved object input (offline builds, sponsored flows),
  * deduplicated by id together with `object` and `sharedObject`.
  */
-export const objectArg = (arg: T.ObjectArg) =>
-  Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {
-    const existing = d.objectIndex.get(arg.objectId)
-    if (existing !== undefined) {
-      if (arg._tag === "SharedObject" && arg.mutability._tag === "Mutable") widen(d, existing)
-      return { _tag: "Input", value: existing }
-    }
-    d.inputs.push({ _tag: "Object", value: arg })
-    d.objectIndex.set(arg.objectId, d.inputs.length - 1)
-    return { _tag: "Input", value: d.inputs.length - 1 }
-  })
+export const objectArg = (arg: T.ObjectArg) => Effect.map(Effect.service(PtbBuilder), (d) => addObject(d, arg))
+
+const addObject = (d: MutableDraft, arg: T.ObjectArg): T.Argument => {
+  const existing = d.objectIndex.get(arg.objectId)
+  if (existing !== undefined) {
+    if (arg._tag === "SharedObject" && arg.mutability._tag === "Mutable") widen(d, existing)
+    return { _tag: "Input", value: existing }
+  }
+  d.inputs.push({ _tag: "Object", value: arg })
+  d.objectIndex.set(arg.objectId, d.inputs.length - 1)
+  return { _tag: "Input", value: d.inputs.length - 1 }
+}
+
+/** An object at a known version: its id, version and digest, as another source gives them (the digest as base58 text). */
+export interface ObjectReference {
+  readonly objectId: string
+  readonly version: bigint
+  readonly digest: string
+}
+
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+/**
+ * A base58 string of exactly 32 bytes (leading `1`s are zero bytes). Checked
+ * here rather than through the BCS schema or a base58 codec, which would ship
+ * 3–20 KB more with every generated call.
+ */
+const isDigest = (s: unknown): s is T.ObjectDigest => {
+  if (typeof s !== "string" || s.length === 0 || s.length > 44) return false
+  let n = 0n
+  let zeros = 0
+  for (const c of s) {
+    const d = B58.indexOf(c)
+    if (d < 0) return false
+    if (n === 0n && d === 0) zeros++
+    n = n * 58n + BigInt(d)
+  }
+  const hex = n === 0n ? "" : n.toString(16)
+  return zeros + Math.ceil(hex.length / 2) === 32
+}
+
+/** `objectArg` for a reference given as plain values: the id normalized, the version and digest checked. */
+const reference = (_tag: "ImmOrOwnedObject" | "Receiving", ref: ObjectReference) =>
+  Effect.flatMap(attempt(() => Address.normalize(ref.objectId)), (objectId) =>
+    typeof ref.version === "bigint" && ref.version >= 0n && ref.version <= U64_MAX && isDigest(ref.digest)
+      ? objectArg({ _tag, objectId, version: ref.version, digest: ref.digest })
+      : Effect.fail(new InvalidPureValue({ issue: `invalid object reference ${objectId}: version ${ref.version}, digest ${ref.digest}` })))
+
+/** An owned or immutable object at a known version (`ImmOrOwnedObject`). An invalid id, version or digest is `InvalidPureValue`. */
+export const owned = (ref: ObjectReference) => reference("ImmOrOwnedObject", ref)
+
+/** An object sent to another object, received at a known version (`Receiving`, for a `Receiving<T>` parameter). */
+export const receiving = (ref: ObjectReference) => reference("Receiving", ref)
 
 // -----------------------------------------------------------------------------
 // Commands
@@ -441,3 +489,91 @@ export const toProgrammable = (draft: Draft): T.ProgrammableTransaction | undefi
     draft.commands.every((c) => c._tag !== "BalanceIntent" && c._tag !== "AllowanceIntent")
     ? { inputs: draft.inputs as ReadonlyArray<T.CallArg>, commands: draft.commands as ReadonlyArray<T.Command> }
     : undefined
+
+/**
+ * Run `effect` once per build: the first use of `key` in a build runs it, and
+ * every later use in the same build (concurrent ones included) gets its
+ * result. A new build starts with no memos. For steps that must appear once
+ * per transaction however many recipes ask for them (registering a key, one
+ * shared setup call). `key` is compared by identity (`Map` semantics): use a
+ * string, a symbol or an object owned by the caller, one per kind of step.
+ */
+export const memo = <A, E, R>(key: unknown, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R | PtbBuilder> =>
+  Effect.flatMap(Effect.service(PtbBuilder), (d) => {
+    const memos = d.memo ??= new Map()
+    const hit = memos.get(key) as Effect.Effect<A, E, R> | undefined
+    if (hit !== undefined) return hit
+    return Effect.flatMap(Effect.cached(effect), (once) => {
+      const raced = memos.get(key) as Effect.Effect<A, E, R> | undefined
+      if (raced !== undefined) return raced
+      memos.set(key, once)
+      return once
+    })
+  })
+
+/**
+ * Build a recipe whose inputs are all resolved (`objectArg`, `owned`,
+ * `receiving`, `sharedObject`, pure values) to `TransactionKind` bytes:
+ * what `@mysten/sui` gives for `tx.build({ onlyTransactionKind: true })`.
+ * An input left for the resolver (`Ptb.object(id)`) or a coin/balance intent
+ * is `Incomplete`; a command using a later result is `InvalidTransaction`.
+ */
+export const buildKind = <A, E, R>(
+  recipe: Effect.Effect<A, E, R>
+): Effect.Effect<
+  { readonly value: A; readonly bytes: Uint8Array },
+  E | Resolve.Incomplete | Resolve.InvalidTransaction,
+  Exclude<R, PtbBuilder>
+> =>
+  Effect.flatMap(build(recipe), ({ value, draft }): Effect.Effect<
+    { readonly value: A; readonly bytes: Uint8Array },
+    Resolve.Incomplete | Resolve.InvalidTransaction
+  > => {
+    const programmable = toProgrammable(draft)
+    if (programmable === undefined) {
+      return Effect.fail(
+        new Resolve.Incomplete({ missing: "resolved inputs: buildKind takes no Ptb.object(id) inputs and no coin/balance intents" })
+      )
+    }
+    return Effect.map(Resolve.encodeKind({ _tag: "ProgrammableTransaction", ...programmable }), (bytes) => ({ value, bytes }))
+  })
+
+const decodeKind = /* @__PURE__ */ Bcs.decode(T.TransactionKind)
+
+/**
+ * A recipe step that adds the inputs and commands of `TransactionKind` bytes
+ * (from `buildKind`, or `@mysten/sui`'s `onlyTransactionKind`) to the current
+ * build, as `Transaction.fromKind` does. Built alone, it gives the same kind
+ * bytes back; later steps can use its inputs and results. An object it
+ * shares with earlier steps becomes one input. Bytes that aren't a
+ * programmable transaction kind are `InvalidTransaction`.
+ */
+export const fromKind = (bytes: Uint8Array) =>
+  Effect.flatMap(Effect.service(PtbBuilder), (d) => {
+    const decoded = decodeKind(bytes)
+    if (Result.isFailure(decoded)) {
+      return Effect.fail(new Resolve.InvalidTransaction({ reason: `not TransactionKind bytes: ${decoded.failure.message}` }))
+    }
+    const kind = decoded.success
+    const bad = Resolve.checkReferences(kind)
+    if (bad) return Effect.fail(bad)
+    const inputs = kind.inputs.map((input): T.Argument => {
+      if (input._tag === "Object") return addObject(d, input.value)
+      d.inputs.push(input)
+      return { _tag: "Input", value: d.inputs.length - 1 }
+    })
+    const offset = d.commands.length
+    const remap = (a: T.Argument): T.Argument =>
+      a._tag === "Input"
+        ? inputs[a.value]!
+        : a._tag === "Result"
+        ? { _tag: "Result", value: a.value + offset }
+        : a._tag === "NestedResult"
+        ? { _tag: "NestedResult", value: [a.value[0] + offset, a.value[1]] }
+        : a
+    for (const c of kind.commands) d.commands.push(Resolve.mapArguments(c, remap))
+    return Effect.succeed({
+      inputs,
+      results: kind.commands.map((_, i): T.Argument => ({ _tag: "Result", value: offset + i }))
+    })
+  })

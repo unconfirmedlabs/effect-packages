@@ -134,7 +134,7 @@ describe("submit", () => {
     )
     expect(error._tag).toBe("ExecutionFailed")
     expect(Outcome.outcome(error)).toBe("applied")
-    expect(error._tag === "ExecutionFailed" && error.abortCode).toBe(7n)
+    expect(error._tag === "ExecutionFailed" && error.abort?.code).toBe(7n)
     expect(tag).toBe("Failed")
   })
 

@@ -15,9 +15,11 @@ import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/sui-lifecycle"
 import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb"
 import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
 import type { Address } from "@unconfirmed/sui/Address"
+import * as AddressAlias from "@unconfirmed/sui/AddressAlias"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
 import * as Ptb from "@unconfirmed/sui/Ptb"
 import * as Resolve from "@unconfirmed/sui/Resolve"
+import type * as Signer from "@unconfirmed/sui/Signer"
 import type * as TransactionData from "@unconfirmed/sui/TransactionData"
 import * as Tx from "@unconfirmed/sui/Tx"
 import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
@@ -89,6 +91,40 @@ export const balances = (recipe: typeof aRecipe) =>
     // Or by hand: withdrawals and deposits
     const w = yield* Ptb.withdrawal({ amount, type, from: "sender" })           // or "sponsor" / { allowance, funder }
     yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), type)
+    // #endregion
+  })
+
+export const fold = Effect.gen(function*() {
+  // #region readme
+  // Fold every SUI coin into the address balance, in one transaction: a command uses the
+  // gas coin, so every coin pays gas, and send_funds deposits what is left of it.
+  yield* Tx.run(Effect.gen(function*() {
+    yield* Ptb.sendFunds(Ptb.gas, yield* Ptb.address(signer.address))
+  }), { signer })
+  // #endregion
+})
+
+export const kinds = (recipe: typeof aRecipe, registerKey: typeof aRecipe) =>
+  Effect.gen(function*() {
+    // #region readme
+    const { bytes } = yield* Ptb.buildKind(recipe)          // TransactionKind bytes (Mysten's onlyTransactionKind): every input resolved
+    const more = Effect.gen(function*() {
+      const { results } = yield* Ptb.fromKind(bytes)       // the same inputs and commands, to build on
+      yield* Ptb.memo("register-key", registerKey)         // once per build, however many steps ask for it
+    })
+    const digest = yield* Tx.digest(data)                   // of resolved data, to sign and submit apart
+    const { effects, returnValues } = yield* Tx.simulate(recipe, { sender })   // build, then simulate: a failure is SimulationFailed
+    // #endregion
+  })
+
+export const aliases = (recipe: typeof aRecipe, owner: Signer.Signer, key: Signer.Signer) =>
+  Effect.gen(function*() {
+    // #region readme
+    const set = yield* AddressAlias.get(owner.address)       // { enabled, aliases, objectId }; never enabled: [owner.address]
+    yield* Tx.run(AddressAlias.enable, { signer: owner })     // then add / remove / replaceAll, at most MAX_ALIASES (8)
+    yield* Tx.run(AddressAlias.add(owner.address, key.address), { signer: owner })
+    const asOwner = yield* AddressAlias.checkedSigner(owner.address, key)  // AliasNotAllowed unless key is in the set
+    yield* Tx.run(recipe, { signer: asOwner })                // sender owner.address, signed by key
     // #endregion
   })
 

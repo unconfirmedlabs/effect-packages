@@ -378,17 +378,31 @@ describe("Tx.resolve picks a path", () => {
     expect(calls).not.toContain("getObject")
   })
 
-  test("a simulated abort is GasEstimationFailed with the abort details", async () => {
+  test("a simulated abort is GasEstimationFailed with the structured abort", async () => {
     const failed = effects([])
     const { exit } = await resolveWith(() =>
       Effect.succeed({
         transaction: T.encode(clockAnswer),
-        effects: { ...failed, status: { _tag: "Failure", description: "MoveAbort", command: 0, abortCode: 7n } },
+        effects: {
+          ...failed,
+          status: {
+            _tag: "Failure",
+            description: "MoveAbort(MoveLocation { .. }, 7) in command 0",
+            command: 0,
+            abortCode: 7n,
+            location: { package: A("0x2"), module: "clock", function: "timestamp_ms", instruction: 3 },
+            cleverError: { errorCode: undefined, lineNumber: 12n, constantName: "ENope", constantType: "vector<u8>", rendered: "nope" }
+          }
+        },
         epoch: 5n
       })
     )
     const error = Exit.isFailure(exit) ? exit.cause.reasons[0] : undefined
-    expect(error && "error" in error && error.error).toMatchObject({ _tag: "GasEstimationFailed", command: 0, abortCode: 7n })
+    expect(error && "error" in error && error.error).toMatchObject({
+      _tag: "GasEstimationFailed",
+      command: 0,
+      abort: { code: 7n, package: A("0x2"), module: "clock", function: "timestamp_ms", instruction: 3, constant: "ENope", line: 12, rendered: "nope" }
+    })
   })
 
   test("server: no fallback, and a transport without resolve or a custom strategy is refused", async () => {

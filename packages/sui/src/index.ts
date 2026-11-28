@@ -8,6 +8,7 @@
  * Other schemes are packages: `@unconfirmed/sui-secp256k1`, `-secp256r1`, `-multisig`, ...
  */
 export * as Address from "./Address.ts"
+export * as AddressAlias from "./AddressAlias.ts"
 export * as Chain from "./Chain.ts"
 export * as CheckpointData from "./CheckpointData.ts"
 export * as Checkpoints from "./Checkpoints.ts"

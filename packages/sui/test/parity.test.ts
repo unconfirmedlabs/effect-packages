@@ -8,8 +8,8 @@ import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
 import { base58 } from "@scure/base"
 import { Bcs } from "@unconfirmed/bcs"
 import { describe, expect, test } from "bun:test"
-import { Effect, Option, Result } from "effect"
-import { Address, Ed25519, Hash, Ptb, Signer, TransactionData as T, TypeTag } from "../src/index.ts"
+import { Context, Effect, Option, Result } from "effect"
+import { Address, Ed25519, Hash, Move, Ptb, Signer, TransactionData as T, Tx, TypeTag } from "../src/index.ts"
 import { toB64, toMysten } from "./support.ts"
 
 const A = Address.normalize
@@ -100,6 +100,67 @@ describe("Ptb", () => {
     tx.transferObjects([coins[0]!, coins[1]!], tx.pure.address(A("0xcafe")))
     tx.moveCall({ target: "0x2::coin::value", typeArguments: ["0x2::sui::SUI"], arguments: [tx.gas] })
     expect(toB64(ours)).toBe(toB64(await tx.build()))
+  })
+})
+
+describe("kind bytes (generated-call refs, buildKind, fromKind, digest)", () => {
+  const Package = Context.Reference<string>("test/pool", { defaultValue: () => A("0xabc") })
+  const pool = { objectId: A("0x5001"), initialSharedVersion: 7n, mutable: true }
+  const cap = { objectId: A("0xca9"), version: 3n, digest: D(4) }
+  const parcel = { objectId: A("0xb0c"), version: 2n, digest: D(5) }
+  // As a generated `pool::deposit(amount: u64, pool: &mut Pool, cap: &Cap, parcel: Receiving<Parcel>): Coin`.
+  const deposit = (amount: bigint, args: ReadonlyArray<Move.ObjectInput>) =>
+    Move.call(Package, "pool::deposit", [], [Move.pure(Bcs.u64, amount), ...args.map(Move.obj)], 1)
+  const mysten = () => {
+    const tx = new Transaction()
+    tx.moveCall({
+      target: `${A("0xabc")}::pool::deposit`,
+      arguments: [
+        tx.pure.u64(5),
+        tx.sharedObjectRef({ ...pool, initialSharedVersion: "7" }),
+        tx.objectRef({ ...cap, version: "3" }),
+        tx.receivingRef({ ...parcel, version: "2" })
+      ]
+    })
+    return tx
+  }
+
+  test("shared, owned and receiving refs are added in parameter order: buildKind equals onlyTransactionKind", async () => {
+    const ours = await Effect.runPromise(
+      Ptb.buildKind(deposit(5n, [pool, { ...cap, digest: String(cap.digest) }, Ptb.receiving(parcel)]))
+    )
+    expect(toB64(ours.bytes)).toBe(toB64(await mysten().build({ onlyTransactionKind: true })))
+    const unresolved = await Effect.runPromise(Effect.flip(Ptb.buildKind(deposit(5n, ["0x5001", cap, Ptb.receiving(parcel)]))))
+    expect(unresolved._tag).toBe("Incomplete")
+  })
+
+  test("fromKind rebuilds the kind and extends it as Transaction.fromKind does; Tx.digest equals getDigest", async () => {
+    const kind = await mysten().build({ onlyTransactionKind: true })
+    const roundTrip = await Effect.runPromise(Ptb.buildKind(Ptb.fromKind(kind)))
+    expect(toB64(roundTrip.bytes)).toBe(toB64(kind))
+
+    const extended = await Effect.runPromise(Ptb.build(Effect.gen(function*() {
+      const { results } = yield* Ptb.fromKind(kind)
+      yield* Ptb.moveCall({ target: `${A("0xabc")}::pool::touch`, arguments: [yield* Ptb.sharedObject(pool.objectId, 7n, false)] })
+      yield* Ptb.transferObjects([Ptb.nested(results[0]!, 0)], yield* Ptb.address(sender))
+    })))
+    const data: T.TransactionData = {
+      _tag: "V1",
+      kind: { _tag: "ProgrammableTransaction", ...Ptb.toProgrammable(extended.draft)! },
+      sender,
+      gasData: { payment: [gasRef], owner: sender, price: 1000n, budget: 10_000_000n },
+      expiration: { _tag: "None" }
+    }
+    const tx = Transaction.fromKind(kind)
+    tx.moveCall({ target: `${A("0xabc")}::pool::touch`, arguments: [tx.sharedObjectRef({ ...pool, initialSharedVersion: "7", mutable: false })] })
+    tx.transferObjects([{ $kind: "NestedResult", NestedResult: [0, 0] }], tx.pure.address(sender))
+    tx.setSender(sender)
+    tx.setGasPrice(1000)
+    tx.setGasBudget(10_000_000)
+    tx.setGasPayment([{ ...gasRef, version: "9" }])
+    tx.setExpiration({ None: true })
+    expect(toB64(T.encode(data))).toBe(toB64(await tx.build()))
+    expect(await Effect.runPromise(Tx.digest(data))).toBe(await tx.getDigest())
   })
 })
 

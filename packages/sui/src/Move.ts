@@ -137,8 +137,32 @@ export type TypeOf<F> = F extends (...args: ReadonlyArray<any>) => infer S ? S e
 
 export type Argument = T.Argument
 
-/** An object parameter: an object id, or an argument (an earlier result, `Ptb.object(...)`, ...). */
-export type ObjectInput = string | Argument
+/** A shared object whose initial shared version is known: no lookup, and the input is added in parameter order. */
+export interface SharedRef {
+  readonly objectId: string
+  readonly initialSharedVersion: bigint
+  readonly mutable: boolean
+}
+
+/**
+ * An object parameter:
+ * - an object id (the resolver looks it up);
+ * - a `SharedRef` (`{ objectId, initialSharedVersion, mutable }`) or an owned
+ *   `Ptb.ObjectReference` (`{ objectId, version, digest }`), used as given;
+ * - an argument (an earlier result, an input already added);
+ * - an unrun step that makes the argument (`Ptb.receiving(ref)`,
+ *   `Ptb.sharedObject(...)`, `Ptb.object(id, { mutable })`).
+ *
+ * Everything but an argument becomes an input when the call adds its
+ * arguments, in parameter order, so the inputs line up as `@mysten/sui` adds
+ * them for the same call. Inputs are deduplicated by object id.
+ */
+export type ObjectInput =
+  | string
+  | Argument
+  | SharedRef
+  | Ptb.ObjectReference
+  | Effect.Effect<Argument, Ptb.InvalidPureValue, Ptb.PtbBuilder>
 
 /** A pure parameter: the plain value, or an argument. */
 export type Input<V> = V | Argument
@@ -146,9 +170,9 @@ export type Input<V> = V | Argument
 /** An `Option<T>` parameter: an `Option`, a bare value (`Some`), `undefined` (`None`), or an argument. */
 export type OptionInput<V> = Option.Option<V> | V | undefined | Argument
 
-/** A value for a generic `T` parameter: encoded by the type argument when it's pure, else an object id. */
+/** A value for a generic `T` parameter: encoded by the type argument when it's pure, else an object (`ObjectInput`). */
 export type GenericInput =
-  | Argument
+  | ObjectInput
   | string
   | number
   | bigint
@@ -168,8 +192,17 @@ export const isArgument = (u: unknown): u is Argument =>
 /** Pick the positional or named form of `arguments`. */
 export const isTuple = <A>(a: A): a is Extract<A, ReadonlyArray<unknown>> => Array.isArray(a)
 
-/** An object parameter. An id becomes an object input the resolver looks up. */
-export const obj = (input: ObjectInput): Arg<Ptb.InvalidPureValue> => isArgument(input) ? Effect.succeed(input) : Ptb.object(input)
+/** An object parameter (`ObjectInput`). An id becomes an object input the resolver looks up. */
+export const obj = (input: ObjectInput): Arg<Ptb.InvalidPureValue> =>
+  typeof input === "string"
+    ? Ptb.object(input)
+    : Effect.isEffect(input)
+    ? input
+    : isArgument(input)
+    ? Effect.succeed(input)
+    : "initialSharedVersion" in input
+    ? Ptb.sharedObject(input.objectId, input.initialSharedVersion, input.mutable)
+    : Ptb.owned(input)
 
 /** A pure parameter, encoded by its schema. */
 export const pure = <A, E>(schema: Schema.Codec<A, E>, input: A | Argument): Arg<Ptb.InvalidPureValue> =>
@@ -236,6 +269,9 @@ export const pureSchemaOf = (tag: TypeTag.TypeTag): Schema.Top | undefined => {
 export const param = (typeArgument: string, input: GenericInput): Arg<Ptb.InvalidPureValue> =>
   Effect.suspend(() => {
     if (isArgument(input)) return Effect.succeed(input)
+    if (Effect.isEffect(input) || (typeof input === "object" && input !== null && "objectId" in input)) {
+      return obj(input as ObjectInput)
+    }
     let tag: TypeTag.TypeTag
     try {
       tag = TypeTag.parse(typeArgument)

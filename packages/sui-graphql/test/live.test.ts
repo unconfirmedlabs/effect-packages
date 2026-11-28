@@ -8,6 +8,7 @@ import { Effect, Layer, Schedule, Stream } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import {
   Address,
+  AddressAlias,
   Chain,
   CheckpointData,
   Checkpoints,
@@ -177,6 +178,24 @@ suite("testnet parity with gRPC", () => {
     expect(q.sim.returnValues.length).toBe(g.sim.returnValues.length)
     const ms = (v: Uint8Array) => Number(Bcs.decodeSync(Bcs.u64)(v))
     expect(Math.abs(ms(q.sim.returnValues[0]![0]!) - ms(g.sim.returnValues[0]![0]!))).toBeLessThan(120_000)
+  })
+
+  test("an address's alias set reads alike; re-enabling it aborts as SimulationFailed with the same structured abort", async () => {
+    // A testnet address that enabled aliases (an alias set can't be deleted).
+    const owner = A("0x50044dc5ec176a977766842b2fbb939826c829dd9b322da8668037deb9aabc6e")
+    const [g, q] = await both(Effect.gen(function*() {
+      const aliases = yield* AddressAlias.get(owner)
+      const failed = yield* Effect.flip(Tx.simulate(AddressAlias.enable, { sender: owner, payment: Resolve.unchecked }))
+      return { aliases, failed }
+    }))
+    expect(g.aliases).toMatchObject({ enabled: true, objectId: AddressAlias.aliasesId(owner) })
+    expect(q.aliases).toEqual(g.aliases)
+    expect(g.failed).toMatchObject({
+      _tag: "SimulationFailed",
+      command: 0,
+      abort: { code: 2n, package: A("0x2"), module: "address_alias", function: "enable", constant: "EAliasAlreadyExists" }
+    })
+    expect(q.failed._tag === "SimulationFailed" && q.failed.abort).toEqual(g.failed._tag === "SimulationFailed" && g.failed.abort)
   })
 
   test("concurrent gets are one multiGetObjects request", async () => {
