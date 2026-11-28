@@ -9,7 +9,9 @@
  */
 import * as Bytes from "@unconfirmed/bcs/Bytes"
 import * as Address from "@unconfirmed/sui/Address"
+import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
 import * as Effect from "effect/Effect"
+import * as Result from "effect/Result"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"
 import * as Parse from "./internal/parse.ts"
 import { BN254_FIELD_SIZE } from "./internal/poseidon.ts"
@@ -46,9 +48,21 @@ export const encode = (addressSeed: bigint, iss: string, legacyAddress: boolean)
   return out
 }
 
+/** `make`, synchronously: a `Result` instead of an `Effect`. */
+export const makeResult = (addressSeed: bigint, iss: string): Result.Result<Uint8Array, InvalidZkLoginInput> =>
+  Result.try({ try: () => encode(addressSeed, iss, false), catch: (e) => new InvalidZkLoginInput({ reason: reasonOf(e) }) })
+
 /** The (padded) public identifier for an address seed and issuer. */
 export const make = (addressSeed: bigint, iss: string): Effect.Effect<Uint8Array, InvalidZkLoginInput> =>
-  Effect.try({ try: () => encode(addressSeed, iss, false), catch: (e) => new InvalidZkLoginInput({ reason: reasonOf(e) }) })
+  Effect.fromResult(makeResult(addressSeed, iss))
+
+/**
+ * Identifier bytes as a zkLogin `PublicKey` (flag 0x05): a multisig member, or the key
+ * `SignatureScheme.toSuiBytes` / `Address.fromPublicKey` take.
+ *
+ *   const pk = Result.map(PublicIdentifier.makeResult(addressSeed, iss), PublicIdentifier.toPublicKey)
+ */
+export const toPublicKey = (bytes: Uint8Array): SignatureScheme.PublicKey => ({ flag: FLAG, bytes })
 
 export interface Parsed {
   readonly iss: string

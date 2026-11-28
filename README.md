@@ -26,6 +26,18 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/walrus-wasm` | Our WebAssembly build of `walrus-core` 1.62.0 with SIMD: RS2 encode/decode, direct per-sliver Merkle roots, BLS12-381; byte-identical to `@mysten/walrus-wasm` 0.3.1 and about 5× faster. Built artifacts committed; `bun run build` reproduces them | — |
 | `@unconfirmed/seal` | Seal: threshold identity-based encryption to key servers registered on Sui (independent and committee), session keys (key or wallet signer, one prompt), `seal_approve` approvals, key fetching over `Quorum` with every key verified, decryption. The crypto core (BLS12-381, Shamir, KDF, DEMs, the encrypted object) is pure and usable offline | `@noble/curves`, `@noble/hashes`, `@scure/base` |
 
+### BCS
+
+`@unconfirmed/bcs` declares BCS layouts as Effect Schemas: one declaration is the TypeScript type, the validator and the codec.
+
+```ts nocheck
+const Head = Bcs.struct({ version: Bcs.u8, packageId: Bcs.Address, id: Bcs.byteVector })
+Bcs.decode(Head)(bytes)          // Result<Head, BcsDecodeError | SchemaError>; trailing bytes are an error
+Bcs.decodePrefix(Head)(bytes)    // Result<{ value, rest }>: the head of a larger value, and the bytes after it
+```
+
+`Bcs.Address` (account addresses and object ids) is a `0x` + 64 lowercase hex string, branded `"Address"`.
+
 ### Passkeys
 
 ```ts
@@ -374,16 +386,33 @@ const keys = yield* PrivateKey.decodeKeystore(json)                       // and
 **Mnemonics** live in `@unconfirmed/sui-mnemonic`, so the BIP39 wordlist never reaches the core. Derivation gives secret keys (the package doesn't depend on the scheme packages), plus an Ed25519 `Signer` shortcut:
 
 ```ts
-import * as Mnemonic from "@unconfirmed/sui-mnemonic"
+import * as Mnemonic from "@unconfirmed/sui-mnemonic/Mnemonic"
+import * as Bip32 from "@unconfirmed/sui-mnemonic/Bip32"
 
 const m = yield* Mnemonic.generate()                                        // 12 words; 24 with generate(24)
 const signer = yield* Mnemonic.ed25519Signer(m)                             // m/44'/784'/0'/0'/0'
-const k1 = yield* Secp256k1.fromSecretKey(yield* Mnemonic.secp256k1SecretKey(m, { account: 1 }))  // m/54'/784'/1'/0/0
+const k1 = yield* Secp256k1.fromSecretKey(yield* Bip32.secp256k1SecretKey(m, { account: 1 }))     // m/54'/784'/1'/0/0
 const seed = yield* Mnemonic.toSeed(m)                                      // derive many keys without re-running PBKDF2
 const pq = yield* MlDsa65.fromSecretKey(yield* Mnemonic.mldsa65SecretKey(seed, "m/94'/784'/0'/0'/3'"))
 ```
 
-Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`.
+Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`. Ed25519 and ML-DSA-65 (SLIP-0010) are in `Mnemonic`, which never imports `@scure/bip32`; Secp256k1/r1 (BIP32) are in `Bip32`. The package root re-exports both, so importing it loads BIP32 in an unbundled runtime (bundlers drop it either way).
+
+**Without Effect.** Derivations that can't wait on anything also come as `…Result`: the same checks, returning Effect's `Result` instead of an `Effect`, for code that only derives keys and addresses. The Effect versions stay (`fromSecretKey` is `Effect.fromResult(fromSecretKeyResult(sk))`); a `…Sync` name, as in `Bcs.encodeSync`, throws instead.
+
+```ts
+import * as Result from "effect/Result"
+import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
+import * as Passkey from "@unconfirmed/sui-passkey"
+
+const ed = Result.getOrThrow(Ed25519.fromSecretKeyResult(sk))             // also Secp256k1/r1.fromSecretKeyResult
+const multi = MultiSig.publicKeyResult({ members: [{ publicKey: ed.publicKey, weight: 1 }], threshold: 1 })
+const zk = Result.map(PublicIdentifier.makeResult(addressSeed, iss), PublicIdentifier.toPublicKey)  // flag 0x05
+const passkey = Passkey.publicKeyResult(storedPasskeyKey)                 // flag 0x06, from the 33-byte compressed key
+const ok = Ed25519.verifyRaw(ed.publicKey.bytes, message, signature)      // over the raw message, as Move's ed25519_verify
+```
+
+`verifyRaw` is for signatures over bytes that aren't a Sui intent message (a Nautilus enclave's, say); transactions and personal messages verify through the schemes.
 
 **ML-DSA-65** (`@unconfirmed/sui-mldsa65`, flag `0x07`) is FIPS 204 post-quantum signing: 1952-byte public keys, 3309-byte signatures, over the same `blake2b256(intentMessage)` the other schemes sign. Install it like any scheme, and it works as a multisig member. Devnet executes both kinds of transaction (`packages/sui-mldsa65/test/live.devnet.test.ts`).
 

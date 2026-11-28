@@ -45,3 +45,16 @@ describe("SignatureSchemes", () => {
     expect(v.publicKey.flag).toBe(0x42)
   })
 })
+
+test("Ed25519.verifyRaw checks a signature over the message itself (RFC 8032, test 2), as Move's ed25519_verify", async () => {
+  const hex = (s: string) => Uint8Array.from(Buffer.from(s, "hex"))
+  const publicKey = hex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")
+  const signature = hex(
+    "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"
+  )
+  const message = hex("72")
+  // The intent-message path signs blake2b256(message), so the same signature does not verify there.
+  const viaScheme = await Effect.runPromise(Effect.exit(Ed25519.scheme.verifyMember!(publicKey, signature, message, undefined as never)))
+  expect([Ed25519.verifyRaw(publicKey, message, signature), Ed25519.verifyRaw(publicKey, hex("73"), signature), viaScheme._tag])
+    .toEqual([true, false, "Failure"])
+})

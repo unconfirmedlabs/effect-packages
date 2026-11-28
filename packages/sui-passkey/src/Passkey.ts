@@ -90,7 +90,6 @@ const SPKI_HEADER = Uint8Array.from([
   0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00
 ])
 
-
 const invalidKey = (reason: string) => new Signer.InvalidKey({ scheme: NAME, reason })
 
 /** The compressed public key in a P-256 DER SubjectPublicKeyInfo, as WebAuthn returns it on creation. */
@@ -128,6 +127,22 @@ export const spkiFromPublicKey = (publicKey: Uint8Array): Effect.Effect<Uint8Arr
 
 /** `blake2b256(0x06 || publicKey)`. */
 export const address = (publicKey: Uint8Array): Address.Address => Address.fromPublicKey(FLAG, publicKey)
+
+/**
+ * A compressed P-256 key (33 bytes, as `create` / `recover` give it) as a passkey `PublicKey`
+ * (flag 0x06), checked to be on the curve: a multisig member, or an address without a provider.
+ */
+export const publicKeyResult = (compressed: Uint8Array): Result.Result<SignatureScheme.PublicKey, Signer.InvalidKey> => {
+  if (compressed.length !== PUBLIC_KEY_SIZE) {
+    return Result.fail(invalidKey(`expected a ${PUBLIC_KEY_SIZE}-byte compressed P-256 key, got ${compressed.length} bytes`))
+  }
+  try {
+    p256.Point.fromBytes(compressed)
+  } catch {
+    return Result.fail(invalidKey("public key is not on P-256"))
+  }
+  return Result.succeed({ flag: FLAG, bytes: compressed.slice() })
+}
 
 // -----------------------------------------------------------------------------
 // Verification
@@ -287,19 +302,13 @@ export const fromPublicKey = (
   publicKey: Uint8Array,
   options?: { readonly credentialId?: Uint8Array | undefined }
 ): Effect.Effect<PasskeySigner, Signer.InvalidKey> => {
-  if (publicKey.length !== PUBLIC_KEY_SIZE) {
-    return Effect.fail(invalidKey(`expected a ${PUBLIC_KEY_SIZE}-byte compressed P-256 key, got ${publicKey.length} bytes`))
-  }
-  try {
-    p256.Point.fromBytes(publicKey)
-  } catch {
-    return Effect.fail(invalidKey("public key is not on P-256"))
-  }
-  const pk = publicKey.slice()
+  const checked = publicKeyResult(publicKey)
+  if (Result.isFailure(checked)) return Effect.fail(checked.failure)
+  const pk = checked.success.bytes
   const credentialId = options?.credentialId?.slice()
   return Effect.succeed({
     address: address(pk),
-    publicKey: { flag: FLAG, bytes: pk },
+    publicKey: checked.success,
     credentialId,
     sign: (intentMessage) =>
       Effect.gen(function*() {

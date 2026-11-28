@@ -5,7 +5,7 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import * as Theirs from "@mysten/sui/zklogin"
 import { Ed25519, Signer } from "@unconfirmed/sui"
 import { describe, expect, test } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import * as AddressSeed from "../src/AddressSeed.ts"
 import * as Jwt from "../src/Jwt.ts"
 import * as Nonce from "../src/Nonce.ts"
@@ -109,7 +109,7 @@ describe("zkLogin parity with @mysten/sui", () => {
       const addressSeed = Theirs.genAddressSeed(salt, "sub", claims.sub, claims.aud)
       for (const legacyAddress of [false, true]) {
         const theirs = Theirs.toZkLoginPublicIdentifier(addressSeed, claims.iss, { legacyAddress })
-        const ours = run(PublicIdentifier.make(addressSeed, claims.iss))
+        const ours = Result.getOrThrow(PublicIdentifier.makeResult(addressSeed, claims.iss))
         expect(b64(ours)).toBe(b64(theirs.toRawBytes()))
         expect(PublicIdentifier.toAddress(ours, { legacyAddress })).toBe(theirs.toSuiAddress() as any)
       }
