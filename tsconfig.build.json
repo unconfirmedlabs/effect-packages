@@ -1,0 +1,15 @@
+{
+  // Emits the published JavaScript and declarations (scripts/pack.ts). One program over every package,
+  // so imports between them resolve to each other's sources and stay bare specifiers in the output.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": "packages",
+    "outDir": ".publish/build"
+  },
+  "include": ["packages/effect-*/src"]
+}

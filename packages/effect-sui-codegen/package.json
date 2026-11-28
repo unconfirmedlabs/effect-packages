@@ -1,6 +1,6 @@
 {
   "name": "@unconfirmed/effect-sui-codegen",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Move codegen for @unconfirmed/effect-sui: typed BCS schemas and call builders from `sui move summary` output or an on-chain package, with a config file and a CLI.",
   "license": "Apache-2.0",
   "repository": {

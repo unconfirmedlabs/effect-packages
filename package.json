@@ -11,7 +11,8 @@
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "test": "bun test packages/",
     "test:live": "SUI_LIVE=1 bun test packages/",
-    "codegen": "bun run --filter @unconfirmed/effect-sui codegen"
+    "codegen": "bun run --filter @unconfirmed/effect-sui codegen",
+    "pack": "bun scripts/pack.ts"
   },
   "devDependencies": {
     "@mysten/codegen": "0.12.26",

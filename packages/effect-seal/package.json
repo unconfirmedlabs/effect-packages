@@ -1,6 +1,6 @@
 {
   "name": "@unconfirmed/effect-seal",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Seal for Effect: threshold identity-based encryption to key servers registered on Sui, session keys, approvals, verified key fetching and decryption.",
   "license": "Apache-2.0",
   "repository": {

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * sui-codegen generate [--config sui-codegen.config.ts]
  */

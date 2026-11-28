@@ -1,6 +1,6 @@
 {
   "name": "@unconfirmed/effect-walrus",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Walrus for Effect: verified blob reads from the storage nodes, certified writes, the upload relay, aggregator and publisher gateways, quilts; erasure coding and BLS in a bundled SIMD WebAssembly build of walrus-core.",
   "license": "Apache-2.0",
   "repository": {

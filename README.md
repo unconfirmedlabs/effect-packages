@@ -667,6 +667,13 @@ Tests read their settings from environment variables only; nothing reads the Sui
 
 `@mysten/sui` and `@mysten/codegen` are dev dependencies, used only as reference implementations in parity tests. After changing the codegen fixture, `bun packages/effect-sui-codegen/scripts/fixtures.ts` regenerates its summaries and the golden output.
 
+**Releasing.** In the repo, packages export their `.ts` sources. On npm they ship compiled JavaScript and declarations, because Node won't strip types inside `node_modules`. `bun run pack` compiles every package (`tsconfig.build.json`) and stages it in `.publish/<package>/` with:
+- `dist/` and maps, plus `src/` for go-to-source;
+- a `package.json` whose exports name `dist/`, with `workspace:^` replaced by the real version;
+- a README and the LICENSE.
+
+Bump `version` in `packages/effect-*/package.json`, run `bun run pack`, then `npm publish .publish/<package>` for each package: `effect-bcs` and `effect-quorum` first, then `effect-sui`, then the rest.
+
 ## Writing a scheme extension
 
 ```ts nocheck
