@@ -53,6 +53,10 @@ export interface FakeWallet {
   readonly options: FakeWalletOptions
   /** Every transaction JSON the wallet received. */
   readonly received: Array<string>
+  /** The keypair's account. */
+  readonly account: WalletAccount
+  /** Change the authorized accounts, as a user would inside the wallet (emits `change`). */
+  readonly setAccounts: (accounts: ReadonlyArray<WalletAccount>) => void
 }
 
 const rejection = () =>
@@ -160,5 +164,9 @@ export const fakeWallet = (options: FakeWalletOptions): FakeWallet => {
       return accounts
     }
   }
-  return { wallet, options, received }
+  const setAccounts = (next: ReadonlyArray<WalletAccount>) => {
+    accounts = next
+    emit()
+  }
+  return { wallet, options, received, account, setAccounts }
 }

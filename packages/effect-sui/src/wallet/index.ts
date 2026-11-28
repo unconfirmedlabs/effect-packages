@@ -3,3 +3,4 @@
  */
 export * as Features from "./Features.ts"
 export * as Wallet from "./Wallet.ts"
+export * as Connection from "./Connection.ts"

@@ -299,7 +299,7 @@ export const disconnect = (wallet: Wallet): Effect.Effect<void, ConnectionError>
   })
 }
 
-/** The authorized accounts now, then whenever the wallet reports a change (`standard:events`). */
+/** The authorized accounts now, then whenever the wallet reports a change of accounts or chains (`standard:events`). */
 export const accountChanges = (wallet: Wallet): Stream.Stream<ReadonlyArray<Account>, UnsupportedFeature> => {
   const feature = features(wallet)[Features.StandardEvents]
   if (!feature) return Stream.fail(new UnsupportedFeature({ wallet: wallet.name, feature: Features.StandardEvents }))
@@ -308,7 +308,7 @@ export const accountChanges = (wallet: Wallet): Stream.Stream<ReadonlyArray<Acco
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           feature.on("change", (p) => {
-            if (p.accounts) Queue.offerUnsafe(queue, accounts(wallet))
+            if (p.accounts || p.chains) Queue.offerUnsafe(queue, accounts(wallet))
           })
         ),
         (off) => Effect.sync(off)
