@@ -10,8 +10,12 @@
  *   auto-filled system objects (`clock`, `random`, `denyList`, `system`,
  *   `accumulatorRoot`), which match what `@mysten/sui` fills in.
  * - `call`: one Move call against a package id held in a `Context.Reference`.
- * - `datatype` / `object` / `generic`: attach a Move type-string helper (and,
- *   for `key` structs, a `get` that reads and decodes the object) to a schema.
+ * - `type`: a datatype's type string, built from its defining package: a
+ *   fixed address (framework packages) or a package's `Origins` reference, so
+ *   it follows the deployment provided at run time.
+ * - `datatype` / `object` / `generic` / `genericObject`: attach the type
+ *   string (and, for `key` structs, a `get` that reads the object, checks its
+ *   type and decodes it) to a schema.
  *
  * Nothing here reflects over Move metadata at runtime: the generator emits the
  * schemas and argument kinds; these helpers only do the plumbing.
@@ -62,6 +66,8 @@ export const VecSet = <K extends Schema.Top>(K: K) => Bcs.struct({ contents: Bcs
 /** `0x2::linked_table::LinkedTable<K, phantom V>`. */
 export const LinkedTable = <K extends Schema.Top>(K: K) =>
   Bcs.struct({ id: UID, size: Bcs.u64, head: Bcs.option(K), tail: Bcs.option(K) })
+/** `0x2::borrow::Referent<T: key + store>`. */
+export const Referent = <T extends Schema.Top>(T: T) => Bcs.struct({ id: Bcs.Address, value: Bcs.option(T) })
 /** `0x2::dynamic_field::Field<N, V>`. */
 export const Field = <N extends Schema.Top, V extends Schema.Top>(N: N, V: V) =>
   Bcs.struct({ id: UID, name: N, value: V })
@@ -80,26 +86,70 @@ export const address: Bcs.BcsSchema<string, string> = /* @__PURE__ */ Bcs.transf
 // Type strings and object reads
 // -----------------------------------------------------------------------------
 
-/** A Move type string from its type arguments (all of them, phantom ones included). */
-export type TypeFn = (...typeArguments: ReadonlyArray<string>) => string
+/**
+ * Where a package's datatypes are defined on one deployment: its original
+ * (first published) id, and the defining ids of datatypes added by upgrades.
+ */
+export interface Origins {
+  readonly originalId: string
+  /** `{ "module::Type": id }` for datatypes an upgrade added; the others use `originalId`. */
+  readonly typeOrigins?: Readonly<Record<string, string>> | undefined
+}
 
-export type Get<A> = (objectId: string) => Effect.Effect<
+/** A datatype's defining package: a fixed address (framework packages) or a package's `Origins` reference. */
+export type Defining = string | Context.Reference<Origins>
+
+/**
+ * A datatype's Move type string from its type arguments (all of them, phantom
+ * ones included): `yield* Pair.type("0x2::sui::SUI", "u8", "u64")`. The address
+ * comes from the package's `Origins` reference, so it is the deployment's
+ * provided at run time (by default the one the bindings were generated from).
+ */
+export interface TypeFn<P extends ReadonlyArray<string> = readonly []> {
+  (...typeArguments: P): Effect.Effect<string>
+  /** `module::Name`. */
+  readonly path: string
+  /** The type without type arguments: as a filter, it matches every instantiation. */
+  readonly base: Effect.Effect<string>
+}
+
+/** The type string of the datatype `path` (`module::Name`) defined by `defining`. */
+export const type = <P extends ReadonlyArray<string> = readonly []>(defining: Defining, path: string): TypeFn<P> => {
+  const base = typeof defining === "string"
+    ? Effect.sync(() => `${Address.normalize(defining)}::${path}`)
+    : Effect.map(defining, (o) => `${Address.normalize(o.typeOrigins?.[path] ?? o.originalId)}::${path}`)
+  const fn = (...typeArguments: P) =>
+    typeArguments.length === 0 ? base : Effect.map(base, (b) => `${b}<${typeArguments.join(", ")}>`)
+  return Object.assign(fn, { path, base })
+}
+
+/**
+ * `Thing.get(objectId)`: read an object, check its type, decode it. Without
+ * type arguments any instantiation of a generic type matches; with them (all
+ * of them, phantom ones included), only that instantiation.
+ */
+export type Get<A, P extends ReadonlyArray<string> = readonly []> = (
+  objectId: string,
+  ...typeArguments: P | readonly []
+) => Effect.Effect<
   A,
-  Objects.ObjectNotFound | Objects.ObjectDecodeError | RpcError,
+  Objects.ObjectNotFound | Objects.ObjectTypeMismatch | Objects.ObjectDecodeError | RpcError,
   Objects.Objects
 >
 
-/** Read an object and decode its contents (`Objects.getAs`), with a lenient id. */
-export const get = <A, E>(objectId: string, schema: Schema.Codec<A, E>) =>
-  Effect.suspend(() => Objects.getAs(Address.normalize(objectId), schema))
+/** Read an object, check its type against `type` and decode it (`Objects.getAs`), with a lenient id. */
+export const get = <A, E>(objectId: string, schema: Schema.Codec<A, E>, type: string) =>
+  Effect.suspend(() => Objects.getAs(Address.normalize(objectId), schema, { type }))
 
 /**
  * A datatype schema with its Move type string: `Status.type()`. The schema is
  * built by a thunk so that, under `/* @__PURE__ *\/`, an unused datatype is
  * dropped whole by every bundler (esbuild keeps unannotated nested calls).
  */
-export const datatype = <F extends TypeFn, S extends Schema.Top>(type: F, schema: () => S): S & { readonly type: F } =>
-  Object.assign(copy(schema()), { type })
+export const datatype = <P extends ReadonlyArray<string>, S extends Schema.Top>(
+  type: TypeFn<P>,
+  schema: () => S
+): S & { readonly type: TypeFn<P> } => Object.assign(copy(schema()), { type })
 
 /**
  * A shallow copy of a schema (same prototype, same AST), so attaching `type` or
@@ -107,24 +157,45 @@ export const datatype = <F extends TypeFn, S extends Schema.Top>(type: F, schema
  */
 const copy = <S extends Schema.Top>(schema: S): S => Object.assign(Object.create(Object.getPrototypeOf(schema)), schema)
 
-/** Attach `get(objectId)` to a `key` struct's schema (a copy; the given schema is unchanged). */
-export const withGet = <S extends Schema.Top>(schema: S): S & { readonly get: Get<S["Type"]> } =>
-  Object.assign(copy(schema), { get: (objectId: string) => get(objectId, schema as unknown as Schema.Codec<S["Type"]>) })
+/** Attach `get` for objects of type `type` to a `key` struct's schema (a copy; the given schema is unchanged). */
+export const withGet = <P extends ReadonlyArray<string>, S extends Schema.Top>(
+  type: TypeFn<P>,
+  schema: S
+): S & { readonly get: Get<S["Type"], P> } => {
+  const codec = schema as unknown as Schema.Codec<S["Type"]>
+  const getter = (objectId: string, ...typeArguments: P | readonly []) =>
+    Effect.flatMap(typeArguments.length === 0 ? type.base : type(...(typeArguments as P)), (t) => get(objectId, codec, t))
+  return Object.assign(copy(schema), { get: getter })
+}
 
 /** A `key` struct: `Thing.type()` and `Thing.get(objectId)`. */
-export const object = <F extends TypeFn, S extends Schema.Top>(
-  type: F,
+export const object = <P extends ReadonlyArray<string>, S extends Schema.Top>(
+  type: TypeFn<P>,
   schema: () => S
-): S & { readonly type: F; readonly get: Get<S["Type"]> } => datatype(type, () => withGet(schema()))
+): S & { readonly type: TypeFn<P>; readonly get: Get<S["Type"], P> } => datatype(type, () => withGet(type, schema()))
 
 /**
  * A generic datatype: a function of its non-phantom type parameters' schemas,
  * plus `type(...allTypeArguments)`.
  */
-export const generic = <F extends TypeFn, Make extends (...schemas: ReadonlyArray<any>) => Schema.Top>(
-  type: F,
+export const generic = <P extends ReadonlyArray<string>, Make extends (...schemas: ReadonlyArray<any>) => Schema.Top>(
+  type: TypeFn<P>,
   make: Make
-): Make & { readonly type: F } => Object.assign(((...schemas: ReadonlyArray<any>) => make(...schemas)) as Make, { type })
+): Make & { readonly type: TypeFn<P> } => Object.assign(((...schemas: ReadonlyArray<any>) => make(...schemas)) as Make, { type })
+
+/**
+ * A generic `key` struct: as `generic`, and each instantiation has
+ * `get(objectId, ...typeArguments)`. `make` is handed the `withGet` to wrap
+ * its schema in, so its own generic signature is kept.
+ */
+export const genericObject = <P extends ReadonlyArray<string>, Make extends (...schemas: ReadonlyArray<any>) => Schema.Top>(
+  type: TypeFn<P>,
+  make: (withGet: <S extends Schema.Top>(schema: S) => S & { readonly get: Get<S["Type"], P> }) => Make
+): Make & { readonly type: TypeFn<P> } => {
+  let built: Make | undefined
+  return generic(type, ((...schemas: ReadonlyArray<any>) => (built ??= make((schema) => withGet(type, schema)))(...schemas)) as Make)
+}
+
 
 /** The decoded type of a schema: `Move.TypeOf<typeof Pair<Schema.Codec<number>, ...>>`. */
 export type TypeOf<F> = F extends (...args: ReadonlyArray<any>) => infer S ? S extends Schema.Top ? S["Type"] : never
@@ -170,6 +241,17 @@ export const isTuple = <A>(a: A): a is Extract<A, ReadonlyArray<unknown>> => Arr
 
 /** An object parameter. An id becomes an object input the resolver looks up. */
 export const obj = (input: ObjectInput): Arg<Ptb.InvalidPureValue> => isArgument(input) ? Effect.succeed(input) : Ptb.object(input)
+
+/**
+ * A struct or enum parameter that is neither an object nor pure (`Data`,
+ * `vector<Data>`, `Option<Data>`): an argument, such as an earlier result.
+ * Sui takes only primitives, strings, `ID`s and vectors and options of them as
+ * pure inputs, so such a value can't be passed as one.
+ */
+export const arg = (input: Argument): Arg<Ptb.InvalidPureValue> =>
+  isArgument(input)
+    ? Effect.succeed(input)
+    : Effect.fail(new Ptb.InvalidPureValue({ issue: "expected an argument: a struct value comes from an earlier command" }))
 
 /** A pure parameter, encoded by its schema. */
 export const pure = <A, E>(schema: Schema.Codec<A, E>, input: A | Argument): Arg<Ptb.InvalidPureValue> =>
@@ -297,8 +379,10 @@ export type Results<N extends number, Acc extends ReadonlyArray<Argument> = read
 
 /**
  * `<package>::<target>` with arguments added in parameter order. The package id
- * comes from `pkg` (a `Context.Reference`, so it needs nothing in `R`), and the
- * results are `NestedResult`s, one per Move return value.
+ * comes from `pkg` (a `Context.Reference`, so it needs nothing in `R`). The
+ * results are one per Move return value: the command's `Result` when it
+ * returns one (as `Ptb.moveCall` and `@mysten/sui`'s result used directly),
+ * else a `NestedResult` each.
  */
 export const call = <const N extends number, E = never>(
   pkg: Context.Reference<string>,
@@ -316,5 +400,5 @@ export const call = <const N extends number, E = never>(
       typeArguments,
       arguments: resolved
     })
-    return Array.from({ length: returns }, (_, i) => Ptb.nested(result, i)) as unknown as Results<N>
+    return (returns === 1 ? [result] : Array.from({ length: returns }, (_, i) => Ptb.nested(result, i))) as unknown as Results<N>
   })

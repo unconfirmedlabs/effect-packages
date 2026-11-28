@@ -12,8 +12,6 @@
  * - the system object is a shared input with its initial version and the
  *   mutability of the call (Mysten leaves it for resolution to look up):
  *   object inputs are compared by id, and the mutability is asserted.
- * Also, a single-valued result is `NestedResult(i, 0)` in ours and
- * `Result(i)` in Mysten's: the same value to the chain, folded together.
  */
 import { ClientCache } from "@mysten/sui/client"
 import { WalrusClient } from "@mysten/walrus"
@@ -146,9 +144,7 @@ const canonical = (json: Json) => {
     const [cmd, sub] = a.Result !== undefined ? [a.Result, undefined] : a.NestedResult
     const to = renumber.get(cmd)
     if (to === "WAL") return "WAL"
-    // Every call here returns one value: `NestedResult(i, 0)` (our generated builders) and
-    // `Result(i)` (Mysten's) name the same thing to the chain.
-    return sub === undefined || sub === 0 ? { result: to } : { result: to, index: sub }
+    return sub === undefined ? { result: to } : { result: to, index: sub }
   }
   const commands = json.commands.flatMap((c: Json) => {
     if (isWalCoin(c) || isDestroyZero(c)) return []

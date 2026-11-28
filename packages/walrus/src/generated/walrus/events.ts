@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const BlobCertified = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::BlobCertified",
+  /* @__PURE__ */ Move.type(Origins, "events::BlobCertified"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -18,7 +21,7 @@ export const BlobCertified = /* @__PURE__ */ Move.datatype(
 export type BlobCertified = typeof BlobCertified.Type
 
 export const BlobDeleted = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::BlobDeleted",
+  /* @__PURE__ */ Move.type(Origins, "events::BlobDeleted"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -31,7 +34,7 @@ export const BlobDeleted = /* @__PURE__ */ Move.datatype(
 export type BlobDeleted = typeof BlobDeleted.Type
 
 export const BlobRegistered = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::BlobRegistered",
+  /* @__PURE__ */ Move.type(Origins, "events::BlobRegistered"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -46,7 +49,7 @@ export const BlobRegistered = /* @__PURE__ */ Move.datatype(
 export type BlobRegistered = typeof BlobRegistered.Type
 
 export const ContractUpgraded = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::ContractUpgraded",
+  /* @__PURE__ */ Move.type(Origins, "events::ContractUpgraded"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -57,7 +60,7 @@ export const ContractUpgraded = /* @__PURE__ */ Move.datatype(
 export type ContractUpgraded = typeof ContractUpgraded.Type
 
 export const ContractUpgradeProposed = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::ContractUpgradeProposed",
+  /* @__PURE__ */ Move.type(Origins, "events::ContractUpgradeProposed"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -67,7 +70,7 @@ export const ContractUpgradeProposed = /* @__PURE__ */ Move.datatype(
 export type ContractUpgradeProposed = typeof ContractUpgradeProposed.Type
 
 export const ContractUpgradeQuorumReached = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::ContractUpgradeQuorumReached",
+  /* @__PURE__ */ Move.type(Origins, "events::ContractUpgradeQuorumReached"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -77,7 +80,7 @@ export const ContractUpgradeQuorumReached = /* @__PURE__ */ Move.datatype(
 export type ContractUpgradeQuorumReached = typeof ContractUpgradeQuorumReached.Type
 
 export const DenyListBlobDeleted = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::DenyListBlobDeleted",
+  /* @__PURE__ */ Move.type(Origins, "events::DenyListBlobDeleted"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -87,7 +90,7 @@ export const DenyListBlobDeleted = /* @__PURE__ */ Move.datatype(
 export type DenyListBlobDeleted = typeof DenyListBlobDeleted.Type
 
 export const DenyListUpdate = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::DenyListUpdate",
+  /* @__PURE__ */ Move.type(Origins, "events::DenyListUpdate"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -99,7 +102,7 @@ export const DenyListUpdate = /* @__PURE__ */ Move.datatype(
 export type DenyListUpdate = typeof DenyListUpdate.Type
 
 export const EpochChangeDone = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::EpochChangeDone",
+  /* @__PURE__ */ Move.type(Origins, "events::EpochChangeDone"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32
@@ -108,7 +111,7 @@ export const EpochChangeDone = /* @__PURE__ */ Move.datatype(
 export type EpochChangeDone = typeof EpochChangeDone.Type
 
 export const EpochChangeStart = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::EpochChangeStart",
+  /* @__PURE__ */ Move.type(Origins, "events::EpochChangeStart"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32
@@ -117,7 +120,7 @@ export const EpochChangeStart = /* @__PURE__ */ Move.datatype(
 export type EpochChangeStart = typeof EpochChangeStart.Type
 
 export const EpochParametersSelected = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::EpochParametersSelected",
+  /* @__PURE__ */ Move.type(Origins, "events::EpochParametersSelected"),
   () =>
     Bcs.struct({
       next_epoch: Bcs.u32
@@ -126,7 +129,7 @@ export const EpochParametersSelected = /* @__PURE__ */ Move.datatype(
 export type EpochParametersSelected = typeof EpochParametersSelected.Type
 
 export const InvalidBlobID = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::InvalidBlobID",
+  /* @__PURE__ */ Move.type(Origins, "events::InvalidBlobID"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -136,7 +139,7 @@ export const InvalidBlobID = /* @__PURE__ */ Move.datatype(
 export type InvalidBlobID = typeof InvalidBlobID.Type
 
 export const PooledBlobCertified = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::events::PooledBlobCertified",
+  /* @__PURE__ */ Move.type(Origins, "events::PooledBlobCertified"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -149,7 +152,7 @@ export const PooledBlobCertified = /* @__PURE__ */ Move.datatype(
 export type PooledBlobCertified = typeof PooledBlobCertified.Type
 
 export const PooledBlobDeleted = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::events::PooledBlobDeleted",
+  /* @__PURE__ */ Move.type(Origins, "events::PooledBlobDeleted"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -162,7 +165,7 @@ export const PooledBlobDeleted = /* @__PURE__ */ Move.datatype(
 export type PooledBlobDeleted = typeof PooledBlobDeleted.Type
 
 export const PooledBlobRegistered = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::events::PooledBlobRegistered",
+  /* @__PURE__ */ Move.type(Origins, "events::PooledBlobRegistered"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -177,7 +180,7 @@ export const PooledBlobRegistered = /* @__PURE__ */ Move.datatype(
 export type PooledBlobRegistered = typeof PooledBlobRegistered.Type
 
 export const PricesUpdated = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::events::PricesUpdated",
+  /* @__PURE__ */ Move.type(Origins, "events::PricesUpdated"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -188,7 +191,7 @@ export const PricesUpdated = /* @__PURE__ */ Move.datatype(
 export type PricesUpdated = typeof PricesUpdated.Type
 
 export const ProtocolVersionUpdated = /* @__PURE__ */ Move.datatype(
-  () => "0xa998b8719ca1c0a6dc4e24a859bbb39f5477417f71885fbf2967a6510f699144::events::ProtocolVersionUpdated",
+  /* @__PURE__ */ Move.type(Origins, "events::ProtocolVersionUpdated"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -199,7 +202,7 @@ export const ProtocolVersionUpdated = /* @__PURE__ */ Move.datatype(
 export type ProtocolVersionUpdated = typeof ProtocolVersionUpdated.Type
 
 export const RegisterDenyListUpdate = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::RegisterDenyListUpdate",
+  /* @__PURE__ */ Move.type(Origins, "events::RegisterDenyListUpdate"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -211,7 +214,7 @@ export const RegisterDenyListUpdate = /* @__PURE__ */ Move.datatype(
 export type RegisterDenyListUpdate = typeof RegisterDenyListUpdate.Type
 
 export const ShardRecoveryStart = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::ShardRecoveryStart",
+  /* @__PURE__ */ Move.type(Origins, "events::ShardRecoveryStart"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -221,7 +224,7 @@ export const ShardRecoveryStart = /* @__PURE__ */ Move.datatype(
 export type ShardRecoveryStart = typeof ShardRecoveryStart.Type
 
 export const ShardsReceived = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::events::ShardsReceived",
+  /* @__PURE__ */ Move.type(Origins, "events::ShardsReceived"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -231,7 +234,7 @@ export const ShardsReceived = /* @__PURE__ */ Move.datatype(
 export type ShardsReceived = typeof ShardsReceived.Type
 
 export const StoragePoolCreated = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::events::StoragePoolCreated",
+  /* @__PURE__ */ Move.type(Origins, "events::StoragePoolCreated"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -244,7 +247,7 @@ export const StoragePoolCreated = /* @__PURE__ */ Move.datatype(
 export type StoragePoolCreated = typeof StoragePoolCreated.Type
 
 export const StoragePoolExtended = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::events::StoragePoolExtended",
+  /* @__PURE__ */ Move.type(Origins, "events::StoragePoolExtended"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,

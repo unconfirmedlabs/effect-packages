@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const BlobPersistenceType = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::BlobPersistenceType",
+  /* @__PURE__ */ Move.type(Origins, "messages::BlobPersistenceType"),
   () =>
     Bcs.enum({
       Permanent: null,
@@ -16,7 +19,7 @@ export const BlobPersistenceType = /* @__PURE__ */ Move.datatype(
 export type BlobPersistenceType = typeof BlobPersistenceType.Type
 
 export const CertifiedBlobMessage = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::CertifiedBlobMessage",
+  /* @__PURE__ */ Move.type(Origins, "messages::CertifiedBlobMessage"),
   () =>
     Bcs.struct({
       blob_id: Bcs.u256,
@@ -26,7 +29,7 @@ export const CertifiedBlobMessage = /* @__PURE__ */ Move.datatype(
 export type CertifiedBlobMessage = typeof CertifiedBlobMessage.Type
 
 export const CertifiedInvalidBlobId = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::CertifiedInvalidBlobId",
+  /* @__PURE__ */ Move.type(Origins, "messages::CertifiedInvalidBlobId"),
   () =>
     Bcs.struct({
       blob_id: Bcs.u256
@@ -35,7 +38,7 @@ export const CertifiedInvalidBlobId = /* @__PURE__ */ Move.datatype(
 export type CertifiedInvalidBlobId = typeof CertifiedInvalidBlobId.Type
 
 export const CertifiedMessage = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::CertifiedMessage",
+  /* @__PURE__ */ Move.type(Origins, "messages::CertifiedMessage"),
   () =>
     Bcs.struct({
       intent_type: Bcs.u8,
@@ -48,7 +51,7 @@ export const CertifiedMessage = /* @__PURE__ */ Move.datatype(
 export type CertifiedMessage = typeof CertifiedMessage.Type
 
 export const DenyListBlobDeleted = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::DenyListBlobDeleted",
+  /* @__PURE__ */ Move.type(Origins, "messages::DenyListBlobDeleted"),
   () =>
     Bcs.struct({
       blob_id: Bcs.u256
@@ -57,7 +60,7 @@ export const DenyListBlobDeleted = /* @__PURE__ */ Move.datatype(
 export type DenyListBlobDeleted = typeof DenyListBlobDeleted.Type
 
 export const DenyListUpdateMessage = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::DenyListUpdateMessage",
+  /* @__PURE__ */ Move.type(Origins, "messages::DenyListUpdateMessage"),
   () =>
     Bcs.struct({
       storage_node_id: Move.ID,
@@ -69,7 +72,7 @@ export const DenyListUpdateMessage = /* @__PURE__ */ Move.datatype(
 export type DenyListUpdateMessage = typeof DenyListUpdateMessage.Type
 
 export const ProofOfPossessionMessage = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::messages::ProofOfPossessionMessage",
+  /* @__PURE__ */ Move.type(Origins, "messages::ProofOfPossessionMessage"),
   () =>
     Bcs.struct({
       intent_type: Bcs.u8,
@@ -83,7 +86,7 @@ export const ProofOfPossessionMessage = /* @__PURE__ */ Move.datatype(
 export type ProofOfPossessionMessage = typeof ProofOfPossessionMessage.Type
 
 export const ProtocolVersionMessage = /* @__PURE__ */ Move.datatype(
-  () => "0xa998b8719ca1c0a6dc4e24a859bbb39f5477417f71885fbf2967a6510f699144::messages::ProtocolVersionMessage",
+  /* @__PURE__ */ Move.type(Origins, "messages::ProtocolVersionMessage"),
   () =>
     Bcs.struct({
       start_epoch: Bcs.u32,

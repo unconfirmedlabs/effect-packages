@@ -2,13 +2,13 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::shared_blob` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 import * as blob_1 from "./blob.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const SharedBlob = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::shared_blob::SharedBlob",
+  /* @__PURE__ */ Move.type(Origins, "shared_blob::SharedBlob"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -81,4 +81,14 @@ export const newFunded = (options: {
     Move.obj(arg0),
     Move.obj(arg1)
   ], 0)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  blob,
+  extend,
+  fund,
+  funds,
+  new: new_,
+  newFunded
 }

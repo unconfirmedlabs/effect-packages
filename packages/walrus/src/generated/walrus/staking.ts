@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Staking = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking::Staking",
+  /* @__PURE__ */ Move.type(Origins, "staking::Staking"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -26,7 +26,7 @@ export const addCommissionToPools = (options: {
   return Move.call(Package, "staking::add_commission_to_pools", [], [
     Move.obj(arg0),
     Move.pure(Bcs.vector(Move.address), arg1),
-    Move.obj(arg2)
+    Move.arg(arg2)
   ], 0)
 }
 
@@ -63,7 +63,7 @@ export const collectCommission = (options: {
   return Move.call(Package, "staking::collect_commission", [], [
     Move.obj(arg0),
     Move.pure(Move.address, arg1),
-    Move.obj(arg2)
+    Move.arg(arg2)
   ], 1)
 }
 
@@ -165,7 +165,7 @@ export const registerCandidate = (options: {
     Move.obj(arg0),
     Move.pure(Bcs.string, arg1),
     Move.pure(Bcs.string, arg2),
-    Move.obj(arg3),
+    Move.arg(arg3),
     Move.pure(Bcs.byteVector, arg4),
     Move.pure(Bcs.byteVector, arg5),
     Move.pure(Bcs.byteVector, arg6),
@@ -195,8 +195,8 @@ export const setCommissionReceiver = (options: {
   return Move.call(Package, "staking::set_commission_receiver", [], [
     Move.obj(arg0),
     Move.pure(Move.address, arg1),
-    Move.obj(arg2),
-    Move.obj(arg3)
+    Move.arg(arg2),
+    Move.arg(arg3)
   ], 0)
 }
 
@@ -208,8 +208,8 @@ export const setGovernanceAuthorized = (options: {
   return Move.call(Package, "staking::set_governance_authorized", [], [
     Move.obj(arg0),
     Move.pure(Move.address, arg1),
-    Move.obj(arg2),
-    Move.obj(arg3)
+    Move.arg(arg2),
+    Move.arg(arg3)
   ], 0)
 }
 
@@ -304,7 +304,7 @@ export const setNodeMetadata = (options: {
   return Move.call(Package, "staking::set_node_metadata", [], [
     Move.obj(arg0),
     Move.obj(arg1),
-    Move.obj(arg2)
+    Move.arg(arg2)
   ], 0)
 }
 
@@ -386,4 +386,39 @@ export const withdrawStake = (options: {
     Move.obj(arg0),
     Move.obj(arg1)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  addCommissionToPools,
+  calculateRewards,
+  canWithdrawStakedWalEarly,
+  collectCommission,
+  committee,
+  computeNextCommittee,
+  epoch,
+  epochSyncDone,
+  initiateEpochChange,
+  initiateEpochChangeV2,
+  nodeMetadata,
+  previousCommittee,
+  registerCandidate,
+  requestWithdrawStake,
+  setCommissionReceiver,
+  setGovernanceAuthorized,
+  setMigrationEpoch,
+  setName,
+  setNetworkAddress,
+  setNetworkPublicKey,
+  setNextCommission,
+  setNextPublicKey,
+  setNodeCapacityVote,
+  setNodeMetadata,
+  setStoragePriceVote,
+  setWritePriceVote,
+  stakeWithPool,
+  tryJoinActiveSet,
+  updatePrices,
+  votingEnd,
+  withdrawStake
 }

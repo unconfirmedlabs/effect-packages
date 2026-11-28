@@ -70,7 +70,7 @@ describe("registerBlob", () => {
       Recipes.registerBlob({ blobId: BLOB_ID, rootHash: ROOT, unencodedLength: LENGTH, epochs: 3, deletable: true })
     )
     expect(calls(draft)).toEqual(["BalanceIntent", "PKG::system::reserve_space", "PKG::system::register_blob", `${Address.SUI_FRAMEWORK}::coin::destroy_zero`])
-    expect(value).toEqual({ _tag: "NestedResult", value: [2, 0] })
+    expect(value).toEqual({ _tag: "Result", value: 2 })
 
     const cost = Cost.cost(LENGTH, 3, { storage: state.storagePrice, write: state.writePrice }, state.nShards)
     expect(intents(draft).map((c) => [c.amount, c.coinType, c.output])).toEqual([[cost.total, walType, "coin"]])
@@ -94,7 +94,7 @@ describe("registerBlob", () => {
       `${Address.SUI_FRAMEWORK}::coin::destroy_zero`
     ])
     expect(intents(draft).map((i) => i.amount)).toEqual([cost.storage, cost.write])
-    expect(call(draft, "register_blob").arguments[1]).toEqual({ _tag: "NestedResult", value: [1, 0] })
+    expect(call(draft, "register_blob").arguments[1]).toEqual({ _tag: "Result", value: 1 })
     // one system input, shared by both calls
     expect(draft.inputs.filter((i) => i._tag === "Object")).toHaveLength(1)
   })

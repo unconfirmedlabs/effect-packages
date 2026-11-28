@@ -432,7 +432,7 @@ import { defineConfig } from "@unconfirmed/sui-codegen/Config"
 export default defineConfig({
   output: "./src/generated",
   packages: [
-    { path: "./move/counter", packageId: "0x…" },                  // local: runs `sui move summary`
+    { path: "./move/counter", environment: "mainnet" },            // local: `sui move summary --build-env mainnet`
     { id: "0x…", network: "testnet", name: "deepbook" },           // on-chain, over gRPC GetPackage
     { path: "./move/counter", package: "sui", modules: ["coin"] }  // framework modules, same summaries
   ]
@@ -443,7 +443,7 @@ export default defineConfig({
 bun packages/sui-codegen/src/bin.ts generate     # or Generate.run(config) from code
 ```
 
-This writes `src/generated/<package>/<module>.ts` (schemas, type strings and call builders), `<package>/$package.ts`, and `deps/<address>/<module>.ts` (dependency types, pruned to what layouts reach). A generated call is an ordinary recipe step:
+This writes `src/generated/<package>/<module>.ts` (schemas, type strings and call builders), `<package>/$package.ts`, and `deps/<package name>/<module>.ts` (dependency types, pruned to what layouts reach; the address is in each file's header). A generated call is an ordinary recipe step:
 
 ```ts nocheck
 import * as counter from "./generated/counter/counter.ts"
@@ -454,17 +454,23 @@ const recipe = Effect.gen(function*() {
   const [a, b] = yield* pool.swap({ arguments: [poolId, coin], typeArguments: [SUI, USDC] })  // arity-checked
   yield* Ptb.transferObjects([c, a, b], yield* Ptb.address(me))
 })
-yield* Tx.run(recipe, { signer }).pipe(Effect.provide(Layer.succeed(counter.Package, testnetId)))  // R needs no Package by default
-const value = yield* counter.Counter.get(id)   // Objects.getAs with the generated schema
-counter.Counter.type()                         // "0x<packageId>::counter::Counter" (`0x0` without packageId/originalId)
+// Another deployment: calls follow `Package`, type strings and reads follow `Origins`. R needs neither by default.
+const testnet = Layer.mergeAll(Layer.succeed(counter.Package, testnetId), Layer.succeed(counter.Origins, { originalId: testnetOriginalId }))
+yield* Tx.run(recipe, { signer }).pipe(Effect.provide(testnet))
+const value = yield* counter.Counter.get(id)   // checks the object's type, then decodes (ObjectTypeMismatch otherwise)
+yield* counter.Counter.type()                  // "0x<originalId>::counter::Counter", from `Origins`
+counter.calls                                  // the module's call builders by name, apart from its schemas
 ```
 
-- **Package ids.** Each package has one `Package` (`Context.Reference<string>`) defaulting to the id it was generated from, so calls need nothing in `R`; point them elsewhere with `Layer.succeed` / `Effect.provideService`. Type strings use each type's defining (type-origin) id, which survives upgrades.
-- **Local packages.** `sui move summary` lists an unpublished package at `0x0` and carries no type origins, so give the published ids: `packageId` (calls) and `originalId` (type strings; default `packageId`, right until the first upgrade), plus `typeOrigins: { "module::Type": id }` for types an upgrade added. `.type()` is synchronous and built at generation time, so providing `Package` at run time does not change it. Without either id, calls and type strings say `0x0`. Several unpublished packages can share one config (each is keyed by its name).
-- **Names.** A Move name that would clash in TypeScript is renamed deterministically: a struct named `Move`, `Bcs` or `Package` is bound as `Move_` and still exported as `Move` (a module exporting a type `Package` then leaves the `Package` reference in `$package.ts`); of `foo_bar` and `fooBar` the camelCase one keeps its name and the other keeps its Move name; an argument key taken by an auto-filled object or an earlier argument keeps its Move name if that differs, else gets a numeric suffix (`random: u64` next to `&Random` is `random2`). Functions with a `signer` parameter are skipped with a comment.
+- **Package ids.** Each package with calls has a `Package` (`Context.Reference<string>`) defaulting to the id it was generated from, so calls need nothing in `R`; point them elsewhere with `Layer.succeed` / `Effect.provideService`.
+- **Type strings.** `Thing.type(...)` is an `Effect<string>` built from the package's `Origins` reference (`{ originalId, typeOrigins? }`): its original id, and the defining id of each type an upgrade added (`typeOrigins: { "module::Type": id }`), which survive upgrades. It defaults to the ids the bindings were generated from; provide another deployment's and `.type()` and `.get()` follow it. Framework types (`0x1`, `0x2`, `0x3`, `0xb`) are the same on every network and have no `Origins`.
+- **Object reads.** `Thing.get(id)` reads the object and checks its type before decoding (`Objects.getAs(id, schema, { type })`), so another object whose bytes happen to parse fails with `ObjectTypeMismatch { objectId, expected, actual }`. For a generic type, `Box(T).get(id)` accepts any instantiation and `Box(T).get(id, ...typeArguments)` only that one.
+- **Local packages.** Set `environment` (passed to `sui move summary --build-env`): dependencies then resolve to that network's ids, and the package's `Published.toml` record for it gives `packageId` (`published-at`) and `originalId` (`original-id`). A `Published.toml` with several records and no `environment` fails with `AmbiguousEnvironment` rather than baking in whichever one the CLI resolves; with one record, that one is used. Without a record, give the ids yourself: `packageId` (calls) and `originalId` (type strings; default `packageId`, right until the first upgrade), plus `typeOrigins` for types an upgrade added (local summaries carry no type origins). Without either id, calls and type strings say `0x0`. Several unpublished packages can share one config (each is keyed by its name). Dependency directories are named by package (stable across networks); on-chain dependencies other than the framework are named by address, since bytecode carries no names. `Generate.files` needs an `HttpClient` only when some package is on chain.
+- **Names.** A Move name that would clash in TypeScript is renamed deterministically: a struct named `Move`, `Bcs`, `Package` or `Origins` is bound as `Move_` and still exported as `Move` (a module exporting a type `Package` or `Origins` then leaves that reference in `$package.ts`); of `foo_bar` and `fooBar` the camelCase one keeps its name and the other keeps its Move name (a function named `calls` is exported as `calls2`); an argument key taken by an auto-filled object or an earlier argument keeps its Move name if that differs, else gets a numeric suffix (`random: u64` next to `&Random` is `random2`). Functions with a `signer` parameter are skipped with a comment.
 - **Writing.** `generate` replaces `<output>/<package>` and `<output>/deps` only when they hold nothing but generated files (otherwise it fails and writes nothing), and fails when two packages would be written to one path. Directories of packages removed from the config are left in place.
-- **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, ...).
-- **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
+- **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, `Referent`, ...).
+- **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. Other struct and enum values (`Data`, `vector<Data>`, `Option<Data>`) take an argument only: Sui refuses a user-defined struct as a pure input (`InvalidUsageOfPureArg`), even one with no `UID`. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
+- **Results.** A call returning one value gives the command's `Result`, as `Ptb.moveCall` and `@mysten/sui`'s result used directly do; one returning several gives a `NestedResult` each.
 - **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~0.6 KB min / 0.3 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report).
 - Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
 

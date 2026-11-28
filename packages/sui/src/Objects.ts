@@ -11,6 +11,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import type { Address } from "./Address.ts"
 import type { RpcError } from "./RpcError.ts"
 import type { ObjectDigest, ObjectRef } from "./TransactionData.ts"
+import * as TypeTag from "./TypeTag.ts"
 
 export type Owner =
   | { readonly _tag: "AddressOwner"; readonly address: Address }
@@ -75,8 +76,37 @@ export class Objects extends /* @__PURE__ */ Context.Service<Objects, {
   readonly listOwned: (owner: Address, options?: ListOwnedOptions) => Stream.Stream<SuiObject, RpcError>
 }>()("@unconfirmed/sui/Objects") {}
 
-/** Fetch and decode in one step. */
-export const getAs = <T, E>(objectId: Address, schema: Schema.Codec<T, E>) => {
+/** The object's type is not the one asked for. */
+export class ObjectTypeMismatch extends /* @__PURE__ */ Schema.TaggedError<ObjectTypeMismatch>()("ObjectTypeMismatch", {
+  objectId: Schema.String,
+  expected: Schema.String,
+  actual: Schema.String
+}) {
+  override get message(): string {
+    return `object ${this.objectId} is a ${this.actual}, not a ${this.expected}`
+  }
+}
+
+export interface GetAsOptions {
+  /**
+   * The object's expected type, checked before decoding. A struct type without
+   * type arguments (`0x2::coin::Coin`) matches every instantiation; with them,
+   * only that one. Addresses may be short (`0x2`). Without it, the contents are
+   * decoded whatever the type: a schema that happens to parse other bytes
+   * decodes them, so give it unless the object id is trusted.
+   */
+  readonly type?: string
+}
+
+/** Fetch, check the type (`options.type`) and decode in one step. */
+export const getAs = <T, E>(objectId: Address, schema: Schema.Codec<T, E>, options?: GetAsOptions) => {
   const d = decode(schema)
-  return Effect.flatMap(Effect.service(Objects), (o) => Effect.flatMap(o.get(objectId), d))
+  const expected = options?.type
+  return Effect.flatMap(Effect.service(Objects), (o) =>
+    Effect.flatMap(o.get(objectId), (object): Effect.Effect<T, ObjectDecodeError | ObjectTypeMismatch> =>
+      expected === undefined || TypeTag.matchesPath(expected, object.type)
+        ? d(object)
+        : Effect.fail(
+          new ObjectTypeMismatch({ objectId: object.objectId, expected: TypeTag.normalizePath(expected), actual: object.type })
+        )))
 }

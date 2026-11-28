@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::display` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const ObjectDisplay = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::display::ObjectDisplay",
+  /* @__PURE__ */ Move.type(Origins, "display::ObjectDisplay"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -14,7 +17,7 @@ export const ObjectDisplay = /* @__PURE__ */ Move.object(
 export type ObjectDisplay = typeof ObjectDisplay.Type
 
 export const PublisherKey = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::display::PublisherKey",
+  /* @__PURE__ */ Move.type(Origins, "display::PublisherKey"),
   () =>
     Bcs.struct({
       dummy_field: Bcs.bool

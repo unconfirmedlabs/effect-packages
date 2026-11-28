@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::pending_values` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const PendingValues = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::pending_values::PendingValues",
+  /* @__PURE__ */ Move.type(Origins, "pending_values::PendingValues"),
   () =>
     Bcs.tuple([Move.VecMap(Bcs.u32, Bcs.u64)])
 )

@@ -7,16 +7,16 @@
 import type * as Schema from "effect/Schema"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
-import * as versioned from "../deps/0x2/versioned.ts"
+import { Origins, Package } from "./$package.ts"
+import * as versioned from "../deps/sui/versioned.ts"
 
-export { Package }
+export { Origins, Package }
 
 /** A generic object. */
-export const Box = /* @__PURE__ */ Move.generic(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Box<${T}>`,
-  <T extends Schema.Top>(T: T) =>
-    Move.withGet(Bcs.struct({
+export const Box = /* @__PURE__ */ Move.genericObject(
+  /* @__PURE__ */ Move.type<[T: string]>(Origins, "fixture::Box"),
+  (withGet) => <T extends Schema.Top>(T: T) =>
+    withGet(Bcs.struct({
       id: Move.UID,
       value: T
     }))
@@ -25,7 +25,7 @@ export type Box<T> = Move.TypeOf<typeof Box<Schema.Codec<T>>>
 
 /** A marker type, only ever used as a phantom argument. */
 export const Marker = /* @__PURE__ */ Move.datatype(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Marker",
+  /* @__PURE__ */ Move.type(Origins, "fixture::Marker"),
   () =>
     Bcs.struct({
       dummy_field: Bcs.bool
@@ -35,7 +35,7 @@ export type Marker = typeof Marker.Type
 
 /** A generic struct: `T` is phantom, `A` and `B` shape the layout. */
 export const Pair = /* @__PURE__ */ Move.generic(
-  (T: string, A: string, B: string) => `0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Pair<${T}, ${A}, ${B}>`,
+  /* @__PURE__ */ Move.type<[T: string, A: string, B: string]>(Origins, "fixture::Pair"),
   <A extends Schema.Top, B extends Schema.Top>(A: A, B: B) =>
     Bcs.struct({
       first: A,
@@ -46,14 +46,14 @@ export type Pair<A, B> = Move.TypeOf<typeof Pair<Schema.Codec<A>, Schema.Codec<B
 
 /** A positional struct. */
 export const Point = /* @__PURE__ */ Move.datatype(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Point",
+  /* @__PURE__ */ Move.type(Origins, "fixture::Point"),
   () =>
     Bcs.tuple([Bcs.u32, Bcs.u32])
 )
 export type Point = typeof Point.Type
 
 export const Status = /* @__PURE__ */ Move.datatype(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Status",
+  /* @__PURE__ */ Move.type(Origins, "fixture::Status"),
   () =>
     Bcs.enum({
       Active: null,
@@ -69,7 +69,7 @@ export type Status = typeof Status.Type
 
 /** The main object. */
 export const Thing = /* @__PURE__ */ Move.object(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Thing",
+  /* @__PURE__ */ Move.type(Origins, "fixture::Thing"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -90,7 +90,7 @@ export type Thing = typeof Thing.Type
 
 /** Framework types as fields: some are built in, others are generated into deps. */
 export const Vault = /* @__PURE__ */ Move.object(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000000::fixture::Vault",
+  /* @__PURE__ */ Move.type(Origins, "fixture::Vault"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -385,7 +385,7 @@ export const setPair = (options: {
   const [thing, pair] = Move.isTuple(a) ? a : [a.thing, a.pair] as const
   return Move.call(Package, "fixture::set_pair", [], [
     Move.obj(thing),
-    Move.obj(pair)
+    Move.arg(pair)
   ], 0)
 }
 
@@ -448,4 +448,26 @@ export const wrap = (options: {
     Move.obj(thing),
     Move.option(Bcs.u8, value)
   ], 0)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  allPure,
+  boxed,
+  check,
+  create,
+  deposit,
+  destroy,
+  makePair,
+  name,
+  newThing,
+  newVault,
+  pause,
+  rename,
+  roll,
+  score,
+  setPair,
+  stats,
+  touchSystem,
+  wrap
 }

@@ -2,13 +2,13 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::upgrade` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
-import * as package_1 from "../deps/0x2/package.ts"
+import { Origins, Package } from "./$package.ts"
+import * as package_1 from "../deps/sui/package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const EmergencyUpgradeCap = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::upgrade::EmergencyUpgradeCap",
+  /* @__PURE__ */ Move.type(Origins, "upgrade::EmergencyUpgradeCap"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -18,14 +18,14 @@ export const EmergencyUpgradeCap = /* @__PURE__ */ Move.object(
 export type EmergencyUpgradeCap = typeof EmergencyUpgradeCap.Type
 
 export const PackageDigest = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::upgrade::PackageDigest",
+  /* @__PURE__ */ Move.type(Origins, "upgrade::PackageDigest"),
   () =>
     Bcs.tuple([Bcs.byteVector])
 )
 export type PackageDigest = typeof PackageDigest.Type
 
 export const UpgradeProposal = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::upgrade::UpgradeProposal",
+  /* @__PURE__ */ Move.type(Origins, "upgrade::UpgradeProposal"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -38,7 +38,7 @@ export const UpgradeProposal = /* @__PURE__ */ Move.datatype(
 export type UpgradeProposal = typeof UpgradeProposal.Type
 
 export const UpgradeManager = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::upgrade::UpgradeManager",
+  /* @__PURE__ */ Move.type(Origins, "upgrade::UpgradeManager"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -103,7 +103,7 @@ export const commitUpgrade = (options: {
     Move.obj(arg0),
     Move.obj(arg1),
     Move.obj(arg2),
-    Move.obj(arg3)
+    Move.arg(arg3)
   ], 0)
 }
 
@@ -115,8 +115,18 @@ export const voteForUpgrade = (options: {
   return Move.call(Package, "upgrade::vote_for_upgrade", [], [
     Move.obj(arg0),
     Move.obj(arg1),
-    Move.obj(arg2),
+    Move.arg(arg2),
     Move.pure(Move.address, arg3),
     Move.pure(Bcs.byteVector, arg4)
   ], 0)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  authorizeEmergencyUpgrade,
+  authorizeUpgrade,
+  burnEmergencyUpgradeCap,
+  cleanupUpgradeProposals,
+  commitUpgrade,
+  voteForUpgrade
 }

@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::active_set` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const ActiveSetEntry = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::active_set::ActiveSetEntry",
+  /* @__PURE__ */ Move.type(Origins, "active_set::ActiveSetEntry"),
   () =>
     Bcs.struct({
       node_id: Move.ID,
@@ -14,7 +17,7 @@ export const ActiveSetEntry = /* @__PURE__ */ Move.datatype(
 export type ActiveSetEntry = typeof ActiveSetEntry.Type
 
 export const ActiveSet = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::active_set::ActiveSet",
+  /* @__PURE__ */ Move.type(Origins, "active_set::ActiveSet"),
   () =>
     Bcs.struct({
       max_size: Bcs.u16,

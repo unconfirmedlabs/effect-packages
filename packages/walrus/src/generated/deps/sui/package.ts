@@ -4,7 +4,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
 
 export const Publisher = /* @__PURE__ */ Move.object(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000002::package::Publisher",
+  /* @__PURE__ */ Move.type("0x0000000000000000000000000000000000000000000000000000000000000002", "package::Publisher"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -15,7 +15,7 @@ export const Publisher = /* @__PURE__ */ Move.object(
 export type Publisher = typeof Publisher.Type
 
 export const UpgradeCap = /* @__PURE__ */ Move.object(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000002::package::UpgradeCap",
+  /* @__PURE__ */ Move.type("0x0000000000000000000000000000000000000000000000000000000000000002", "package::UpgradeCap"),
   () =>
     Bcs.struct({
       id: Move.UID,

@@ -17,7 +17,7 @@ export { Package }
  * Can be used to store coins which don't need the key ability.
  */
 export const Balance = /* @__PURE__ */ Move.datatype(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::balance::Balance<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "balance::Balance"),
   () =>
     Bcs.struct({
       value: Bcs.u64
@@ -30,7 +30,7 @@ export type Balance = typeof Balance.Type
  * Wrapped into a `TreasuryCap` in the `Coin` module.
  */
 export const Supply = /* @__PURE__ */ Move.datatype(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::balance::Supply<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "balance::Supply"),
   () =>
     Bcs.struct({
       value: Bcs.u64
@@ -70,8 +70,8 @@ export const decreaseSupply = (options: {
   const a = options.arguments
   const [self, balance] = Move.isTuple(a) ? a : [a.self, a.balance] as const
   return Move.call(Package, "balance::decrease_supply", options.typeArguments, [
-    Move.obj(self),
-    Move.obj(balance)
+    Move.arg(self),
+    Move.arg(balance)
   ], 1)
 }
 
@@ -91,7 +91,7 @@ export const destroyZero = (options: {
   const a = options.arguments
   const [balance] = Move.isTuple(a) ? a : [a.balance] as const
   return Move.call(Package, "balance::destroy_zero", options.typeArguments, [
-    Move.obj(balance)
+    Move.arg(balance)
   ], 0)
 }
 
@@ -112,7 +112,7 @@ export const increaseSupply = (options: {
   const a = options.arguments
   const [self, value] = Move.isTuple(a) ? a : [a.self, a.value] as const
   return Move.call(Package, "balance::increase_supply", options.typeArguments, [
-    Move.obj(self),
+    Move.arg(self),
     Move.pure(Bcs.u64, value)
   ], 1)
 }
@@ -134,8 +134,8 @@ export const join = (options: {
   const a = options.arguments
   const [self, balance] = Move.isTuple(a) ? a : [a.self, a.balance] as const
   return Move.call(Package, "balance::join", options.typeArguments, [
-    Move.obj(self),
-    Move.obj(balance)
+    Move.arg(self),
+    Move.arg(balance)
   ], 1)
 }
 
@@ -156,7 +156,7 @@ export const redeemFunds = (options: {
   const a = options.arguments
   const [withdrawal] = Move.isTuple(a) ? a : [a.withdrawal] as const
   return Move.call(Package, "balance::redeem_funds", options.typeArguments, [
-    Move.obj(withdrawal)
+    Move.arg(withdrawal)
   ], 1)
 }
 
@@ -177,7 +177,7 @@ export const sendFunds = (options: {
   const a = options.arguments
   const [balance, recipient] = Move.isTuple(a) ? a : [a.balance, a.recipient] as const
   return Move.call(Package, "balance::send_funds", options.typeArguments, [
-    Move.obj(balance),
+    Move.arg(balance),
     Move.pure(Move.address, recipient)
   ], 0)
 }
@@ -223,7 +223,7 @@ export const split = (options: {
   const a = options.arguments
   const [self, value] = Move.isTuple(a) ? a : [a.self, a.value] as const
   return Move.call(Package, "balance::split", options.typeArguments, [
-    Move.obj(self),
+    Move.arg(self),
     Move.pure(Bcs.u64, value)
   ], 1)
 }
@@ -244,7 +244,7 @@ export const supplyValue = (options: {
   const a = options.arguments
   const [supply] = Move.isTuple(a) ? a : [a.supply] as const
   return Move.call(Package, "balance::supply_value", options.typeArguments, [
-    Move.obj(supply)
+    Move.arg(supply)
   ], 1)
 }
 
@@ -264,7 +264,7 @@ export const value = (options: {
   const a = options.arguments
   const [self] = Move.isTuple(a) ? a : [a.self] as const
   return Move.call(Package, "balance::value", options.typeArguments, [
-    Move.obj(self)
+    Move.arg(self)
   ], 1)
 }
 
@@ -284,7 +284,7 @@ export const withdrawAll = (options: {
   const a = options.arguments
   const [self] = Move.isTuple(a) ? a : [a.self] as const
   return Move.call(Package, "balance::withdraw_all", options.typeArguments, [
-    Move.obj(self)
+    Move.arg(self)
   ], 1)
 }
 
@@ -306,7 +306,7 @@ export const withdrawFundsFromObject = (options: {
   const a = options.arguments
   const [obj, value] = Move.isTuple(a) ? a : [a.obj, a.value] as const
   return Move.call(Package, "balance::withdraw_funds_from_object", options.typeArguments, [
-    Move.obj(obj),
+    Move.arg(obj),
     Move.pure(Bcs.u64, value)
   ], 1)
 }
@@ -320,4 +320,22 @@ export const zero = (options: {
   readonly typeArguments: readonly [T: string]
 }) => {
   return Move.call(Package, "balance::zero", options.typeArguments, [], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  createSupply,
+  decreaseSupply,
+  destroyZero,
+  increaseSupply,
+  join,
+  redeemFunds,
+  sendFunds,
+  settledFundsValue,
+  split,
+  supplyValue,
+  value,
+  withdrawAll,
+  withdrawFundsFromObject,
+  zero
 }

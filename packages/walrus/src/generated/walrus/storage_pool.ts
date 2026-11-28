@@ -2,13 +2,13 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_pool` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 import * as storage_resource from "./storage_resource.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const PooledBlob = /* @__PURE__ */ Move.object(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::storage_pool::PooledBlob",
+  /* @__PURE__ */ Move.type(Origins, "storage_pool::PooledBlob"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -24,7 +24,7 @@ export const PooledBlob = /* @__PURE__ */ Move.object(
 export type PooledBlob = typeof PooledBlob.Type
 
 export const StoragePool = /* @__PURE__ */ Move.object(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::storage_pool::StoragePool",
+  /* @__PURE__ */ Move.type(Origins, "storage_pool::StoragePool"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -34,7 +34,7 @@ export const StoragePool = /* @__PURE__ */ Move.object(
 export type StoragePool = typeof StoragePool.Type
 
 export const StoragePoolInnerV1 = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::storage_pool::StoragePoolInnerV1",
+  /* @__PURE__ */ Move.type(Origins, "storage_pool::StoragePoolInnerV1"),
   () =>
     Bcs.struct({
       storage: storage_resource.Storage,
@@ -53,7 +53,7 @@ export const addBlobMetadata = (options: {
   return Move.call(Package, "storage_pool::add_blob_metadata", [], [
     Move.obj(arg0),
     Move.pure(Bcs.u256, arg1),
-    Move.obj(arg2)
+    Move.arg(arg2)
   ], 0)
 }
 
@@ -65,7 +65,7 @@ export const addOrReplaceBlobMetadata = (options: {
   return Move.call(Package, "storage_pool::add_or_replace_blob_metadata", [], [
     Move.obj(arg0),
     Move.pure(Bcs.u256, arg1),
-    Move.obj(arg2)
+    Move.arg(arg2)
   ], 1)
 }
 
@@ -227,4 +227,25 @@ export const usedEncodedBytes = (options: {
   return Move.call(Package, "storage_pool::used_encoded_bytes", [], [
     Move.obj(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  addBlobMetadata,
+  addOrReplaceBlobMetadata,
+  availableEncodedBytes,
+  blobCount,
+  blobObjectId,
+  containsBlob,
+  destroy,
+  endEpoch,
+  insertOrUpdateBlobMetadataPair,
+  objectId,
+  removeBlobMetadataPair,
+  removeBlobMetadataPairIfExists,
+  reservedEncodedCapacityBytes,
+  startEpoch,
+  storage,
+  takeBlobMetadata,
+  usedEncodedBytes
 }

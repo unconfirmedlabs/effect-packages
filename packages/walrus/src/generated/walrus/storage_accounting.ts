@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_accounting` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const FutureAccounting = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_accounting::FutureAccounting",
+  /* @__PURE__ */ Move.type(Origins, "storage_accounting::FutureAccounting"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -18,7 +18,7 @@ export const FutureAccounting = /* @__PURE__ */ Move.datatype(
 export type FutureAccounting = typeof FutureAccounting.Type
 
 export const FutureAccountingRingBuffer = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_accounting::FutureAccountingRingBuffer",
+  /* @__PURE__ */ Move.type(Origins, "storage_accounting::FutureAccountingRingBuffer"),
   () =>
     Bcs.struct({
       current_index: Bcs.u32,
@@ -34,7 +34,7 @@ export const epoch = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "storage_accounting::epoch", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -44,7 +44,7 @@ export const maxEpochsAhead = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "storage_accounting::max_epochs_ahead", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -54,7 +54,7 @@ export const rewards = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "storage_accounting::rewards", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -64,7 +64,7 @@ export const ringLookup = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "storage_accounting::ring_lookup", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.u32, arg1)
   ], 1)
 }
@@ -75,6 +75,15 @@ export const usedCapacity = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "storage_accounting::used_capacity", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  epoch,
+  maxEpochsAhead,
+  rewards,
+  ringLookup,
+  usedCapacity
 }

@@ -2,13 +2,16 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::system_state_inner` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
 import * as bls_aggregate from "./bls_aggregate.ts"
 import * as event_blob from "./event_blob.ts"
 import * as extended_field from "./extended_field.ts"
 import * as storage_accounting from "./storage_accounting.ts"
 
+export { Origins }
+
 export const SystemStateInnerV1 = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::system_state_inner::SystemStateInnerV1",
+  /* @__PURE__ */ Move.type(Origins, "system_state_inner::SystemStateInnerV1"),
   () =>
     Bcs.struct({
       committee: bls_aggregate.BlsCommittee,

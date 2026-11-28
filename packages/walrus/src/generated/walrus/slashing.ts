@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::slashing` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const SlashingProposal = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::slashing::SlashingProposal",
+  /* @__PURE__ */ Move.type(Origins, "slashing::SlashingProposal"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -19,7 +19,7 @@ export const SlashingProposal = /* @__PURE__ */ Move.datatype(
 export type SlashingProposal = typeof SlashingProposal.Type
 
 export const SlashingManager = /* @__PURE__ */ Move.object(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::slashing::SlashingManager",
+  /* @__PURE__ */ Move.type(Origins, "slashing::SlashingManager"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -61,8 +61,15 @@ export const voteForSlashing = (options: {
   return Move.call(Package, "slashing::vote_for_slashing", [], [
     Move.obj(arg0),
     Move.obj(arg1),
-    Move.obj(arg2),
+    Move.arg(arg2),
     Move.pure(Move.address, arg3),
     Move.pure(Move.address, arg4)
   ], 0)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  cleanupSlashingProposals,
+  executeSlashing,
+  voteForSlashing
 }

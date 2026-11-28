@@ -3,13 +3,13 @@
 import type * as Schema from "effect/Schema"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
-import * as uq64_64 from "../deps/0x1/uq64_64.ts"
+import { Origins, Package } from "./$package.ts"
+import * as uq64_64 from "../deps/std/uq64_64.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Entry = /* @__PURE__ */ Move.generic(
-  (T0: string) => `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::apportionment_queue::Entry<${T0}>`,
+  /* @__PURE__ */ Move.type<[T0: string]>(Origins, "apportionment_queue::Entry"),
   <T0 extends Schema.Top>(T0: T0) =>
     Bcs.struct({
       priority: uq64_64.UQ64_64,
@@ -20,7 +20,7 @@ export const Entry = /* @__PURE__ */ Move.generic(
 export type Entry<T0> = Move.TypeOf<typeof Entry<Schema.Codec<T0>>>
 
 export const ApportionmentQueue = /* @__PURE__ */ Move.generic(
-  (T0: string) => `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::apportionment_queue::ApportionmentQueue<${T0}>`,
+  /* @__PURE__ */ Move.type<[T0: string]>(Origins, "apportionment_queue::ApportionmentQueue"),
   <T0 extends Schema.Top>(T0: T0) =>
     Bcs.struct({
       entries: Bcs.vector(Entry(T0))
@@ -35,8 +35,8 @@ export const insert = (options: {
 }) => {
   const [arg0, arg1, arg2, arg3] = options.arguments
   return Move.call(Package, "apportionment_queue::insert", options.typeArguments, [
-    Move.obj(arg0),
-    Move.obj(arg1),
+    Move.arg(arg0),
+    Move.arg(arg1),
     Move.pure(Bcs.u64, arg2),
     Move.param(options.typeArguments[0], arg3)
   ], 0)
@@ -57,6 +57,13 @@ export const popMax = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "apportionment_queue::pop_max", options.typeArguments, [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 3)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  insert,
+  new: new_,
+  popMax
 }
