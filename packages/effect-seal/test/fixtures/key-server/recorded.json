@@ -1,5 +1,5 @@
 {
-  "source": "Recorded by packages/seal/scripts/record-key-server.ts with fresh in-memory Ed25519 keys (no wallet, no funds). Servers: https://seal-key-server-testnet-1.mystenlabs.com, https://seal-aggregator-testnet.mystenlabs.com, https://seal-testnet-open.suiftly.io, https://seal-aggregator-mainnet.mystenlabs.com.",
+  "source": "Recorded by packages/effect-seal/scripts/record-key-server.ts with fresh in-memory Ed25519 keys (no wallet, no funds). Servers: https://seal-key-server-testnet-1.mystenlabs.com, https://seal-aggregator-testnet.mystenlabs.com, https://seal-testnet-open.suiftly.io, https://seal-aggregator-mainnet.mystenlabs.com.",
   "recordedAt": "2026-11-27T09:06:55.186Z",
   "responses": {
     "service": {

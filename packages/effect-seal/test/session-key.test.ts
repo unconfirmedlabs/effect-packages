@@ -1,12 +1,12 @@
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as PrivateKey from "@unconfirmed/sui/PrivateKey"
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import * as Signer from "@unconfirmed/sui/Signer"
-import * as T from "@unconfirmed/sui/TransactionData"
-import { Wallet } from "@unconfirmed/sui-wallet"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as PrivateKey from "@unconfirmed/effect-sui/PrivateKey"
+import * as SignatureScheme from "@unconfirmed/effect-sui/SignatureScheme"
+import * as Signer from "@unconfirmed/effect-sui/Signer"
+import * as T from "@unconfirmed/effect-sui/TransactionData"
+import { Wallet } from "@unconfirmed/effect-sui/wallet"
 import { describe, expect, test } from "bun:test"
 import * as Cause from "effect/Cause"
 import type * as Duration from "effect/Duration"
@@ -215,7 +215,7 @@ describe("certificate", () => {
     expect((e as Signer.SigningError).message).toContain("UnsupportedFeature")
   })
 
-  test("wallet signer (@unconfirmed/sui-wallet over a wallet-standard wallet)", async () => {
+  test("wallet signer (@unconfirmed/effect-sui/wallet over a wallet-standard wallet)", async () => {
     const keypair = Ed25519Keypair.fromSecretKey(SEED)
     const fake = fakeWallet({ keypair, name: "Seal session test wallet" })
     const r = await run(Effect.gen(function*() {

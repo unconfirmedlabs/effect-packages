@@ -214,7 +214,7 @@ export class StorageNodes extends Context.Service<StorageNodes, {
   readonly sliverStatus: (node: Node, blobId: BlobId, pairIndex: number, axis: Axis) => Effect.Effect<StoredOnNode, NodeError>
   /** N5: the raw signed confirmation; the caller checks the message and the signature. */
   readonly confirmation: (node: Node, blobId: BlobId, persistence: Persistence) => Effect.Effect<SignedConfirmation, NodeError>
-}>()("@unconfirmed/walrus/StorageNodes") {}
+}>()("@unconfirmed/effect-walrus/StorageNodes") {}
 
 const Success = <S extends Schema.Top>(data: S) => Schema.Struct({ success: Schema.Struct({ code: Schema.Number, data }) })
 

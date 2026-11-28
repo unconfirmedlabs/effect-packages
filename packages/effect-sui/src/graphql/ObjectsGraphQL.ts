@@ -10,8 +10,8 @@ import * as Option from "effect/Option"
 import * as RequestResolver from "effect/RequestResolver"
 import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
-import * as Objects from "@unconfirmed/sui/Objects"
-import { RpcError } from "@unconfirmed/sui/RpcError"
+import * as Objects from "../Objects.ts"
+import { RpcError } from "../RpcError.ts"
 import { call, MOVE_OBJECT_FIELDS, MoveObjectNode, moveObject, OBJECT_FIELDS, ObjectNode, object } from "./convert.ts"
 
 /** The largest batch sent (the server accepts up to `serviceConfig.maxMultiGetSize`, 200 on Mysten's endpoints). */

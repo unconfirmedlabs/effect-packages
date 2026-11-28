@@ -3,15 +3,15 @@
  * and the scalar web build (`web/walrus_wasm_nosimd_bg.wasm`, loaded here
  * through the web glue) give byte-identical results, equal to
  * `@mysten/walrus-wasm` 0.3.1. The full encoder parity suite is in
- * `packages/walrus/test/parity.encoder.test.ts`.
+ * `packages/effect-walrus/test/parity.encoder.test.ts`.
  */
 import * as Mysten from "@mysten/walrus-wasm"
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import * as Simd from "../index.js"
-import * as Scalar from "../web/walrus_wasm.js"
+import * as Simd from "../wasm/index.js"
+import * as Scalar from "../wasm/web/walrus_wasm.js"
 
-Scalar.initSync({ module: readFileSync(new URL("../web/walrus_wasm_nosimd_bg.wasm", import.meta.url)) })
+Scalar.initSync({ module: readFileSync(new URL("../wasm/web/walrus_wasm_nosimd_bg.wasm", import.meta.url)) })
 
 const bytes = (length: number, seed: number): Uint8Array => {
   const out = new Uint8Array(length)
@@ -44,7 +44,7 @@ describe("builds", () => {
     expect(Simd.simdSupported()).toBe(true)
     expect(Scalar.simd()).toBe(false)
     // `web.js` imports the web glue (same module instance as `Scalar` above); only the probe is exercised.
-    const web = await import("../web.js")
+    const web = await import("../wasm/web.js")
     expect(web.simdSupported()).toBe(true)
   })
 

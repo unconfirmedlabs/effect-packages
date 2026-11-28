@@ -3,7 +3,7 @@
  * durable store for `JournalKeyValueStore` in a browser.
  *
  * - One object store (default `kv`) in one database (default
- *   `@unconfirmed/sui-lifecycle`), opened once per layer scope and closed when
+ *   `@unconfirmed/effect-sui/lifecycle`), opened once per layer scope and closed when
  *   the scope closes. Keys are the store's strings; strings are stored as
  *   strings and `Uint8Array`s as bytes (structured clone), so both round-trip.
  *   `get` of a binary value answers its Base64, and `getUint8Array` of a
@@ -39,7 +39,7 @@ import * as Layer from "effect/Layer"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
 import type * as Scope from "effect/Scope"
 
-export const DEFAULT_DATABASE = "@unconfirmed/sui-lifecycle"
+export const DEFAULT_DATABASE = "@unconfirmed/effect-sui/lifecycle"
 export const DEFAULT_STORE = "kv"
 
 export interface Options {

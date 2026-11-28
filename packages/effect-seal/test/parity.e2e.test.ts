@@ -7,9 +7,9 @@
  */
 import { SealClient, SessionKey as MystenSessionKey } from "@mysten/seal"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import type * as Objects from "@unconfirmed/sui/Objects"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import type * as Objects from "@unconfirmed/effect-sui/Objects"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"

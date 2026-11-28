@@ -15,10 +15,10 @@ import * as KeyValueStore from "effect/persistence/KeyValueStore"
 import { forceCloseDatabase, IDBDatabase as FDBDatabase, IDBFactory, IDBObjectStore as FDBObjectStore } from "fake-indexeddb"
 import { makeFakeLockManager } from "@unconfirmed/test-support/locks"
 import { makeFakeOpfs } from "@unconfirmed/test-support/opfs"
-import * as KeyValueStoreIndexedDb from "../src/KeyValueStoreIndexedDb.ts"
-import * as KeyValueStoreOpfs from "../src/KeyValueStoreOpfs.ts"
-import * as SenderLock from "../src/SenderLock.ts"
-import * as SenderLockWebLocks from "../src/SenderLockWebLocks.ts"
+import * as KeyValueStoreIndexedDb from "../../src/lifecycle/KeyValueStoreIndexedDb.ts"
+import * as KeyValueStoreOpfs from "../../src/lifecycle/KeyValueStoreOpfs.ts"
+import * as SenderLock from "../../src/lifecycle/SenderLock.ts"
+import * as SenderLockWebLocks from "../../src/lifecycle/SenderLockWebLocks.ts"
 import "./stores.ts" // installs IDBKeyRange
 
 const restores: Array<() => void> = []

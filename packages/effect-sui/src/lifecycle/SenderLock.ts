@@ -62,7 +62,7 @@ export const makeMemory = (): SenderLockService & { readonly size: () => number 
   }
 }
 
-export const SenderLock = Context.Reference<SenderLockService>("@unconfirmed/sui-lifecycle/SenderLock", {
+export const SenderLock = Context.Reference<SenderLockService>("@unconfirmed/effect-sui/lifecycle/SenderLock", {
   defaultValue: makeMemory
 })
 

@@ -16,7 +16,7 @@
  */
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { type Address, normalize } from "./Address.ts"
 import { deriveObjectId } from "./DynamicFields.ts"
 import { decode, type ObjectDecodeError, Objects } from "./Objects.ts"

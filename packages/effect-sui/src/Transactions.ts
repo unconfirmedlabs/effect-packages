@@ -166,7 +166,7 @@ export class Transactions extends /* @__PURE__ */ Context.Service<Transactions, 
    * client-side. `Resolve.server` verifies the answer before using it.
    */
   readonly resolve?: (transaction: UnresolvedTransaction) => Effect.Effect<Resolution, RpcError>
-}>()("@unconfirmed/sui/Transactions") {}
+}>()("@unconfirmed/effect-sui/Transactions") {}
 
 /** `waitFor` gave up: the transaction wasn't visible within the timeout. */
 export class TransactionWaitTimeout extends /* @__PURE__ */ Schema.TaggedError<TransactionWaitTimeout>()("TransactionWaitTimeout", {

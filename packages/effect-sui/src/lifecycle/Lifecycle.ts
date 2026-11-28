@@ -6,7 +6,7 @@
  * `run` = core `Tx.build` -> sign -> journal -> `submit`. Each step is also
  * exported for flows that stop in between.
  *
- * Rules (ported from `@unconfirmed/sui-effect`):
+ * Rules (ported from `sui-effect`, the predecessor):
  * - **Submit never rebuilds.** The `Signed` journal entry is written before the
  *   first execute; a retryable transport failure or timeout re-sends the
  *   identical bytes (one digest: they land at most once); when retries run out
@@ -23,15 +23,15 @@
  *   the `Signed` write, before anything was sent; later write failures are
  *   logged and the outcome stands.
  */
-import type { Address } from "@unconfirmed/sui/Address"
-import { Chain } from "@unconfirmed/sui/Chain"
-import { Objects } from "@unconfirmed/sui/Objects"
-import * as Resolve from "@unconfirmed/sui/Resolve"
-import { RpcError } from "@unconfirmed/sui/RpcError"
-import * as Signer from "@unconfirmed/sui/Signer"
-import * as T from "@unconfirmed/sui/TransactionData"
-import { type Effects, type Include, type IncludeOptions, Transactions } from "@unconfirmed/sui/Transactions"
-import * as Tx from "@unconfirmed/sui/Tx"
+import type { Address } from "../Address.ts"
+import { Chain } from "../Chain.ts"
+import { Objects } from "../Objects.ts"
+import * as Resolve from "../Resolve.ts"
+import { RpcError } from "../RpcError.ts"
+import * as Signer from "../Signer.ts"
+import * as T from "../TransactionData.ts"
+import { type Effects, type Include, type IncludeOptions, Transactions } from "../Transactions.ts"
+import * as Tx from "../Tx.ts"
 import * as Clock from "effect/Clock"
 import * as DateTime from "effect/DateTime"
 import * as Duration from "effect/Duration"

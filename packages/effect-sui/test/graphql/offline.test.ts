@@ -7,11 +7,11 @@ import { Effect, Fiber, Layer, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { GraphQLClientError, GraphQLProtocol } from "effect/graphql"
 import { HttpClient, HttpClientResponse } from "effect/http"
-import { Address, Chain, Checkpoints, Objects, Packages, RpcError, Transactions } from "@unconfirmed/sui"
-import * as SuiGraphQL from "../src/index.ts"
-import { protoJson } from "../src/TransactionsGraphQL.ts"
-import { toProto } from "@unconfirmed/sui/grpc/transaction"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import { Address, Chain, Checkpoints, Objects, Packages, RpcError, Transactions } from "@unconfirmed/effect-sui"
+import * as SuiGraphQL from "../../src/graphql/index.ts"
+import { protoJson } from "../../src/graphql/TransactionsGraphQL.ts"
+import { toProto } from "@unconfirmed/effect-sui/grpc/transaction"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 
 const A = Address.normalize
 

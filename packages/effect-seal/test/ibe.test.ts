@@ -1,5 +1,5 @@
 import { bls12_381 } from "@noble/curves/bls12-381.js"
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import { describe, expect, test } from "bun:test"
 import * as Result from "effect/Result"
 import { Bls, Ibe, Kdf } from "../src/index.ts"

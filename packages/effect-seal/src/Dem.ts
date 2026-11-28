@@ -30,7 +30,7 @@ export type Input =
   | { readonly _tag: "Plain" }
 
 /**
- * The `ciphertext` field of an encrypted object (I2), in `@unconfirmed/bcs`'s enum shape: the
+ * The `ciphertext` field of an encrypted object (I2), in `@unconfirmed/effect-bcs`'s enum shape: the
  * decoded type of `EncryptedObject.Ciphertext`.
  */
 export type Ciphertext =

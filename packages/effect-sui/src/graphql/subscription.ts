@@ -8,7 +8,7 @@ import type * as GraphQLClientError from "effect/graphql/GraphQLClientError"
 import * as Schedule from "effect/Schedule"
 import * as Result from "effect/Result"
 import * as Stream from "effect/Stream"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
+import type { RpcError } from "../RpcError.ts"
 import { toRpcError } from "./convert.ts"
 
 /** Consecutive failed connections (none delivering an item) before a subscription gives up. */

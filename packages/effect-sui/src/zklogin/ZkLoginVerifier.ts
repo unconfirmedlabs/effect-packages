@@ -11,8 +11,8 @@
  *
  * `ZkLoginVerifierGrpc.layer` asks a full node; tests provide a stub.
  */
-import type * as Address from "@unconfirmed/sui/Address"
-import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
+import type * as Address from "../Address.ts"
+import type * as SignatureScheme from "../SignatureScheme.ts"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 
@@ -34,4 +34,4 @@ export class ZkLoginVerifier extends Context.Service<ZkLoginVerifier, {
   readonly verify: (
     request: VerifyRequest
   ) => Effect.Effect<void, SignatureScheme.InvalidSignature | SignatureScheme.VerificationUnavailable>
-}>()("@unconfirmed/sui-zklogin/ZkLoginVerifier") {}
+}>()("@unconfirmed/effect-sui/zklogin/ZkLoginVerifier") {}

@@ -1,5 +1,5 @@
 /**
- * ML-DSA-65 (FIPS 204, post-quantum) for `@unconfirmed/sui`: a
+ * ML-DSA-65 (FIPS 204, post-quantum) for `@unconfirmed/effect-sui`: a
  * `SignatureScheme` to install in the registry, and signer constructors.
  *
  * As in Sui and `@mysten/sui`: flag `0x07`, 1952-byte public keys, 3309-byte
@@ -12,10 +12,10 @@
  *   const signer = yield* MlDsa65.fromSecretKey(seed)
  */
 import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Hash from "@unconfirmed/sui/Hash"
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import * as Signer from "@unconfirmed/sui/Signer"
+import * as Address from "./Address.ts"
+import * as Hash from "./Hash.ts"
+import * as SignatureScheme from "./SignatureScheme.ts"
+import * as Signer from "./Signer.ts"
 import * as Effect from "effect/Effect"
 
 export const FLAG = 0x07

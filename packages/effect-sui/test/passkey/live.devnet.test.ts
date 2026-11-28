@@ -2,11 +2,11 @@
  * A devnet transaction signed by a (software) passkey, through the same
  * `Tx.run` any other signer uses. Opt in with SUI_LIVE=1.
  */
-import { Ed25519, Ptb, Resolve, Tx } from "@unconfirmed/sui"
+import { Ed25519, Ptb, Resolve, Tx } from "@unconfirmed/effect-sui"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { DEVNET, faucet, grpcLayer, live } from "@unconfirmed/test-support/live"
-import * as Passkey from "../src/index.ts"
+import * as Passkey from "../../src/Passkey.ts"
 
 const suite = live ? describe : describe.skip
 

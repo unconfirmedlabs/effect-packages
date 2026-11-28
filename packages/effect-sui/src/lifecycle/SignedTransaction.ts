@@ -4,9 +4,9 @@
  * function. Everything else (sender, expiration, pinned objects) is read back
  * out of the bytes, so what is reasoned about is what was signed.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Hash from "@unconfirmed/sui/Hash"
-import * as T from "@unconfirmed/sui/TransactionData"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Hash from "../Hash.ts"
+import * as T from "../TransactionData.ts"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"

@@ -1,7 +1,13 @@
 {
-  "name": "@unconfirmed/bcs",
+  "name": "@unconfirmed/effect-bcs",
   "version": "0.0.0",
+  "description": "BCS (Binary Canonical Serialization) declared as Effect Schemas: one declaration is the type, the validator and the codec.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unconfirmedlabs/effect-packages.git",
+    "directory": "packages/effect-bcs"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {

@@ -1,5 +1,5 @@
 /**
- * `@unconfirmed/sui/grpc`: every capability over gRPC-web.
+ * `@unconfirmed/effect-sui/grpc`: every capability over gRPC-web.
  *
  * - `layerCore({ url })`: Chain, Objects, Coins, Packages and Transactions,
  *   everything `Tx.run` needs. Prefer it: a program ships only the RPCs it links.

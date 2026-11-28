@@ -6,10 +6,10 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Testing from "@unconfirmed/sui/Testing"
-import type { Address } from "@unconfirmed/sui/Address"
-import * as Objects from "@unconfirmed/sui/Objects"
-import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
+import * as Testing from "@unconfirmed/effect-sui/Testing"
+import type { Address } from "@unconfirmed/effect-sui/Address"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import type { ObjectDigest } from "@unconfirmed/effect-sui/TransactionData"
 
 export interface RecordedObject {
   readonly objectId: string
@@ -52,7 +52,7 @@ export const restoreObject = (r: RecordedObject): Objects.SuiObject => {
 }
 
 /**
- * An in-memory node (`@unconfirmed/sui/Testing`) holding recorded objects plus
+ * An in-memory node (`@unconfirmed/effect-sui/Testing`) holding recorded objects plus
  * overrides (later wins), shared by every run of `layer`. `gets()` counts
  * `Objects.get` calls by id so far (to test caching), `requests()` is the log.
  */

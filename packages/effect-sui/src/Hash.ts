@@ -3,7 +3,7 @@
  */
 import { blake2b } from "@noble/hashes/blake2.js"
 import { base58 } from "@scure/base"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 
 export const blake2b256 = (bytes: Uint8Array): Uint8Array => blake2b(bytes, { dkLen: 32 })
 

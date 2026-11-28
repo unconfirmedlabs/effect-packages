@@ -7,7 +7,7 @@
 import { SessionKey as MystenSessionKey } from "@mysten/seal"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { Transaction } from "@mysten/sui/transactions"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"

@@ -6,11 +6,11 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Stream from "effect/Stream"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Objects from "@unconfirmed/sui/Objects"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import type * as T from "@unconfirmed/sui/TransactionData"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
+import type * as T from "@unconfirmed/effect-sui/TransactionData"
 import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -27,20 +27,20 @@ const files = (dir: string, prefix = ""): Array<string> =>
 
 describe("golden output", () => {
   for (const run of Object.keys(goldenRuns) as Array<keyof typeof goldenRuns>) {
-    test(`${run} is up to date (bun packages/sui-codegen/scripts/fixtures.ts)`, async () => {
+    test(`${run} is up to date (bun packages/effect-sui-codegen/scripts/fixtures.ts)`, async () => {
       const rendered = await Effect.runPromise(renderGolden(run))
       expect(rendered.map((f) => f.path).sort()).toEqual(files(join(goldenDir, run)))
       for (const f of rendered) expect(f.contents).toBe(readFileSync(join(goldenDir, run, f.path), "utf-8"))
     })
   }
 
-  test("generated modules import only effect, @unconfirmed/bcs, @unconfirmed/sui and each other, as namespaces", () => {
+  test("generated modules import only effect, @unconfirmed/effect-bcs, @unconfirmed/effect-sui and each other, as namespaces", () => {
     for (const run of Object.keys(goldenRuns)) {
       for (const f of files(join(goldenDir, run))) {
         const imports = readFileSync(join(goldenDir, run, f), "utf-8").split("\n").filter((l) => l.startsWith("import "))
         for (const line of imports) {
           expect(line).toMatch(
-            /^import (type )?(\* as \w+|\{ (Origins, )?Package \}|\{ Origins \}) from "(effect\/\w+|@unconfirmed\/bcs\/Bcs|@unconfirmed\/sui\/Move|\.{1,2}\/[\w/$.]+\.ts)"$/
+            /^import (type )?(\* as \w+|\{ (Origins, )?Package \}|\{ Origins \}) from "(effect\/\w+|@unconfirmed\/effect-bcs\/Bcs|@unconfirmed\/effect-sui\/Move|\.{1,2}\/[\w/$.]+\.ts)"$/
           )
         }
       }

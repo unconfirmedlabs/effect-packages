@@ -10,7 +10,7 @@
  */
 import { HDKey } from "@scure/bip32"
 import * as Effect from "effect/Effect"
-import { type Derived, type Path, resolve, type Rule, SECP256K1, SECP256R1, seedOf, type Source } from "./internal/core.ts"
+import { type Derived, type Path, resolve, type Rule, SECP256K1, SECP256R1, seedOf, type Source } from "./internal/mnemonic.ts"
 
 const deriveBip32 = (rule: Rule, source: Source, path: Path | undefined): Derived =>
   Effect.flatMap(resolve(rule, path), ({ path }) =>

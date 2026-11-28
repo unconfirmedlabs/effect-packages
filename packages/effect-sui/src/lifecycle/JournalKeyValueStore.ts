@@ -29,7 +29,7 @@
  *
  * Building the layer does no network work; call `Lifecycle.reconcileAll`.
  */
-import * as Hash from "@unconfirmed/sui/Hash"
+import * as Hash from "../Hash.ts"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"

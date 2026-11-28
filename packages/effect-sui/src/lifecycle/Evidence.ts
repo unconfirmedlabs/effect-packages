@@ -24,7 +24,7 @@
  * `EvidenceGraphQL.layer` (pointed at the same backend as `Transactions`),
  * or your own.
  */
-import type { RpcError } from "@unconfirmed/sui/RpcError"
+import type { RpcError } from "../RpcError.ts"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -57,7 +57,7 @@ export const unreported: EvidenceService = {
   observe: () => Effect.succeedNone
 }
 
-export const Evidence = Context.Reference<EvidenceService>("@unconfirmed/sui-lifecycle/Evidence", {
+export const Evidence = Context.Reference<EvidenceService>("@unconfirmed/effect-sui/lifecycle/Evidence", {
   defaultValue: () => unreported
 })
 

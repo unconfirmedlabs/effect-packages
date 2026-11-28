@@ -1,9 +1,9 @@
 /**
- * `@unconfirmed/walrus-wasm` against `@mysten/walrus-wasm` 0.3.1, raw WASM
+ * `@unconfirmed/effect-walrus/wasm` against `@mysten/walrus-wasm` 0.3.1, raw WASM
  * calls (no Effect), median wall time of a few runs after one warm-up.
  *
- *   bun packages/walrus/scripts/bench-wasm.ts [--quick]
- *   node packages/walrus/scripts/bench-wasm.ts [--quick]     (Node 23.6+ strips the types)
+ *   bun packages/effect-walrus/scripts/bench-wasm.ts [--quick]
+ *   node packages/effect-walrus/scripts/bench-wasm.ts [--quick]     (Node 23.6+ strips the types)
  *
  * Operations, as `Encoder` uses them:
  * - encode: blob → slivers and metadata.
@@ -17,7 +17,7 @@
  *   aggregate against 667 keys.
  */
 import * as Mysten from "@mysten/walrus-wasm"
-import * as Ours from "@unconfirmed/walrus-wasm"
+import * as Ours from "@unconfirmed/effect-walrus/wasm"
 import { bls12_381 } from "@noble/curves/bls12-381.js"
 
 const quick = process.argv.includes("--quick")

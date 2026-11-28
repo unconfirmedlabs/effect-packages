@@ -2,7 +2,7 @@
  * Parity with `@mysten/seal` 2.0.1 (§6.2, "Primitives"): byte for byte on
  * seeded random inputs, values crossing between the two sides as bytes.
  */
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"

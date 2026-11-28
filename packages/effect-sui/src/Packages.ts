@@ -49,4 +49,4 @@ export class Packages extends /* @__PURE__ */ Context.Service<Packages, {
    * Not cached (a package can be hundreds of KB).
    */
   readonly getModules: (packageId: Address) => Effect.Effect<ReadonlyMap<string, Uint8Array>, PackageNotFound | RpcError>
-}>()("@unconfirmed/sui/Packages") {}
+}>()("@unconfirmed/effect-sui/Packages") {}

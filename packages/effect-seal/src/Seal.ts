@@ -19,9 +19,9 @@
  * directly and needs none of the services used here.
  */
 import { bytesToHex } from "@noble/hashes/utils.js"
-import type { Address } from "@unconfirmed/sui/Address"
-import * as Objects from "@unconfirmed/sui/Objects"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
+import type { Address } from "@unconfirmed/effect-sui/Address"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
 import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import type * as HttpClient from "effect/http/HttpClient"

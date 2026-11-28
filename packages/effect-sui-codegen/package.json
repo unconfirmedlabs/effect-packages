@@ -1,7 +1,13 @@
 {
-  "name": "@unconfirmed/sui-codegen",
+  "name": "@unconfirmed/effect-sui-codegen",
   "version": "0.0.0",
+  "description": "Move codegen for @unconfirmed/effect-sui: typed BCS schemas and call builders from `sui move summary` output or an on-chain package, with a config file and a CLI.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unconfirmedlabs/effect-packages.git",
+    "directory": "packages/effect-sui-codegen"
+  },
   "type": "module",
   "sideEffects": false,
   "bin": {
@@ -12,8 +18,8 @@
     "./*": "./src/*.ts"
   },
   "peerDependencies": {
-    "@unconfirmed/bcs": "workspace:^",
-    "@unconfirmed/sui": "workspace:^",
+    "@unconfirmed/effect-bcs": "workspace:^",
+    "@unconfirmed/effect-sui": "workspace:^",
     "effect": "^4.1.6"
   },
   "devDependencies": {

@@ -11,7 +11,7 @@
  * On its own this is "BasicIdent", not CCA-secure: the envelope binds it to
  * the DEM key (`Kdf.deriveKey`) and checks the nonce against the recovered `r`.
  */
-import type { Address } from "@unconfirmed/sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
 import * as Result from "effect/Result"
 import * as Bls from "./Bls.ts"
 import { concat, xor } from "./bytes.ts"

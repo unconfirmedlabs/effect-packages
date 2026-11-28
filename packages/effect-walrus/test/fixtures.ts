@@ -3,8 +3,8 @@
  * `scripts/record-fixtures.ts`) on an in-memory node, so chain-state code runs
  * offline against real testnet and mainnet bytes.
  */
-import type * as Objects from "@unconfirmed/sui/Objects"
-import type * as Packages from "@unconfirmed/sui/Packages"
+import type * as Objects from "@unconfirmed/effect-sui/Objects"
+import type * as Packages from "@unconfirmed/effect-sui/Packages"
 import * as Recorded from "@unconfirmed/test-support/recorded"
 import type { RecordedObject } from "@unconfirmed/test-support/recorded"
 import { readFileSync } from "node:fs"

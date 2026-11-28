@@ -2,11 +2,11 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { Secp256k1Keypair } from "@mysten/sui/keypairs/secp256k1"
 import { MultiSigPublicKey } from "@mysten/sui/multisig"
 import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
-import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
-import * as Secp256k1 from "@unconfirmed/sui-secp256k1"
+import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
+import * as Secp256k1 from "@unconfirmed/effect-sui/Secp256k1"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as MultiSig from "../src/index.ts"
+import * as MultiSig from "../../src/MultiSig.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const fromB64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"))

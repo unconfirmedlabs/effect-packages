@@ -6,7 +6,7 @@
  * kept out of errors and spans; size limits and request ids.
  */
 import { describe, expect, test } from "bun:test"
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"

@@ -14,7 +14,7 @@
  * Both answer the canonical form (`0x` + 64 lower-case digits) or
  * `undefined`. A truncated paste (`0x2`) is refused by both, never padded.
  */
-import type { Address } from "@unconfirmed/sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
 
 /** The canonical form: what every normalised id looks like. */
 export const CANONICAL = /^0x[0-9a-f]{64}$/

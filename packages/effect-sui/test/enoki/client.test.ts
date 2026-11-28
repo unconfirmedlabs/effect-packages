@@ -4,13 +4,13 @@
  */
 import { EnokiClient as TheirClient } from "@mysten/enoki"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
-import { Ed25519 } from "@unconfirmed/sui"
+import { Ed25519 } from "@unconfirmed/effect-sui"
 import { describe, expect, test } from "bun:test"
 import { Effect, Tracer } from "effect"
 import { HttpClient } from "effect/http"
 import { inputs } from "@unconfirmed/test-support/zklogin"
-import { EnokiClient, type EnokiError } from "../src/EnokiClient.ts"
-import * as EnokiHttp from "../src/EnokiHttp.ts"
+import { EnokiClient, type EnokiError } from "../../src/enoki/EnokiClient.ts"
+import * as EnokiHttp from "../../src/enoki/EnokiHttp.ts"
 import { captureFetch, type Recorded, type Reply, scripted } from "./support.ts"
 
 const API_KEY = "enoki_public_test"

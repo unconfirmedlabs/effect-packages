@@ -1,5 +1,5 @@
 //! Walrus RS2 erasure coding, sliver Merkle roots and BLS12-381 min-pk for
-//! `@unconfirmed/walrus`, built on `walrus-core` so that encoding is the
+//! `@unconfirmed/effect-walrus`, built on `walrus-core` so that encoding is the
 //! network's own.
 //!
 //! The interface passes bytes only: every result is a `Uint8Array` with a

@@ -1,17 +1,17 @@
 /**
  * BCS throughput against @mysten/bcs (through @mysten/sui/bcs).
  *
- *   bun packages/bcs/bench/bcs.ts                 every case
- *   bun packages/bcs/bench/bcs.ts --only Coin     cases whose name contains "Coin"
- *   bun packages/bcs/bench/bcs.ts --runs 21       timed runs per case (default 15)
+ *   bun packages/effect-bcs/bench/bcs.ts                 every case
+ *   bun packages/effect-bcs/bench/bcs.ts --only Coin     cases whose name contains "Coin"
+ *   bun packages/effect-bcs/bench/bcs.ts --runs 21       timed runs per case (default 15)
  *
  * Each case is warmed up, then timed `runs` times (a full GC before each side); the table
  * shows the median (and min) per run in milliseconds. Not part of `bun test`.
  */
 import * as Option from "effect/Option"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as T from "@unconfirmed/sui/TransactionData"
-import * as TypeTag from "@unconfirmed/sui/TypeTag"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as T from "@unconfirmed/effect-sui/TransactionData"
+import * as TypeTag from "@unconfirmed/effect-sui/TypeTag"
 import { bcs as m } from "@mysten/sui/bcs"
 
 const arg = (name: string) => {

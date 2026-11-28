@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import type * as Stream from "effect/Stream"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import type { Address } from "./Address.ts"
 import type { RpcError } from "./RpcError.ts"
 import * as TypeTag from "./TypeTag.ts"
@@ -130,4 +130,4 @@ export class Events extends /* @__PURE__ */ Context.Service<Events, {
   readonly list: (options?: ListOptions) => Stream.Stream<Event, RpcError>
   /** Matching events as they are emitted, from the node's current tip. Ends cleanly if the server closes the stream (resubscribe to continue); a cut-off stream fails. */
   readonly subscribe: (filter?: EventFilter) => Stream.Stream<Event, RpcError>
-}>()("@unconfirmed/sui/Events") {}
+}>()("@unconfirmed/effect-sui/Events") {}

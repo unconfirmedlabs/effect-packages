@@ -6,11 +6,11 @@
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { MultiSigPublicKey } from "@mysten/sui/multisig"
 import * as Theirs from "@mysten/sui/zklogin"
-import { Bcs } from "@unconfirmed/bcs"
-import { Address, Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
+import { Bcs } from "@unconfirmed/effect-bcs"
+import { Address, Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as MultiSig from "../src/index.ts"
+import * as MultiSig from "../../src/MultiSig.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const fromB64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"))
@@ -19,7 +19,7 @@ const msg = new TextEncoder().encode("zkLogin member")
 
 // -----------------------------------------------------------------------------
 // A fixed zkLogin signature (made-up JWT and proof that parse but prove nothing),
-// after packages/sui-zklogin/test/fixtures.ts.
+// after packages/effect-sui/test/zklogin/fixtures.ts.
 // -----------------------------------------------------------------------------
 
 const b64url = (s: string) => Buffer.from(s, "utf8").toString("base64url")

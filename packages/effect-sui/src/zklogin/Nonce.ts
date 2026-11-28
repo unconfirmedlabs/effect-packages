@@ -4,7 +4,7 @@
  * ephemeral key's `flag || bytes` read as a big-endian integer.
  */
 import { base64urlnopad } from "@scure/base"
-import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
+import type * as SignatureScheme from "../SignatureScheme.ts"
 import * as Effect from "effect/Effect"
 import { poseidon4 } from "poseidon-lite/poseidon4"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"

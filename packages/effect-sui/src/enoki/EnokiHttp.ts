@@ -4,7 +4,7 @@
  *
  *   EnokiHttp.layer({ apiKey }).pipe(Layer.provide(FetchHttpClient.layer))
  */
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
+import * as SignatureScheme from "../SignatureScheme.ts"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"

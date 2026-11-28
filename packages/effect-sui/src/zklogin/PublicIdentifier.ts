@@ -7,9 +7,9 @@
  * ("legacy") address. Identifier bytes here are always the padded form, as in
  * `@mysten/sui`; legacy-ness is a property of the address you derive.
  */
-import * as Bytes from "@unconfirmed/bcs/Bytes"
-import * as Address from "@unconfirmed/sui/Address"
-import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
+import * as Address from "../Address.ts"
+import type * as SignatureScheme from "../SignatureScheme.ts"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"

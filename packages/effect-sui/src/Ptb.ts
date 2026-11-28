@@ -26,7 +26,7 @@ import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Address from "./Address.ts"
 import type { Coins } from "./Coins.ts"
 import * as Allowances from "./internal/allowances.ts"
@@ -129,7 +129,7 @@ interface MutableDraft {
   memo?: Map<unknown, Effect.Effect<any, any, any>>
 }
 
-export class PtbBuilder extends /* @__PURE__ */ Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/sui/PtbBuilder") {}
+export class PtbBuilder extends /* @__PURE__ */ Context.Service<PtbBuilder, MutableDraft>()("@unconfirmed/effect-sui/PtbBuilder") {}
 
 const addCommand = (command: Command) =>
   Effect.map(Effect.service(PtbBuilder), (d): T.Argument => {

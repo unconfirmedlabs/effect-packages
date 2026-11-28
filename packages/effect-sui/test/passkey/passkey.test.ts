@@ -3,11 +3,11 @@ import { sha256 } from "@noble/hashes/sha2.js"
 import { BrowserPasskeyProvider, findCommonPublicKey, PasskeyKeypair } from "@mysten/sui/keypairs/passkey"
 import type { PasskeyProvider as MystenProvider } from "@mysten/sui/keypairs/passkey"
 import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
-import { Bcs } from "@unconfirmed/bcs"
-import { Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
+import { Bcs } from "@unconfirmed/effect-bcs"
+import { Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Result } from "effect"
-import * as Passkey from "../src/index.ts"
+import * as Passkey from "../../src/Passkey.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const fromB64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"))

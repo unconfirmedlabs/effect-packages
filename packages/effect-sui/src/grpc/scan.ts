@@ -11,7 +11,7 @@ import { convert } from "./convert.ts"
 import type * as P from "./generated/proto.ts"
 import * as Rpc from "./generated/lean.ts"
 import type { GrpcWeb } from "./GrpcWeb.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 interface Frame<A> {
   readonly item: A | undefined

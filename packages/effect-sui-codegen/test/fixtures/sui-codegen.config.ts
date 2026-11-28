@@ -1,4 +1,4 @@
-import { defineConfig } from "@unconfirmed/sui-codegen/Config"
+import { defineConfig } from "@unconfirmed/effect-sui-codegen/Config"
 
 // Used by codegen.test.ts to exercise the CLI. Output goes to the git-ignored `.mysten/`.
 export default defineConfig({

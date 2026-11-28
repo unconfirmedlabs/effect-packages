@@ -5,7 +5,7 @@
  * lifecycle. Everything runs at `n = 10`; `n = 1000` is in
  * `parity.encoder.test.ts`.
  */
-import { BlobEncoder } from "@unconfirmed/walrus-wasm"
+import { BlobEncoder } from "@unconfirmed/effect-walrus/wasm"
 import { bls12_381 } from "@noble/curves/bls12-381.js"
 import { afterAll, describe, expect, spyOn, test } from "bun:test"
 import * as Effect from "effect/Effect"

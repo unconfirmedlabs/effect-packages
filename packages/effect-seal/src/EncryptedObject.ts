@@ -12,7 +12,7 @@
  * is built here rather than through `Kdf`, which imports `Bls`).
  */
 import { hexToBytes } from "@noble/hashes/utils.js"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Result from "effect/Result"
 import type * as Dem from "./Dem.ts"
 import { InvalidCiphertext } from "./Errors.ts"

@@ -87,7 +87,7 @@ export const lean = <I, O, Streaming extends boolean>(
 ): Rpc<I, O, Streaming> => make(path, input, output, streaming, chunks, { mask })
 
 const fail = (path: string, message: string): never => {
-  throw new Error(`${path}: ${message} (pruned handle; see packages/sui/scripts/grpc-lean.ts)`)
+  throw new Error(`${path}: ${message} (pruned handle; see packages/effect-sui/scripts/grpc-lean.ts)`)
 }
 
 /** Every key of `value` is a field (or real oneof) of `descriptor`, recursively. */

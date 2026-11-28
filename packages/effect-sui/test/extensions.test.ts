@@ -5,7 +5,7 @@
  */
 import { bcs as mysten } from "@mysten/sui/bcs"
 import { deriveDynamicFieldID, deriveObjectID } from "@mysten/sui/utils"
-import { Bcs } from "@unconfirmed/bcs"
+import { Bcs } from "@unconfirmed/effect-bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect, Schedule, Stream } from "effect"
 import { Address, AddressAlias, CheckpointData, DynamicFields, Ed25519, Events, Transactions, TypeTag } from "../src/index.ts"

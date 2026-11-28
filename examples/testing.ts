@@ -3,12 +3,12 @@
  * `// #region readme` is a README block verbatim; `readme.test.ts` in
  * packages/test-support checks that they stay identical. Not meant to run.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Effect from "effect/Effect"
-import type { Address } from "@unconfirmed/sui/Address"
-import * as Testing from "@unconfirmed/sui/Testing"
-import * as Transactions from "@unconfirmed/sui/Transactions"
-import * as Tx from "@unconfirmed/sui/Tx"
+import type { Address } from "@unconfirmed/effect-sui/Address"
+import * as Testing from "@unconfirmed/effect-sui/Testing"
+import * as Transactions from "@unconfirmed/effect-sui/Transactions"
+import * as Tx from "@unconfirmed/effect-sui/Tx"
 import { recipe as bump, signer } from "./shared.ts"
 
 declare const pkg: string

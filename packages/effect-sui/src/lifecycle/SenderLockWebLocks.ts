@@ -35,7 +35,7 @@ import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import { makeMemory, SenderLock, type SenderLockService } from "./SenderLock.ts"
 
-export const DEFAULT_PREFIX = "@unconfirmed/sui-lifecycle/sender/"
+export const DEFAULT_PREFIX = "@unconfirmed/effect-sui/lifecycle/sender/"
 
 /** The Web Locks API is missing or unusable here; nothing was locked. */
 export class SenderLockUnavailable extends Schema.TaggedError<SenderLockUnavailable>()("SenderLockUnavailable", {

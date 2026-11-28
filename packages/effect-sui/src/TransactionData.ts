@@ -2,7 +2,7 @@
  * The Sui transaction data model as BCS Schemas: what the builder produces,
  * the resolver completes, and a signer hashes. One shape, no converters.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { Address } from "./Address.ts"
 import { TypeTag } from "./TypeTag.ts"
 

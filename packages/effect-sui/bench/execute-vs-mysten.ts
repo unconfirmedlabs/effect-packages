@@ -1,14 +1,14 @@
 // End to end on devnet: build + sign + execute, ours (Tx.run) vs Mysten (signAndExecuteTransaction).
 // Separate funded accounts (faucet) so the two SDKs never contend for the same gas coins.
-//   bun packages/sui/bench/execute-vs-mysten.ts [runs]
+//   bun packages/effect-sui/bench/execute-vs-mysten.ts [runs]
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
 import * as HttpClient from "effect/http/HttpClient"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import * as Tx from "@unconfirmed/sui/Tx"
+import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
+import * as Tx from "@unconfirmed/effect-sui/Tx"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Transaction } from "@mysten/sui/transactions"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"

@@ -11,7 +11,7 @@
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { type Address, normalize } from "../Address.ts"
 import { Coins } from "../Coins.ts"
 import { Objects } from "../Objects.ts"

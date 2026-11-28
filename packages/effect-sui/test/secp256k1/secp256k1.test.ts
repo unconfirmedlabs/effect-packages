@@ -1,10 +1,10 @@
 import { Secp256k1Keypair } from "@mysten/sui/keypairs/secp256k1"
 import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
-import { Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
+import { Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
 import { secp256k1 } from "@noble/curves/secp256k1.js"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as Secp256k1 from "../src/index.ts"
+import * as Secp256k1 from "../../src/Secp256k1.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const secret = new Uint8Array(32).map((_, i) => i + 7)

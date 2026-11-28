@@ -1,6 +1,6 @@
 /**
  * Generate `@mysten/codegen`'s bindings for the fixture (and `0x2::coin`) into
- * `packages/sui-codegen/.mysten/` (git-ignored), as the reference side of the
+ * `packages/effect-sui-codegen/.mysten/` (git-ignored), as the reference side of the
  * parity tests. `@mysten/codegen` is a root devDependency only.
  */
 import { generateFromPackageSummary } from "@mysten/codegen"

@@ -5,9 +5,9 @@ import * as GraphQLGroup from "effect/graphql/GraphQLGroup"
 import type * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
-import { RpcError } from "@unconfirmed/sui/RpcError"
-import { needsGasSelection, toProto } from "@unconfirmed/sui/grpc/transaction"
-import * as Transactions from "@unconfirmed/sui/Transactions"
+import { RpcError } from "../RpcError.ts"
+import { needsGasSelection, toProto } from "../grpc/transaction.ts"
+import * as Transactions from "../Transactions.ts"
 import {
   balanceChange,
   base64,

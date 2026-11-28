@@ -17,7 +17,7 @@ import * as Resolve from "./Resolve.ts"
 import { isTransactionSigner, type Signer, SigningError, signTransaction, type TransactionSigner } from "./Signer.ts"
 import * as T from "./TransactionData.ts"
 import { type Effects, type IncludeOptions, Transactions } from "./Transactions.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 export interface ResolveOptions<E = never, R = never> {
   readonly sender: Address

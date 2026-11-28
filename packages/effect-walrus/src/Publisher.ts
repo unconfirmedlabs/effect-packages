@@ -13,7 +13,7 @@
  * `put_blob`, `PublisherQuery`); answer: `BlobStoreResult`
  * (`crates/walrus-sdk/src/node_client/responses.rs`), camelCase JSON.
  */
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import * as Context from "effect/Context"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
@@ -205,7 +205,7 @@ export interface PublisherService {
   readonly store: (bytes: Uint8Array, options?: StoreOptions) => Effect.Effect<StoreResult, GatewayError>
 }
 
-export class Publisher extends Context.Service<Publisher, PublisherService>()("@unconfirmed/walrus/Publisher") {}
+export class Publisher extends Context.Service<Publisher, PublisherService>()("@unconfirmed/effect-walrus/Publisher") {}
 
 export interface PublisherOptions extends GatewayOptions {
   /** Default 5 minutes: the publisher encodes, registers, uploads and certifies before it answers. */

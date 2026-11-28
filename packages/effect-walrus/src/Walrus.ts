@@ -15,8 +15,8 @@
  * bundled apps must do (`wasmUrl` and `wasmFallbackUrl` in browsers built
  * with esbuild, Rolldown or Bun).
  */
-import type * as Objects from "@unconfirmed/sui/Objects"
-import type * as Packages from "@unconfirmed/sui/Packages"
+import type * as Objects from "@unconfirmed/effect-sui/Objects"
+import type * as Packages from "@unconfirmed/effect-sui/Packages"
 import * as Cause from "effect/Cause"
 import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"

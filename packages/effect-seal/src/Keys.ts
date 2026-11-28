@@ -4,7 +4,7 @@
  * every returned key verified against the server's on-chain public key, the
  * session's cache filled with verified keys only.
  *
- * The only module that imports `@unconfirmed/quorum`.
+ * The only module that imports `@unconfirmed/effect-quorum`.
  *
  * Every per-server outcome is a typed `KeyServerError`: an unloadable key
  * server object is `Unresolved` (or `Unavailable` for a retryable `RpcError`),
@@ -21,10 +21,10 @@
  * fiber yields between keys.
  */
 import { bytesToHex } from "@noble/hashes/utils.js"
-import * as Quorum from "@unconfirmed/quorum/Quorum"
-import type { Address } from "@unconfirmed/sui/Address"
-import { RpcError } from "@unconfirmed/sui/RpcError"
-import type * as Signer from "@unconfirmed/sui/Signer"
+import * as Quorum from "@unconfirmed/effect-quorum/Quorum"
+import type { Address } from "@unconfirmed/effect-sui/Address"
+import { RpcError } from "@unconfirmed/effect-sui/RpcError"
+import type * as Signer from "@unconfirmed/effect-sui/Signer"
 import * as Clock from "effect/Clock"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"

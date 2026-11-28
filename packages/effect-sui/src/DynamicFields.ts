@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import type * as Stream from "effect/Stream"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { type Address, fromBytes, normalize, SUI_FRAMEWORK } from "./Address.ts"
 import { blake2b256 } from "./Hash.ts"
 import type { SuiObject } from "./Objects.ts"
@@ -160,7 +160,7 @@ export class DynamicFields extends /* @__PURE__ */ Context.Service<DynamicFields
   /** The child object of a dynamic object field. */
   readonly getObject: (parent: Address, name: Name) => Effect.Effect<SuiObject, DynamicFieldNotFound | InvalidDynamicFieldName | RpcError>
   readonly list: (parent: Address, options?: ListOptions) => Stream.Stream<FieldInfo, RpcError>
-}>()("@unconfirmed/sui/DynamicFields") {}
+}>()("@unconfirmed/effect-sui/DynamicFields") {}
 
 const withName = <T, E, A, Err, R>(
   type: string,

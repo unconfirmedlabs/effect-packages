@@ -11,7 +11,7 @@
  * Interrupting the effect aborts the prompt. Requests through one provider
  * are asked one at a time, as WebAuthn allows a single pending prompt.
  */
-import * as Signer from "@unconfirmed/sui/Signer"
+import * as Signer from "../../Signer.ts"
 import * as Effect from "effect/Effect"
 import * as Semaphore from "effect/Semaphore"
 import type * as Passkey from "./Passkey.ts"

@@ -13,9 +13,9 @@
  * Everything here is synchronous apart from `"hang"`, which never answers
  * (drive it with `TestClock` to exercise timeouts).
  */
-import * as Address from "@unconfirmed/sui/Address"
-import * as Events from "@unconfirmed/sui/Events"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Events from "@unconfirmed/effect-sui/Events"
+import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Stream from "effect/Stream"

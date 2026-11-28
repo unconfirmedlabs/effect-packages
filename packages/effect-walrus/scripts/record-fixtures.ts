@@ -4,14 +4,14 @@
  * previous committees) and the `reserve_space` signature, for testnet and
  * mainnet, into `test/fixtures/<network>.json`. Read-only.
  *
- *   bun packages/walrus/scripts/record-fixtures.ts
+ *   bun packages/effect-walrus/scripts/record-fixtures.ts
  */
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
-import * as Objects from "@unconfirmed/sui/Objects"
-import * as Packages from "@unconfirmed/sui/Packages"
+import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import * as Packages from "@unconfirmed/effect-sui/Packages"
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import * as Committee from "../src/Committee.ts"

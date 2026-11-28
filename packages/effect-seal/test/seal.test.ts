@@ -4,9 +4,9 @@
  * so the layer reads them from "chain" exactly as it would from a full node.
  * Real clock (the fake servers answer at once).
  */
-import * as Address from "@unconfirmed/sui/Address"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as Signer from "@unconfirmed/sui/Signer"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as Signer from "@unconfirmed/effect-sui/Signer"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"

@@ -2,10 +2,10 @@
  * Sui addresses and object ids: 32 bytes, shown as `0x` + 64 lowercase hex.
  */
 import { blake2b } from "@noble/hashes/blake2.js"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Schema from "effect/Schema"
 import * as SchemaTransformation from "effect/SchemaTransformation"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 /** The branded, normalized address. Also its BCS layout (32 raw bytes). */
 export const Address = Bcs.Address

@@ -6,7 +6,7 @@
  * the seed to 32 bytes live at a different address. Pass `true` only for
  * those; Enoki's `getZkLoginAddresses` reports which one an account is.
  */
-import type * as Address from "@unconfirmed/sui/Address"
+import type * as Address from "../Address.ts"
 import * as Effect from "effect/Effect"
 import { genAddressSeedUnsafe } from "./AddressSeed.ts"
 import { type InvalidJwt, InvalidZkLoginInput, reasonOf } from "./Errors.ts"

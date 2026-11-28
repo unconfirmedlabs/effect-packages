@@ -30,10 +30,10 @@
  *   `RpcError` `NOT_FOUND`, a `StreamHead` event filter `UNIMPLEMENTED`,
  *   transaction bytes that don't decode `INVALID_ARGUMENT`.
  *
- * Not in the `@unconfirmed/sui` barrel: import `@unconfirmed/sui/Testing`.
+ * Not in the `@unconfirmed/effect-sui` barrel: import `@unconfirmed/effect-sui/Testing`.
  */
 import { base58 } from "@scure/base"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
@@ -249,7 +249,7 @@ export class Node extends /* @__PURE__ */ Context.Service<Node, {
   readonly respond: (responder: Responder) => Effect.Effect<void>
   readonly requests: Effect.Effect<ReadonlyArray<Request>>
   readonly clearRequests: Effect.Effect<void>
-}>()("@unconfirmed/sui/Testing/Node") {}
+}>()("@unconfirmed/effect-sui/Testing/Node") {}
 
 /** Every capability service the layer provides. */
 export type Services =

@@ -109,7 +109,7 @@ export const makeMemory = (options?: { readonly maxSettled?: number }): JournalS
   }
 }
 
-export const Journal = Context.Reference<JournalService>("@unconfirmed/sui-lifecycle/Journal", {
+export const Journal = Context.Reference<JournalService>("@unconfirmed/effect-sui/lifecycle/Journal", {
   defaultValue: () => makeMemory()
 })
 

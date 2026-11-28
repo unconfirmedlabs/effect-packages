@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import type { Address } from "./Address.ts"
 import type { RpcError } from "./RpcError.ts"
 import type { ObjectDigest, ObjectRef } from "./TransactionData.ts"
@@ -74,7 +74,7 @@ export interface ListOwnedOptions {
 export class Objects extends /* @__PURE__ */ Context.Service<Objects, {
   readonly get: (objectId: Address) => Effect.Effect<SuiObject, ObjectNotFound | RpcError>
   readonly listOwned: (owner: Address, options?: ListOwnedOptions) => Stream.Stream<SuiObject, RpcError>
-}>()("@unconfirmed/sui/Objects") {}
+}>()("@unconfirmed/effect-sui/Objects") {}
 
 /** The object's type is not the one asked for. */
 export class ObjectTypeMismatch extends /* @__PURE__ */ Schema.TaggedError<ObjectTypeMismatch>()("ObjectTypeMismatch", {

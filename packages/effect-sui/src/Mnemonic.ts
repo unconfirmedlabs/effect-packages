@@ -27,8 +27,8 @@ import { hmac } from "@noble/hashes/hmac.js"
 import { sha512 } from "@noble/hashes/sha2.js"
 import { generateMnemonic, validateMnemonic } from "@scure/bip39"
 import { wordlist } from "@scure/bip39/wordlists/english.js"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import type * as Signer from "@unconfirmed/sui/Signer"
+import * as Ed25519 from "./Ed25519.ts"
+import type * as Signer from "./Signer.ts"
 import * as Effect from "effect/Effect"
 import {
   type Derived,
@@ -47,9 +47,9 @@ import {
   SECP256R1,
   seedOf,
   type Source
-} from "./internal/core.ts"
+} from "./internal/mnemonic.ts"
 
-export { InvalidMnemonic, InvalidPath, normalize, parse, type Path, type PathIndex, type Source, toSeed } from "./internal/core.ts"
+export { InvalidMnemonic, InvalidPath, normalize, parse, type Path, type PathIndex, type Source, toSeed } from "./internal/mnemonic.ts"
 
 // -----------------------------------------------------------------------------
 // Mnemonics

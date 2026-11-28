@@ -3,19 +3,19 @@
  * `Chain` services, provided as Layers. `execute` follows a script of
  * behaviours; what landed is remembered, so identical bytes land at most once.
  */
-import * as Address from "@unconfirmed/sui/Address"
-import { Chain } from "@unconfirmed/sui/Chain"
-import { Coins } from "@unconfirmed/sui/Coins"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as Hash from "@unconfirmed/sui/Hash"
-import { ObjectNotFound, Objects, type SuiObject } from "@unconfirmed/sui/Objects"
-import { Packages } from "@unconfirmed/sui/Packages"
-import { RpcError } from "@unconfirmed/sui/RpcError"
-import type * as T from "@unconfirmed/sui/TransactionData"
-import { type Effects, type IncludeOptions, TransactionNotFound, Transactions } from "@unconfirmed/sui/Transactions"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import { Chain } from "@unconfirmed/effect-sui/Chain"
+import { Coins } from "@unconfirmed/effect-sui/Coins"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as Hash from "@unconfirmed/effect-sui/Hash"
+import { ObjectNotFound, Objects, type SuiObject } from "@unconfirmed/effect-sui/Objects"
+import { Packages } from "@unconfirmed/effect-sui/Packages"
+import { RpcError } from "@unconfirmed/effect-sui/RpcError"
+import type * as T from "@unconfirmed/effect-sui/TransactionData"
+import { type Effects, type IncludeOptions, TransactionNotFound, Transactions } from "@unconfirmed/effect-sui/Transactions"
 import { Effect, Layer, Option, Stream } from "effect"
-import * as Evidence from "../src/Evidence.ts"
-import * as Lifecycle from "../src/Lifecycle.ts"
+import * as Evidence from "../../src/lifecycle/Evidence.ts"
+import * as Lifecycle from "../../src/lifecycle/Lifecycle.ts"
 
 /**
  * An `Evidence` backend over the world: its epoch, whether the digest landed,

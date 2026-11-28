@@ -13,8 +13,8 @@
  * - `digest`: `reserved` (u64 LE) ‖ `epoch` (u32 LE) ‖ twenty `0xac` bytes.
  */
 import { base58 } from "@scure/base"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 import { type Address, fromBytes, normalize } from "./Address.ts"
 import { deriveId } from "./DynamicFields.ts"
 import type { ObjectDigest, ObjectRef } from "./TransactionData.ts"

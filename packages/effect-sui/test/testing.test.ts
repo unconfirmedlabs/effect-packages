@@ -1,9 +1,9 @@
 /**
- * The in-memory node (`@unconfirmed/sui/Testing`): batched reads and the
+ * The in-memory node (`@unconfirmed/effect-sui/Testing`): batched reads and the
  * request log, seeded balances and fields, and a scripted transaction through
  * `Tx.run`, `waitFor` and `Events`.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"

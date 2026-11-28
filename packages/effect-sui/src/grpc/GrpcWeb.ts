@@ -234,7 +234,7 @@ export interface GrpcWebOptions {
 export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
   readonly unary: <I, O>(method: Rpc<I, O, false>, request: I) => Effect.Effect<O, RpcError>
   readonly serverStream: <I, O>(method: Rpc<I, O, true>, request: I) => Stream.Stream<O, RpcError>
-}>()("@unconfirmed/sui/GrpcWeb") {
+}>()("@unconfirmed/effect-sui/GrpcWeb") {
   static readonly layer = (options: GrpcWebOptions): Layer.Layer<GrpcWeb, never, HttpClient.HttpClient> =>
     Layer.effect(
       GrpcWeb,

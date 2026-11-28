@@ -4,14 +4,14 @@
  * whose proof is junk and expects the node's verdict as a typed InvalidSignature.
  */
 import * as Theirs from "@mysten/sui/zklogin"
-import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
-import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
+import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
+import { GrpcWeb } from "@unconfirmed/effect-sui/grpc/GrpcWeb"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { live, TESTNET } from "@unconfirmed/test-support/live"
-import * as ZkLogin from "../src/ZkLogin.ts"
-import * as ZkLoginVerifierGrpc from "../src/ZkLoginVerifierGrpc.ts"
+import * as ZkLogin from "../../src/zklogin/ZkLogin.ts"
+import * as ZkLoginVerifierGrpc from "../../src/zklogin/ZkLoginVerifierGrpc.ts"
 import { claims, inputs } from "@unconfirmed/test-support/zklogin"
 
 const msg = new TextEncoder().encode("zkLogin live")

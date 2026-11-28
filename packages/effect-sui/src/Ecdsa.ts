@@ -1,6 +1,6 @@
 /**
  * The ECDSA schemes (Secp256k1, Secp256r1) over a curve passed in, so the
- * core links no curve: `@unconfirmed/sui-secp256k1` and `-secp256r1` give
+ * core links no curve: `@unconfirmed/effect-sui/Secp256k1` and `-secp256r1` give
  * their noble curve and flag. Signatures are ECDSA over
  * `sha256(blake2b256(intentMessage))`, low-S, 64-byte compact `r || s`;
  * public keys are 33-byte compressed points.

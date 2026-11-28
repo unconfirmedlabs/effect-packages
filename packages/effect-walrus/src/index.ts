@@ -1,5 +1,5 @@
 /**
- * `@unconfirmed/walrus`: a Walrus client on `@unconfirmed/sui`.
+ * `@unconfirmed/effect-walrus`: a Walrus client on `@unconfirmed/effect-sui`.
  *
  * Pure core (no services): BlobId, Bft, Encoding, Merkle, Messages,
  * Certificate, Cost, Status, Errors.

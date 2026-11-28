@@ -11,7 +11,7 @@
  * and the three after it). Every outcome is a typed `GatewayError`: an
  * unknown blob is `GatewayError { status: 404 }`, no answer has no `status`.
  */
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import * as Context from "effect/Context"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
@@ -37,7 +37,7 @@ export interface AggregatorService {
   readonly byIdentifier: (quiltId: BlobId, identifier: string) => Effect.Effect<Uint8Array, GatewayError>
 }
 
-export class Aggregator extends Context.Service<Aggregator, AggregatorService>()("@unconfirmed/walrus/Aggregator") {}
+export class Aggregator extends Context.Service<Aggregator, AggregatorService>()("@unconfirmed/effect-walrus/Aggregator") {}
 
 export interface AggregatorOptions extends GatewayOptions {
   /** Default 60 seconds: the aggregator reads the blob from the nodes before it answers. */

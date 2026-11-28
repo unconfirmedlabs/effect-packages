@@ -1,12 +1,12 @@
 /**
  * Canonical-encoding rules and decode bounds. Randomized parity with @mysten/bcs
- * lives in packages/sui/test/bcs-fuzz.test.ts.
+ * lives in packages/effect-sui/test/bcs-fuzz.test.ts.
  */
 import { describe, expect, test } from "bun:test"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 
 const uleb = (n: number) => {
   const out: Array<number> = []

@@ -10,7 +10,7 @@
  * `Signed`, `Unknown` and `Executed` keep the `include` the submission asked
  * for, so a reconcile after a crash returns the same parts of the effects.
  */
-import type { Include } from "@unconfirmed/sui/Transactions"
+import type { Include } from "../Transactions.ts"
 import * as DateTime from "effect/DateTime"
 import * as Schema from "effect/Schema"
 import { NotAppliedEvidence } from "./Outcome.ts"

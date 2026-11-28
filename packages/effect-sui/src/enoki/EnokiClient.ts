@@ -5,8 +5,8 @@
  *
  *   EnokiHttp.layer({ apiKey }).pipe(Layer.provide(FetchHttpClient.layer))
  */
-import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import * as Signature from "@unconfirmed/sui-zklogin/Signature"
+import type * as SignatureScheme from "../SignatureScheme.ts"
+import * as Signature from "../zklogin/Signature.ts"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -201,4 +201,4 @@ export class EnokiClient extends Context.Service<EnokiClient, {
   readonly sponsorAndExecuteTransaction: (
     input: SponsorAndExecuteTransactionInput
   ) => Effect.Effect<ExecutedTransaction, EnokiError>
-}>()("@unconfirmed/sui-enoki/EnokiClient") {}
+}>()("@unconfirmed/effect-sui/enoki/EnokiClient") {}

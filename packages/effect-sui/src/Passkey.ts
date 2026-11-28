@@ -1,10 +1,10 @@
 /**
- * Passkeys for `@unconfirmed/sui`.
+ * Passkeys for `@unconfirmed/effect-sui`.
  *
- *   import * as Passkey from "@unconfirmed/sui-passkey"
+ *   import * as Passkey from "@unconfirmed/effect-sui/Passkey"
  *   SignatureSchemes.layer(Ed25519.scheme, Passkey.scheme)
  *   const signer = yield* Passkey.create(Passkey.browserProvider("My app"))
  */
-export * from "./BrowserProvider.ts"
-export * from "./Passkey.ts"
-export * from "./SoftwareProvider.ts"
+export * from "./internal/passkey/BrowserProvider.ts"
+export * from "./internal/passkey/Passkey.ts"
+export * from "./internal/passkey/SoftwareProvider.ts"

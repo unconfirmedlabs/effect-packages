@@ -1,6 +1,6 @@
 /**
- * zkLogin for `@unconfirmed/sui`. Prefer the subpath namespaces
- * (`@unconfirmed/sui-zklogin/ZkLogin`, `.../Nonce`, ...); this barrel is for convenience.
+ * zkLogin for `@unconfirmed/effect-sui`. Prefer the subpath namespaces
+ * (`@unconfirmed/effect-sui/zklogin/ZkLogin`, `.../Nonce`, ...); this barrel is for convenience.
  */
 export * from "./ZkLogin.ts"
 export * as ZkLogin from "./ZkLogin.ts"

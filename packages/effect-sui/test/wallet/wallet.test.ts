@@ -18,9 +18,9 @@ import {
   Tx,
   TypeTag,
   Verify
-} from "@unconfirmed/sui"
-import * as Testing from "@unconfirmed/sui/Testing"
-import { Wallet } from "../src/index.ts"
+} from "@unconfirmed/effect-sui"
+import * as Testing from "@unconfirmed/effect-sui/Testing"
+import { Wallet } from "../../src/wallet/index.ts"
 import { fakeWallet, type FakeWalletOptions } from "@unconfirmed/test-support/wallet"
 
 const A = Address.normalize

@@ -1,7 +1,7 @@
 /**
  * Move type tags: the BCS schema plus the `0x2::coin::Coin<0x2::sui::SUI>` string form.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { type Address, normalize } from "./Address.ts"
 
 export interface StructTag {

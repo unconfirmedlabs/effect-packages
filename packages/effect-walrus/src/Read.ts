@@ -19,7 +19,7 @@ import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schedule from "effect/Schedule"
-import * as Quorum from "@unconfirmed/quorum/Quorum"
+import * as Quorum from "@unconfirmed/effect-quorum/Quorum"
 import * as Bft from "./Bft.ts"
 import type { BlobId } from "./BlobId.ts"
 import {
@@ -50,7 +50,7 @@ import * as Status from "./Status.ts"
 import type { BlobStatus } from "./Status.ts"
 import { NodeError, StorageNodes } from "./StorageNode.ts"
 import * as StorageNode from "./StorageNode.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 // -----------------------------------------------------------------------------
 // API

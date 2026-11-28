@@ -15,7 +15,7 @@
  * and continue from its last saved `Step` (or from nothing: registration
  * reuses an owned, uncertified `Blob` for the same blob). Transactions go
  * through an injected `Executor`, so wallets, sponsors and journals
- * (`sui-lifecycle`) all fit without this package depending on them.
+ * (`@unconfirmed/effect-sui/lifecycle`) all fit without this package depending on them.
  */
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
@@ -26,15 +26,15 @@ import * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Quorum from "@unconfirmed/quorum/Quorum"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Objects from "@unconfirmed/sui/Objects"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import type * as Signer from "@unconfirmed/sui/Signer"
-import type * as Transactions from "@unconfirmed/sui/Transactions"
-import * as Tx from "@unconfirmed/sui/Tx"
-import * as TypeTag from "@unconfirmed/sui/TypeTag"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Quorum from "@unconfirmed/effect-quorum/Quorum"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
+import type * as Signer from "@unconfirmed/effect-sui/Signer"
+import type * as Transactions from "@unconfirmed/effect-sui/Transactions"
+import * as Tx from "@unconfirmed/effect-sui/Tx"
+import * as TypeTag from "@unconfirmed/effect-sui/TypeTag"
 import * as Bft from "./Bft.ts"
 import * as BlobId from "./BlobId.ts"
 import * as Certificate from "./Certificate.ts"
@@ -59,7 +59,7 @@ import * as Recipes from "./Recipes.ts"
 import { NodeError, retryable, StorageNodes } from "./StorageNode.ts"
 import { System, type SystemError, type SystemState } from "./System.ts"
 import { authAndTipWith, makeNonce, UploadRelay, type UploadRelayService, verifyCertificate } from "./UploadRelay.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 // -----------------------------------------------------------------------------
 // Steps
@@ -106,7 +106,7 @@ export type Certified = Extract<Step, { readonly _tag: "Certified" }>
 // Executor
 // -----------------------------------------------------------------------------
 
-/** How transactions are sent. The package depends on neither `Tx.run` nor `sui-lifecycle`; the caller picks. */
+/** How transactions are sent. The package depends on neither `Tx.run` nor `Lifecycle.run`; the caller picks. */
 export interface Executor<E, R> {
   readonly sender: Address.Address
   readonly execute: <A, E1, R1>(

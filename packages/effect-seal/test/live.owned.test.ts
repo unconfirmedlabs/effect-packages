@@ -4,7 +4,7 @@
  * file spends nothing (the test is skipped).
  *
  * The signer is `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key of a funded
- * testnet account), as in `packages/walrus/test/live.write.test.ts`. The key
+ * testnet account), as in `packages/effect-walrus/test/live.write.test.ts`. The key
  * is never printed, logged or written; any error while loading it becomes one
  * fixed message.
  *
@@ -29,13 +29,13 @@
  * `bcs(sender) ‖ nonce` is confirmed: the servers released the keys. The
  * whole test took 3 s. Balance after run 1: 1,113,531,326 MIST.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import type * as Address from "@unconfirmed/sui/Address"
-import * as Coins from "@unconfirmed/sui/Coins"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import type * as Transactions from "@unconfirmed/sui/Transactions"
-import * as Tx from "@unconfirmed/sui/Tx"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import type * as Address from "@unconfirmed/effect-sui/Address"
+import * as Coins from "@unconfirmed/effect-sui/Coins"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
+import type * as Transactions from "@unconfirmed/effect-sui/Transactions"
+import * as Tx from "@unconfirmed/effect-sui/Tx"
+import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"

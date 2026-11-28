@@ -14,13 +14,13 @@
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { bytesToHex } from "@noble/hashes/utils.js"
 import { base64 } from "@scure/base"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import type { Address } from "@unconfirmed/sui/Address"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as PrivateKey from "@unconfirmed/sui/PrivateKey"
-import type * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import * as Signer from "@unconfirmed/sui/Signer"
-import * as Verify from "@unconfirmed/sui/Verify"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import type { Address } from "@unconfirmed/effect-sui/Address"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as PrivateKey from "@unconfirmed/effect-sui/PrivateKey"
+import type * as SignatureScheme from "@unconfirmed/effect-sui/SignatureScheme"
+import * as Signer from "@unconfirmed/effect-sui/Signer"
+import * as Verify from "@unconfirmed/effect-sui/Verify"
 import * as Clock from "effect/Clock"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
@@ -39,10 +39,10 @@ import type { Certificate } from "./KeyServerApi.ts"
 // -----------------------------------------------------------------------------
 
 /**
- * Who signs the certificate: a key `Signer` (`@unconfirmed/sui/Signer`, signed
+ * Who signs the certificate: a key `Signer` (`@unconfirmed/effect-sui/Signer`, signed
  * through `Signer.signPersonalMessage`), or anything that signs personal
- * messages itself. `@unconfirmed/sui-wallet`'s `WalletSigner` fits as it is.
- * Structural on purpose: Seal does not depend on `sui-wallet`.
+ * messages itself. `@unconfirmed/effect-sui/wallet`'s `WalletSigner` fits as it is.
+ * Structural on purpose: Seal does not depend on `@unconfirmed/effect-sui/wallet`.
  */
 export type MessageSigner = Signer.Signer | PersonalMessageSigner
 

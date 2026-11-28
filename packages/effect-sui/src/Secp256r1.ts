@@ -1,14 +1,14 @@
 /**
- * Secp256r1 for `@unconfirmed/sui`: a `SignatureScheme` to install in the
+ * Secp256r1 for `@unconfirmed/effect-sui`: a `SignatureScheme` to install in the
  * registry, and signer constructors. Signatures are ECDSA over
  * `sha256(blake2b256(intentMessage))`, low-S, 64-byte compact `r || s`
- * (`@unconfirmed/sui/Ecdsa` over noble's `p256`).
+ * (`@unconfirmed/effect-sui/Ecdsa` over noble's `p256`).
  *
  *   SignatureSchemes.layer(Ed25519.scheme, Secp256r1.scheme)
  *   const signer = yield* Secp256r1.fromSecretKey(secretKey)
  */
 import { p256 } from "@noble/curves/nist.js"
-import * as Ecdsa from "@unconfirmed/sui/Ecdsa"
+import * as Ecdsa from "./Ecdsa.ts"
 
 export const FLAG = 0x02
 

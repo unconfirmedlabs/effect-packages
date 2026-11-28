@@ -14,7 +14,7 @@ import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
 import * as HttpClient from "effect/http/HttpClient"
 import { TestClock } from "effect/testing"
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import * as Aggregator from "../src/Aggregator.ts"
 import * as BlobId from "../src/BlobId.ts"
 import * as Committee from "../src/Committee.ts"
@@ -306,8 +306,8 @@ describe("Walrus.layer", () => {
     // Only the composition is checked here: the services resolve, the config is the network's.
     const stub = Layer.mergeAll(
       Layer.succeed(HttpClient.HttpClient, HttpClient.make(() => Effect.die("unused"))),
-      Layer.succeed((await import("@unconfirmed/sui/Objects")).Objects, {} as never),
-      Layer.succeed((await import("@unconfirmed/sui/Packages")).Packages, {} as never)
+      Layer.succeed((await import("@unconfirmed/effect-sui/Objects")).Objects, {} as never),
+      Layer.succeed((await import("@unconfirmed/effect-sui/Packages")).Packages, {} as never)
     )
     const check = (layer: ReturnType<typeof Walrus.layer>) =>
       Effect.runPromise(

@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Schedule from "effect/Schedule"
-import { Bcs } from "@unconfirmed/bcs"
+import { Bcs } from "@unconfirmed/effect-bcs"
 import { Address, Coins, Ed25519, Ptb, Tx, TypeTag } from "../src/index.ts"
 import { DEVNET, faucet, grpcLayer, live } from "./support.ts"
 

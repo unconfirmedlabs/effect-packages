@@ -17,7 +17,7 @@ const secureRandom = (length: number): Uint8Array => {
   return out
 }
 
-export const Entropy = /* @__PURE__ */ Context.Reference<(length: number) => Uint8Array>("@unconfirmed/seal/Entropy", {
+export const Entropy = /* @__PURE__ */ Context.Reference<(length: number) => Uint8Array>("@unconfirmed/effect-seal/Entropy", {
   defaultValue: () => secureRandom
 })
 

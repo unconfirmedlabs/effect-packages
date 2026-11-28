@@ -18,9 +18,9 @@
  * including timeouts and anything an `HttpClient` implementation throws.
  */
 import { sha256 } from "@noble/hashes/sha2.js"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Ptb from "@unconfirmed/sui/Ptb"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
 import * as Context from "effect/Context"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
@@ -137,7 +137,7 @@ export interface UploadRelayService {
   readonly upload: (o: UploadOptions) => Effect.Effect<Certificate.Certificate, RelayError>
 }
 
-export class UploadRelay extends Context.Service<UploadRelay, UploadRelayService>()("@unconfirmed/walrus/UploadRelay") {}
+export class UploadRelay extends Context.Service<UploadRelay, UploadRelayService>()("@unconfirmed/effect-walrus/UploadRelay") {}
 
 export interface UploadRelayOptions {
   /**

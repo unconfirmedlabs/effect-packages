@@ -4,18 +4,18 @@
  *
  * Only the `ProgrammableTransaction` is sent and signed (P2): no sender, gas
  * or expiration, so building one needs no chain access unless object inputs
- * have to be resolved. Recipes are ordinary `@unconfirmed/sui` `Ptb` recipes
+ * have to be resolved. Recipes are ordinary `@unconfirmed/effect-sui` `Ptb` recipes
  * (`Approval.call`, `Move.call`, generated builders), built with `Ptb.build`.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as AddressModule from "@unconfirmed/sui/Address"
-import type { Address } from "@unconfirmed/sui/Address"
-import type * as Objects from "@unconfirmed/sui/Objects"
-import type * as Packages from "@unconfirmed/sui/Packages"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import * as Resolve from "@unconfirmed/sui/Resolve"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
-import * as T from "@unconfirmed/sui/TransactionData"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as AddressModule from "@unconfirmed/effect-sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
+import type * as Objects from "@unconfirmed/effect-sui/Objects"
+import type * as Packages from "@unconfirmed/effect-sui/Packages"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
+import * as Resolve from "@unconfirmed/effect-sui/Resolve"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
+import * as T from "@unconfirmed/effect-sui/TransactionData"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import { InvalidApproval } from "./Errors.ts"

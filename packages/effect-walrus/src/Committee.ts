@@ -13,9 +13,9 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Objects from "@unconfirmed/sui/Objects"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
 import { WalrusConfig } from "./Config.ts"
 import { BehindCurrentEpoch, CommitteeMismatch, type UnsupportedSystemVersion } from "./Errors.ts"
 import type * as committee from "./generated/walrus/committee.ts"
@@ -56,7 +56,7 @@ export type CommitteeError = RpcError | Objects.ObjectNotFound | Objects.ObjectD
 export class Committees extends Context.Service<Committees, {
   readonly get: Effect.Effect<ActiveCommittees, CommitteeError>
   readonly refresh: Effect.Effect<ActiveCommittees, CommitteeError>
-}>()("@unconfirmed/walrus/Committees") {}
+}>()("@unconfirmed/effect-walrus/Committees") {}
 
 export interface CommitteesOptions {
   /** Default `"https"`. */

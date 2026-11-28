@@ -1,6 +1,6 @@
 /**
- * Enoki for `@unconfirmed/sui`. Prefer the subpath namespaces
- * (`@unconfirmed/sui-enoki/EnokiClient`, `.../Sponsor`, ...); this barrel is for convenience.
+ * Enoki for `@unconfirmed/effect-sui`. Prefer the subpath namespaces
+ * (`@unconfirmed/effect-sui/enoki/EnokiClient`, `.../Sponsor`, ...); this barrel is for convenience.
  */
 export * from "./EnokiClient.ts"
 export * as EnokiHttp from "./EnokiHttp.ts"

@@ -5,7 +5,7 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Stream from "effect/Stream"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { type Address, normalize } from "./Address.ts"
 import type { SuiObject } from "./Objects.ts"
 import { RpcError } from "./RpcError.ts"
@@ -33,7 +33,7 @@ export class Coins extends /* @__PURE__ */ Context.Service<Coins, {
   readonly listBalances: (owner: Address) => Stream.Stream<Balance, RpcError>
   /** The owner's coin objects of `coinType`, or of every type when it is omitted. */
   readonly list: (owner: Address, coinType?: string) => Stream.Stream<Coin, RpcError>
-}>()("@unconfirmed/sui/Coins") {}
+}>()("@unconfirmed/effect-sui/Coins") {}
 
 const decodeCoin = /* @__PURE__ */ Bcs.decode(/* @__PURE__ */ Bcs.struct({ id: Bcs.Address, balance: Bcs.u64 }))
 

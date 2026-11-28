@@ -8,7 +8,7 @@
  */
 import { sha3_256 } from "@noble/hashes/sha3.js"
 import { hexToBytes } from "@noble/hashes/utils.js"
-import type { Address } from "@unconfirmed/sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
 import * as Bls from "./Bls.ts"
 import { concat, utf8 } from "./bytes.ts"
 

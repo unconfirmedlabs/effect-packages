@@ -6,9 +6,9 @@ import * as GraphQLGroup from "effect/graphql/GraphQLGroup"
 import type * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
-import * as Chain from "@unconfirmed/sui/Chain"
-import { RpcError } from "@unconfirmed/sui/RpcError"
-import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
+import * as Chain from "../Chain.ts"
+import { RpcError } from "../RpcError.ts"
+import type { ObjectDigest } from "../TransactionData.ts"
 import { call, U64 } from "./convert.ts"
 
 /** Chain info and the reference gas price in one request (they read the same `epoch`). */

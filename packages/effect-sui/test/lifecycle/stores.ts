@@ -7,8 +7,8 @@ import { IDBFactory, IDBKeyRange } from "fake-indexeddb"
 import * as Layer from "effect/Layer"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
 import { makeFakeOpfs } from "@unconfirmed/test-support/opfs"
-import * as KeyValueStoreIndexedDb from "../src/KeyValueStoreIndexedDb.ts"
-import * as KeyValueStoreOpfs from "../src/KeyValueStoreOpfs.ts"
+import * as KeyValueStoreIndexedDb from "../../src/lifecycle/KeyValueStoreIndexedDb.ts"
+import * as KeyValueStoreOpfs from "../../src/lifecycle/KeyValueStoreOpfs.ts"
 
 // The module reads IDBKeyRange from the global scope, as in a browser.
 ;(globalThis as { IDBKeyRange?: unknown }).IDBKeyRange ??= IDBKeyRange

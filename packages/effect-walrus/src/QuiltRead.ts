@@ -27,7 +27,7 @@ import * as Read from "./Read.ts"
 import type { ReadError, ReadOptions, ReadServices } from "./Read.ts"
 import { NodeError, StorageNodes } from "./StorageNode.ts"
 import * as StorageNode from "./StorageNode.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 // -----------------------------------------------------------------------------
 // API

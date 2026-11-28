@@ -7,7 +7,7 @@
 import * as Effect from "effect/Effect"
 import * as GraphQL from "effect/graphql/GraphQL"
 import * as Schema from "effect/Schema"
-import { RpcError } from "@unconfirmed/sui/RpcError"
+import { RpcError } from "../RpcError.ts"
 import { U64 } from "./convert.ts"
 
 export const Tip = GraphQL.query("Tip", {

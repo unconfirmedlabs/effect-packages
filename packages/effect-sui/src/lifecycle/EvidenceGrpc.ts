@@ -11,8 +11,8 @@
  * calls may reach different nodes; use `SubmitConfig` `expiryEvidence: "never"`
  * there.
  */
-import * as Rpc from "@unconfirmed/sui/grpc/generated/rpc"
-import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
+import * as Rpc from "../grpc/generated/rpc.ts"
+import { GrpcWeb } from "../grpc/GrpcWeb.ts"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"

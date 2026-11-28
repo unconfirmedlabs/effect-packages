@@ -2,11 +2,11 @@ import { MLDSA65Keypair, MLDSA65PublicKey } from "@mysten/sui/keypairs/mldsa65"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { MultiSigPublicKey } from "@mysten/sui/multisig"
 import { verifyPersonalMessageSignature, verifyTransactionSignature } from "@mysten/sui/verify"
-import { Ed25519, PrivateKey, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
-import * as MultiSig from "@unconfirmed/sui-multisig"
+import { Ed25519, PrivateKey, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
+import * as MultiSig from "@unconfirmed/effect-sui/MultiSig"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as MlDsa65 from "../src/index.ts"
+import * as MlDsa65 from "../../src/MlDsa65.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const fromB64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"))

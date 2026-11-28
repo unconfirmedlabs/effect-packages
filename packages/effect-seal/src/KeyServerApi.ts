@@ -13,7 +13,7 @@
  * `KeyServerError` is defined in `Errors.ts` (a leaf module) and re-exported here.
  */
 import { bytesToHex } from "@noble/hashes/utils.js"
-import type { Address } from "@unconfirmed/sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
 import { base64 } from "@scure/base"
 import * as Clock from "effect/Clock"
 import * as Context from "effect/Context"
@@ -113,7 +113,7 @@ export interface KeyServerApiService {
 }
 
 export class KeyServerApi extends /* @__PURE__ */ Context.Service<KeyServerApi, KeyServerApiService>()(
-  "@unconfirmed/seal/KeyServerApi"
+  "@unconfirmed/effect-seal/KeyServerApi"
 ) {}
 
 // -----------------------------------------------------------------------------

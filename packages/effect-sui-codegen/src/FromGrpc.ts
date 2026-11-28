@@ -7,10 +7,10 @@
  * neither does the result.
  */
 import * as Effect from "effect/Effect"
-import type * as P from "@unconfirmed/sui/grpc/generated/proto"
-import * as Rpc from "@unconfirmed/sui/grpc/generated/rpc"
-import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
+import type * as P from "@unconfirmed/effect-sui/grpc/generated/proto"
+import * as Rpc from "@unconfirmed/effect-sui/grpc/generated/rpc"
+import { GrpcWeb } from "@unconfirmed/effect-sui/grpc/GrpcWeb"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
 import * as M from "./Model.ts"
 
 const PRIMITIVES: Record<number, M.Primitive> = {

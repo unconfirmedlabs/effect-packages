@@ -1,6 +1,6 @@
-# `@unconfirmed/walrus-wasm`
+# `@unconfirmed/effect-walrus/wasm`
 
-Walrus RS2 erasure coding, per-sliver Merkle roots and BLS12-381 min-pk in WebAssembly, for `@unconfirmed/walrus`'s `Encoder`. It replaces `@mysten/walrus-wasm` 0.3.1 and is byte-for-byte compatible with it: the same blob ids, metadata, slivers and decoded blobs (`packages/walrus/test/parity.encoder.test.ts`, `test/wasm.test.ts`).
+Walrus RS2 erasure coding, per-sliver Merkle roots and BLS12-381 min-pk in WebAssembly, for `@unconfirmed/effect-walrus`'s `Encoder`. It replaces `@mysten/walrus-wasm` 0.3.1 and is byte-for-byte compatible with it: the same blob ids, metadata, slivers and decoded blobs (`packages/effect-walrus/test/parity.encoder.test.ts`, `test/wasm.test.ts`).
 
 The built artifacts are committed (`nodejs/`, `web/`), so the repo works without a Rust toolchain. Rebuild them only when `src/`, `Cargo.toml` or `Cargo.lock` changes.
 
@@ -17,7 +17,7 @@ The built artifacts are committed (`nodejs/`, `web/`), so the repo works without
 | `simd()` | Whether the loaded build is the `simd128` one. |
 | `default` (`init`), `simdSupported()` | Browsers: picks a build (below), fetches and instantiates it. Bun and Node: no-op, `true`. |
 
-Every error is a thrown `Error` (`JsError`); `@unconfirmed/walrus`'s `Encoder` turns each into an `EncoderError`.
+Every error is a thrown `Error` (`JsError`); `@unconfirmed/effect-walrus`'s `Encoder` turns each into an `EncoderError`.
 
 ## Source
 
@@ -45,7 +45,7 @@ Release profile: `opt-level = 3`, fat LTO, one codegen unit, `panic = "abort"`; 
 ## Building
 
 ```sh
-cd packages/walrus-wasm
+cd packages/effect-walrus/wasm
 bun run build          # rebuild nodejs/ and web/
 bun run build:check    # rebuild into a temp dir and compare byte for byte with the committed files
 cargo test --release   # the Rust tests (native)
@@ -62,7 +62,7 @@ cargo test --release   # the Rust tests (native)
 
 ## Speed
 
-`bun packages/walrus/scripts/bench-wasm.ts` (and `node …`): raw calls, median of 3 to 9 runs after a warm-up, milliseconds unless marked, x64 Linux, Bun 1.4.4 and Node 24.22.1. Mysten is `@mysten/walrus-wasm` 0.3.1; its "roots" is the crafted-blob method. `n = 10` cannot hold 10 MB (its maximum is 1.8 MB).
+`bun packages/effect-walrus/scripts/bench-wasm.ts` (and `node …`): raw calls, median of 3 to 9 runs after a warm-up, milliseconds unless marked, x64 Linux, Bun 1.4.4 and Node 24.22.1. Mysten is `@mysten/walrus-wasm` 0.3.1; its "roots" is the crafted-blob method. `n = 10` cannot hold 10 MB (its maximum is 1.8 MB).
 
 | n | blob | operation | Bun: ours | Bun: Mysten | × | Node: ours | Node: Mysten | × |
 |---|---|---|---|---|---|---|---|---|

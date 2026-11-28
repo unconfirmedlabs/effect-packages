@@ -7,9 +7,9 @@
  * default retry schedule.
  */
 import { describe, expect, test } from "bun:test"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Objects from "@unconfirmed/sui/Objects"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
 import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"

@@ -3,7 +3,7 @@
  * without padding, and passed to Move as the `u256` read little-endian.
  */
 import { blake2b } from "@noble/hashes/blake2.js"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import type * as Brand from "effect/Brand"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"

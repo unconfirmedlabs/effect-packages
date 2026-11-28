@@ -15,4 +15,4 @@ export class Checkpoints extends /* @__PURE__ */ Context.Service<Checkpoints, {
   readonly list: (options?: { readonly start?: bigint; readonly end?: bigint }) => Stream.Stream<CheckpointSummary, RpcError>
   /** New checkpoints as they are certified. */
   readonly subscribe: Stream.Stream<CheckpointSummary, RpcError>
-}>()("@unconfirmed/sui/Checkpoints") {}
+}>()("@unconfirmed/effect-sui/Checkpoints") {}

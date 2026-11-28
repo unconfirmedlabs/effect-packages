@@ -10,12 +10,12 @@ import * as GraphQLClientError from "effect/graphql/GraphQLClientError"
 import * as Schema from "effect/Schema"
 import * as SchemaGetter from "effect/SchemaGetter"
 import * as Stream from "effect/Stream"
-import * as Address from "@unconfirmed/sui/Address"
-import type * as Events from "@unconfirmed/sui/Events"
-import type * as Objects from "@unconfirmed/sui/Objects"
-import { type RpcCode, RpcError } from "@unconfirmed/sui/RpcError"
-import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
-import type * as Transactions from "@unconfirmed/sui/Transactions"
+import * as Address from "../Address.ts"
+import type * as Events from "../Events.ts"
+import type * as Objects from "../Objects.ts"
+import { type RpcCode, RpcError } from "../RpcError.ts"
+import type { ObjectDigest } from "../TransactionData.ts"
+import type * as Transactions from "../Transactions.ts"
 
 // -----------------------------------------------------------------------------
 // Scalars

@@ -2,12 +2,12 @@
  * A 2-of-3 multisig (Ed25519 + Ed25519 + Secp256k1, weights 1/1/2) executing
  * on devnet through the same `Tx.run` any single key uses. Opt in with SUI_LIVE=1.
  */
-import { Ed25519, Ptb, Resolve, Tx } from "@unconfirmed/sui"
-import * as Secp256k1 from "@unconfirmed/sui-secp256k1"
+import { Ed25519, Ptb, Resolve, Tx } from "@unconfirmed/effect-sui"
+import * as Secp256k1 from "@unconfirmed/effect-sui/Secp256k1"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { DEVNET, faucet, grpcLayer, live } from "@unconfirmed/test-support/live"
-import * as MultiSig from "../src/index.ts"
+import * as MultiSig from "../../src/MultiSig.ts"
 
 const suite = live ? describe : describe.skip
 

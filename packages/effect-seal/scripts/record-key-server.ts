@@ -3,14 +3,14 @@
  * `test/fixtures/key-server/recorded.json`: one `/v1/service` and one
  * `fetch_key` success, and every error a client can provoke on testnet.
  *
- *   bun packages/seal/scripts/record-key-server.ts
+ *   bun packages/effect-seal/scripts/record-key-server.ts
  *
  * Every user and session key is a fresh in-memory Ed25519 key; nothing is
  * signed with a wallet and nothing costs funds. Requests go to Mysten's first
  * testnet server, the testnet and mainnet aggregators and one server that was
  * answering `503` (§0.1), spaced to stay under the 10 per second limit (H11).
  */
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import * as Effect from "effect/Effect"
 import { writeFileSync } from "node:fs"
 import * as KeyServerApi from "../src/KeyServerApi.ts"
@@ -201,7 +201,7 @@ await record("mainnet-aggregator-401", post(AGGREGATOR_MAINNET, ok, { note: "no 
 
 const out = {
   source:
-    "Recorded by packages/seal/scripts/record-key-server.ts with fresh in-memory Ed25519 keys (no wallet, no funds). Servers: " +
+    "Recorded by packages/effect-seal/scripts/record-key-server.ts with fresh in-memory Ed25519 keys (no wallet, no funds). Servers: " +
     [...reached].join(", ") +
     ".",
   recordedAt: new Date().toISOString(),

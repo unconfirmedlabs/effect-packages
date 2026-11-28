@@ -10,9 +10,9 @@
  *   message that does not contain it.
  */
 import * as Effect from "effect/Effect"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as PrivateKey from "@unconfirmed/sui/PrivateKey"
-import type * as Signer from "@unconfirmed/sui/Signer"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as PrivateKey from "@unconfirmed/effect-sui/PrivateKey"
+import type * as Signer from "@unconfirmed/effect-sui/Signer"
 
 const ADDRESS = /^0x[0-9a-fA-F]{64}$/
 
@@ -35,9 +35,9 @@ export const loadLiveSigner = async (): Promise<Signer.Signer> => {
     const signer = key.scheme === "ED25519"
       ? await Effect.runPromise(Ed25519.fromSecretKey(key.secretKey))
       : key.scheme === "Secp256k1"
-      ? await Effect.runPromise((await import("@unconfirmed/sui-secp256k1")).fromSecretKey(key.secretKey))
+      ? await Effect.runPromise((await import("@unconfirmed/effect-sui/Secp256k1")).fromSecretKey(key.secretKey))
       : key.scheme === "Secp256r1"
-      ? await Effect.runPromise((await import("@unconfirmed/sui-secp256r1")).fromSecretKey(key.secretKey))
+      ? await Effect.runPromise((await import("@unconfirmed/effect-sui/Secp256r1")).fromSecretKey(key.secretKey))
       : undefined
     if (signer !== undefined) return signer
   } catch {

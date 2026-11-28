@@ -2,7 +2,7 @@
  * Parity with `@mysten/seal` 2.0.1 (§6.2): the encrypted object's BCS, encryption byte for byte
  * under recorded randomness, and decryption in both directions.
  */
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"

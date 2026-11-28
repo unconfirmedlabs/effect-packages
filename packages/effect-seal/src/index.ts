@@ -1,5 +1,5 @@
 /**
- * `@unconfirmed/seal`: a Seal client on `@unconfirmed/sui`.
+ * `@unconfirmed/effect-seal`: a Seal client on `@unconfirmed/effect-sui`.
  *
  * Pure core (no services): Bls, Shamir, Kdf, Ibe, ElGamal, Dem, EncryptedObject, Envelope, Entropy, Errors.
  * Chain: Config, KeyServer. Sessions: SessionKey, Approval.

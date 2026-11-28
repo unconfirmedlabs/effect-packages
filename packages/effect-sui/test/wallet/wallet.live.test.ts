@@ -6,9 +6,9 @@ import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { Ptb, Transactions, Tx } from "@unconfirmed/sui"
+import { Ptb, Transactions, Tx } from "@unconfirmed/effect-sui"
 import { DEVNET, faucet, grpcLayer, live } from "@unconfirmed/test-support/live"
-import { Wallet } from "../src/index.ts"
+import { Wallet } from "../../src/wallet/index.ts"
 import { fakeWallet } from "@unconfirmed/test-support/wallet"
 
 const suite = live ? describe : describe.skip

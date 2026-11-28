@@ -1,5 +1,5 @@
 /**
- * `@unconfirmed/sui-graphql`: every capability over Sui's GraphQL API.
+ * `@unconfirmed/effect-sui/graphql`: every capability over Sui's GraphQL API.
  *
  * Take everything with `layer({ url })`, or compose only what you use, and mix
  * with other transports:
@@ -9,15 +9,15 @@
 import type * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import type * as HttpClient from "effect/http/HttpClient"
 import * as Layer from "effect/Layer"
-import type { Chain } from "@unconfirmed/sui/Chain"
-import type { CheckpointData } from "@unconfirmed/sui/CheckpointData"
-import type { Checkpoints } from "@unconfirmed/sui/Checkpoints"
-import type { Coins } from "@unconfirmed/sui/Coins"
-import type { DynamicFields } from "@unconfirmed/sui/DynamicFields"
-import type { Events } from "@unconfirmed/sui/Events"
-import type { Objects } from "@unconfirmed/sui/Objects"
-import type { Packages } from "@unconfirmed/sui/Packages"
-import type { Transactions } from "@unconfirmed/sui/Transactions"
+import type { Chain } from "../Chain.ts"
+import type { CheckpointData } from "../CheckpointData.ts"
+import type { Checkpoints } from "../Checkpoints.ts"
+import type { Coins } from "../Coins.ts"
+import type { DynamicFields } from "../DynamicFields.ts"
+import type { Events } from "../Events.ts"
+import type { Objects } from "../Objects.ts"
+import type { Packages } from "../Packages.ts"
+import type { Transactions } from "../Transactions.ts"
 import * as ChainGraphQL from "./ChainGraphQL.ts"
 import * as CheckpointDataGraphQL from "./CheckpointDataGraphQL.ts"
 import * as CheckpointsGraphQL from "./CheckpointsGraphQL.ts"

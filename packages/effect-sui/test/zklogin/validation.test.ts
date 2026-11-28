@@ -4,18 +4,18 @@
  * default paths load only the Poseidon arities they need (SIGN-1).
  */
 import * as Theirs from "@mysten/sui/zklogin"
-import { Ed25519 } from "@unconfirmed/sui"
+import { Ed25519 } from "@unconfirmed/effect-sui"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as AddressSeed from "../src/AddressSeed.ts"
-import { InvalidJwt } from "../src/Errors.ts"
-import * as Jwt from "../src/Jwt.ts"
-import * as Nonce from "../src/Nonce.ts"
-import * as Poseidon from "../src/Poseidon.ts"
-import * as PublicIdentifier from "../src/PublicIdentifier.ts"
-import * as Signature from "../src/Signature.ts"
-import * as ZkLogin from "../src/ZkLogin.ts"
-import * as ZkLoginAddress from "../src/ZkLoginAddress.ts"
+import * as AddressSeed from "../../src/zklogin/AddressSeed.ts"
+import { InvalidJwt } from "../../src/zklogin/Errors.ts"
+import * as Jwt from "../../src/zklogin/Jwt.ts"
+import * as Nonce from "../../src/zklogin/Nonce.ts"
+import * as Poseidon from "../../src/zklogin/Poseidon.ts"
+import * as PublicIdentifier from "../../src/zklogin/PublicIdentifier.ts"
+import * as Signature from "../../src/zklogin/Signature.ts"
+import * as ZkLogin from "../../src/zklogin/ZkLogin.ts"
+import * as ZkLoginAddress from "../../src/zklogin/ZkLoginAddress.ts"
 import { claims, inputs, makeJwt } from "@unconfirmed/test-support/zklogin"
 
 const flip = <A, E>(e: Effect.Effect<A, E>) => Effect.runSync(Effect.flip(e))

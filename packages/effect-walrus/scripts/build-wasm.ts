@@ -1,8 +1,8 @@
 /**
- * Build the committed WebAssembly artifacts from `src/` (Rust).
+ * Build the committed WebAssembly artifacts in `wasm/` from the Rust crate there (`wasm/src/`).
  *
- *   bun run build            (in packages/walrus-wasm)
- *   bun run build --check    rebuild into a temporary directory and compare with the committed files
+ *   bun run build:wasm         (in packages/effect-walrus)
+ *   bun run build:wasm:check   rebuild into a temporary directory and compare with the committed files
  *
  * Needs the toolchain in `rust-toolchain.toml` (rustup picks it), the
  * `wasm-bindgen` CLI at the version `Cargo.toml` pins, and Binaryen's
@@ -22,7 +22,9 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-const root = join(dirname(new URL(import.meta.url).pathname), "..")
+// The crate and its built artifacts live in `wasm/`. The remap below keeps naming it `/walrus-wasm`, so the
+// binaries stay byte-identical to the ones built when it was its own package.
+const root = join(dirname(new URL(import.meta.url).pathname), "../wasm")
 const check = process.argv.includes("--check")
 const WASM_BINDGEN = "0.2.127"
 const OPT = process.env.WASM_OPT_LEVEL ?? "-O3"
@@ -37,7 +39,7 @@ const bindgenVersion = run("wasm-bindgen", ["--version"]).trim()
 if (bindgenVersion !== `wasm-bindgen ${WASM_BINDGEN}`) {
   throw new Error(`need wasm-bindgen ${WASM_BINDGEN} (cargo install wasm-bindgen-cli --version ${WASM_BINDGEN} --locked), found "${bindgenVersion}"`)
 }
-const wasmOpt = join(root, "../../node_modules/.bin/wasm-opt")
+const wasmOpt = join(root, "../../../node_modules/.bin/wasm-opt")
 if (!existsSync(wasmOpt)) throw new Error("wasm-opt not found: run bun install at the repo root")
 console.log(run("rustc", ["--version"]).trim())
 console.log(bindgenVersion)

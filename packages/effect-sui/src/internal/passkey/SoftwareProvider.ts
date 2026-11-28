@@ -11,7 +11,7 @@
 import { p256 } from "@noble/curves/nist.js"
 import { sha256 } from "@noble/hashes/sha2.js"
 import { base64urlnopad } from "@scure/base"
-import * as Signer from "@unconfirmed/sui/Signer"
+import * as Signer from "../../Signer.ts"
 import * as Effect from "effect/Effect"
 import * as Passkey from "./Passkey.ts"
 

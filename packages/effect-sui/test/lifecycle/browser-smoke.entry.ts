@@ -9,12 +9,12 @@ import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
-import { JournalEntry } from "../src/JournalEntry.ts"
-import * as JournalKeyValueStore from "../src/JournalKeyValueStore.ts"
-import * as KeyValueStoreIndexedDb from "../src/KeyValueStoreIndexedDb.ts"
-import * as KeyValueStoreOpfs from "../src/KeyValueStoreOpfs.ts"
-import * as SenderLock from "../src/SenderLock.ts"
-import * as SenderLockWebLocks from "../src/SenderLockWebLocks.ts"
+import { JournalEntry } from "../../src/lifecycle/JournalEntry.ts"
+import * as JournalKeyValueStore from "../../src/lifecycle/JournalKeyValueStore.ts"
+import * as KeyValueStoreIndexedDb from "../../src/lifecycle/KeyValueStoreIndexedDb.ts"
+import * as KeyValueStoreOpfs from "../../src/lifecycle/KeyValueStoreOpfs.ts"
+import * as SenderLock from "../../src/lifecycle/SenderLock.ts"
+import * as SenderLockWebLocks from "../../src/lifecycle/SenderLockWebLocks.ts"
 
 const journalRoundTrip = (store: Layer.Layer<KeyValueStore.KeyValueStore, KeyValueStore.KeyValueStoreError>) =>
   Effect.gen(function*() {

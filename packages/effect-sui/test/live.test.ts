@@ -3,7 +3,7 @@
  * is covered by core-review.live, server-resolve.live and the address-balance and
  * allowance live tests.
  */
-import { Bcs } from "@unconfirmed/bcs"
+import { Bcs } from "@unconfirmed/effect-bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { Address, Objects, Ptb, Transactions, Tx } from "../src/index.ts"

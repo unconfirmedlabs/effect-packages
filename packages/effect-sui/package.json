@@ -1,12 +1,23 @@
 {
-  "name": "@unconfirmed/sui",
+  "name": "@unconfirmed/effect-sui",
   "version": "0.0.0",
+  "description": "A ground-up Effect SDK for Sui: transactions, signers and signature schemes (Ed25519, Secp256k1/r1, ML-DSA-65, multisig, passkeys, zkLogin), mnemonics, gRPC and GraphQL clients, crash-safe submission, wallets and Enoki.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unconfirmedlabs/effect-packages.git",
+    "directory": "packages/effect-sui"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./grpc": "./src/grpc/index.ts",
+    "./graphql": "./src/graphql/index.ts",
+    "./lifecycle": "./src/lifecycle/index.ts",
+    "./zklogin": "./src/zklogin/index.ts",
+    "./enoki": "./src/enoki/index.ts",
+    "./wallet": "./src/wallet/index.ts",
     "./*": "./src/*.ts"
   },
   "scripts": {
@@ -15,14 +26,23 @@
   "dependencies": {
     "@noble/curves": "^2.3.0",
     "@noble/hashes": "^2.3.0",
-    "@scure/base": "^2.3.0"
+    "@noble/post-quantum": "^0.7.1",
+    "@scure/base": "^2.3.0",
+    "@scure/bip32": "^2.3.0",
+    "@scure/bip39": "^2.3.0",
+    "@wallet-standard/app": "^1.1.1",
+    "@wallet-standard/base": "^1.1.1",
+    "poseidon-lite": "0.3.0"
   },
   "peerDependencies": {
-    "@unconfirmed/bcs": "workspace:^",
+    "@unconfirmed/effect-bcs": "workspace:^",
     "effect": "^4.1.6"
   },
   "devDependencies": {
+    "@mysten/enoki": "2.0.1",
     "@mysten/sui": "3.0.1",
-    "@unconfirmed/test-support": "workspace:*"
+    "@unconfirmed/test-support": "workspace:*",
+    "fake-indexeddb": "6.2.8",
+    "playwright-core": "1.65.1"
   }
 }

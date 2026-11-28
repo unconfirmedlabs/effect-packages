@@ -1,6 +1,6 @@
 /**
  * RS2 erasure coding, sliver verification and BLS through
- * `@unconfirmed/walrus-wasm` (§1.7, §4.3): our own build of `walrus-core`
+ * `@unconfirmed/effect-walrus/wasm` (§1.7, §4.3): our own build of `walrus-core`
  * 1.62.0 with WebAssembly SIMD, byte-identical to `@mysten/walrus-wasm` 0.3.1
  * (parity tests) and several times faster.
  *
@@ -13,10 +13,10 @@
  * layer is built, so importing this file (or the package index) costs nothing
  * until an `Encoder` is needed:
  *
- * - Bun and Node: `@unconfirmed/walrus-wasm` reads
+ * - Bun and Node: `@unconfirmed/effect-walrus/wasm` reads
  *   `nodejs/walrus_wasm_bg.wasm` next to its glue with `fs` (`__dirname`) and
  *   compiles it synchronously; `wasmUrl` is ignored. When bundling for a
- *   server, keep `@unconfirmed/walrus-wasm` external, or copy
+ *   server, keep `@unconfirmed/effect-walrus/wasm` external, or copy
  *   `nodejs/walrus_wasm_bg.wasm` next to a CJS bundle.
  * - Browsers (the `browser` export condition): the glue fetches the SIMD
  *   build (`web/walrus_wasm_bg.wasm`), or the scalar one
@@ -28,7 +28,7 @@
  *
  * A failed load is an `EncoderError` with operation `"init"`.
  */
-import type * as Wasm from "@unconfirmed/walrus-wasm"
+import type * as Wasm from "@unconfirmed/effect-walrus/wasm"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -92,7 +92,7 @@ export interface EncoderService {
   ) => Effect.Effect<boolean, EncoderError>
 }
 
-export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/walrus/Encoder") {}
+export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/effect-walrus/Encoder") {}
 
 export interface EncoderOptions {
   /** Where browsers fetch the SIMD build (`web/walrus_wasm_bg.wasm`) from. Ignored on Bun and Node (W2). */
@@ -141,7 +141,7 @@ const checkLength = (operation: string, length: number, nShards: number): Effect
 const loadWasm = (options: EncoderOptions | undefined): Effect.Effect<typeof Wasm, EncoderError> =>
   Effect.tryPromise({
     try: async () => {
-      const wasm = await import("@unconfirmed/walrus-wasm")
+      const wasm = await import("@unconfirmed/effect-walrus/wasm")
       // A no-op on Bun and Node; picks a build, fetches and instantiates it in browsers (once per realm).
       await wasm.default({
         ...(options?.wasmUrl === undefined ? {} : { module_or_path: options.wasmUrl }),

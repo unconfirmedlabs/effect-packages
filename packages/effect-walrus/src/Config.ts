@@ -5,14 +5,14 @@
  */
 import * as Context from "effect/Context"
 import * as Layer from "effect/Layer"
-import type { Address } from "@unconfirmed/sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
 
 export interface WalrusConfigService {
   readonly systemObjectId: Address
   readonly stakingObjectId: Address
 }
 
-export class WalrusConfig extends Context.Service<WalrusConfig, WalrusConfigService>()("@unconfirmed/walrus/WalrusConfig") {}
+export class WalrusConfig extends Context.Service<WalrusConfig, WalrusConfigService>()("@unconfirmed/effect-walrus/WalrusConfig") {}
 
 export const testnet: WalrusConfigService = {
   systemObjectId: "0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af" as Address,

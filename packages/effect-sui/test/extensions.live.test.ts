@@ -3,7 +3,7 @@
  * full nodes. Opt in with SUI_LIVE=1.
  */
 import { base58 } from "@scure/base"
-import { Bcs } from "@unconfirmed/bcs"
+import { Bcs } from "@unconfirmed/effect-bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect, Schedule, Stream } from "effect"
 import { Address, CheckpointData, Checkpoints, DynamicFields, Ed25519, Events, Objects, Ptb, Resolve, Transactions, Tx } from "../src/index.ts"

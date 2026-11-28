@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
 import * as Result from "effect/Result"
-import type { Address } from "@unconfirmed/sui/Address"
+import type { Address } from "@unconfirmed/effect-sui/Address"
 import { InvalidConfig } from "./Errors.ts"
 import { normalizeObjectId } from "./ids.ts"
 
@@ -31,7 +31,7 @@ export interface SealConfigService {
 }
 
 export class SealConfig extends /* @__PURE__ */ Context.Service<SealConfig, SealConfigService>()(
-  "@unconfirmed/seal/SealConfig"
+  "@unconfirmed/effect-seal/SealConfig"
 ) {}
 
 /** What a caller writes. */

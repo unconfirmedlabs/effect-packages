@@ -1,5 +1,5 @@
 /**
- * Multisig for `@unconfirmed/sui`.
+ * Multisig for `@unconfirmed/effect-sui`.
  *
  * Composes with every other scheme instead of knowing about them:
  * - `scheme` verifies each member through the registry it is handed, so a
@@ -11,15 +11,15 @@
  *   const pk = yield* MultiSig.publicKey({ members: [{ publicKey: a.publicKey, weight: 1 }, ...], threshold: 2 })
  *   const signer = yield* MultiSig.signer(pk, [a, b])
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Hash from "@unconfirmed/sui/Hash"
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import * as Signer from "@unconfirmed/sui/Signer"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "./Address.ts"
+import * as Hash from "./Hash.ts"
+import * as SignatureScheme from "./SignatureScheme.ts"
+import * as Signer from "./Signer.ts"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 export const FLAG = 0x03
 const MAX_MEMBERS = 10

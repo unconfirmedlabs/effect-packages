@@ -22,13 +22,13 @@ import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import type * as Redacted from "effect/Redacted"
 import * as Result from "effect/Result"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import { type Address, SUI_FRAMEWORK } from "@unconfirmed/sui/Address"
-import * as DynamicFields from "@unconfirmed/sui/DynamicFields"
-import * as Move from "@unconfirmed/sui/Move"
-import * as Objects from "@unconfirmed/sui/Objects"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
-import * as TypeTag from "@unconfirmed/sui/TypeTag"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import { type Address, SUI_FRAMEWORK } from "@unconfirmed/effect-sui/Address"
+import * as DynamicFields from "@unconfirmed/effect-sui/DynamicFields"
+import * as Move from "@unconfirmed/effect-sui/Move"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
+import * as TypeTag from "@unconfirmed/effect-sui/TypeTag"
 import * as Bls from "./Bls.ts"
 import { find, isHttpUrl, SealConfig, type SealConfigService, type ServerConfig } from "./Config.ts"
 import { InvalidKeyServer } from "./Errors.ts"
@@ -335,7 +335,7 @@ export interface KeyServersService {
 }
 
 export class KeyServers extends /* @__PURE__ */ Context.Service<KeyServers, KeyServersService>()(
-  "@unconfirmed/seal/KeyServers"
+  "@unconfirmed/effect-seal/KeyServers"
 ) {}
 
 export interface LayerOptions {

@@ -2,8 +2,8 @@
  * Parity with `@mysten/walrus` 2.0.1 (§6.2) for the pure core: sizes, the
  * shard mapping, bitmaps, blob id forms and the BCS of every wire type.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import { describe, expect, test } from "bun:test"
 import * as Result from "effect/Result"
 import { Bft, BlobId, Certificate, Encoding, Messages } from "../src/index.ts"

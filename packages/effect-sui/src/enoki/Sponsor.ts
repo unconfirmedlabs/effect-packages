@@ -16,22 +16,22 @@
  * check the digest on chain, or `execute` the same signature again, rather
  * than sponsoring a second transaction.
  */
-import * as Address from "@unconfirmed/sui/Address"
-import type * as Coins from "@unconfirmed/sui/Coins"
-import * as Hash from "@unconfirmed/sui/Hash"
-import type * as Objects from "@unconfirmed/sui/Objects"
-import type * as Packages from "@unconfirmed/sui/Packages"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import * as Resolve from "@unconfirmed/sui/Resolve"
-import type * as RpcError from "@unconfirmed/sui/RpcError"
-import * as Signer from "@unconfirmed/sui/Signer"
-import * as T from "@unconfirmed/sui/TransactionData"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Address from "../Address.ts"
+import type * as Coins from "../Coins.ts"
+import * as Hash from "../Hash.ts"
+import type * as Objects from "../Objects.ts"
+import type * as Packages from "../Packages.ts"
+import * as Ptb from "../Ptb.ts"
+import * as Resolve from "../Resolve.ts"
+import type * as RpcError from "../RpcError.ts"
+import * as Signer from "../Signer.ts"
+import * as T from "../TransactionData.ts"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import { EnokiClient, EnokiError, type EnokiNetwork } from "./EnokiClient.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 /** Enoki answered with transaction bytes that are not the transaction we asked it to sponsor. */
 export class UnexpectedSponsoredTransaction extends Schema.TaggedError<UnexpectedSponsoredTransaction>()(

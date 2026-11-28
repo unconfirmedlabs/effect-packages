@@ -1,7 +1,7 @@
 /**
  * `sui-codegen.config.ts`:
  *
- *   import { defineConfig } from "@unconfirmed/sui-codegen/Config"
+ *   import { defineConfig } from "@unconfirmed/effect-sui-codegen/Config"
  *   export default defineConfig({
  *     output: "./src/generated",
  *     packages: [

@@ -2,7 +2,7 @@
  * Against Mysten's public GraphQL endpoints, with the gRPC implementation as the
  * reference for the same inputs. Opt in with SUI_LIVE=1.
  */
-import { Bcs } from "@unconfirmed/bcs"
+import { Bcs } from "@unconfirmed/effect-bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Schedule, Stream } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
@@ -23,11 +23,11 @@ import {
   Transactions,
   Tx,
   TypeTag
-} from "@unconfirmed/sui"
-import * as SuiGrpc from "../../sui/src/grpc/index.ts"
+} from "@unconfirmed/effect-sui"
+import * as SuiGrpc from "../../src/grpc/index.ts"
 import { DEVNET, faucet, grpcLayer, live, TESTNET } from "@unconfirmed/test-support/live"
 import { fundedAddress } from "@unconfirmed/test-support/funded"
-import * as SuiGraphQL from "../src/index.ts"
+import * as SuiGraphQL from "../../src/graphql/index.ts"
 
 const suite = live ? describe : describe.skip
 const A = Address.normalize

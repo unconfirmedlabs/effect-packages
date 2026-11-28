@@ -119,7 +119,7 @@ type Requirements<S extends ReadonlyArray<SignatureScheme<any>>> = [S[number]] e
   : never
 
 export class SignatureSchemes extends /* @__PURE__ */ Context.Service<SignatureSchemes, Registry>()(
-  "@unconfirmed/sui/SignatureSchemes"
+  "@unconfirmed/effect-sui/SignatureSchemes"
 ) {
   /**
    * A registry of exactly these schemes. Later entries win on a flag clash.

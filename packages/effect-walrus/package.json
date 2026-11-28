@@ -1,21 +1,48 @@
 {
-  "name": "@unconfirmed/walrus",
+  "name": "@unconfirmed/effect-walrus",
   "version": "0.0.0",
+  "description": "Walrus for Effect: verified blob reads from the storage nodes, certified writes, the upload relay, aggregator and publisher gateways, quilts; erasure coding and BLS in a bundled SIMD WebAssembly build of walrus-core.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unconfirmedlabs/effect-packages.git",
+    "directory": "packages/effect-walrus"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./wasm": {
+      "types": "./wasm/index.d.ts",
+      "browser": "./wasm/web.js",
+      "default": "./wasm/index.js"
+    },
+    "./wasm/web/walrus_wasm_bg.wasm": "./wasm/web/walrus_wasm_bg.wasm",
+    "./wasm/web/walrus_wasm_nosimd_bg.wasm": "./wasm/web/walrus_wasm_nosimd_bg.wasm",
+    "./wasm/nodejs/walrus_wasm_bg.wasm": "./wasm/nodejs/walrus_wasm_bg.wasm",
     "./*": "./src/*.ts"
   },
+  "files": [
+    "src",
+    "wasm/index.js",
+    "wasm/index.d.ts",
+    "wasm/web.js",
+    "wasm/web.d.ts",
+    "wasm/nodejs",
+    "wasm/web",
+    "wasm/README.md"
+  ],
+  "scripts": {
+    "build:wasm": "bun scripts/build-wasm.ts",
+    "build:wasm:check": "bun scripts/build-wasm.ts --check"
+  },
   "dependencies": {
-    "@noble/hashes": "^2.3.0",
-    "@unconfirmed/walrus-wasm": "workspace:*"
+    "@noble/hashes": "^2.3.0"
   },
   "peerDependencies": {
-    "@unconfirmed/bcs": "workspace:^",
-    "@unconfirmed/quorum": "workspace:^",
-    "@unconfirmed/sui": "workspace:^",
+    "@unconfirmed/effect-bcs": "workspace:^",
+    "@unconfirmed/effect-quorum": "workspace:^",
+    "@unconfirmed/effect-sui": "workspace:^",
     "effect": "^4.1.6"
   },
   "devDependencies": {
@@ -23,7 +50,7 @@
     "@mysten/walrus": "2.0.1",
     "@mysten/walrus-wasm": "0.3.1",
     "@noble/curves": "^2.3.0",
-    "@unconfirmed/sui-codegen": "workspace:*",
+    "@unconfirmed/effect-sui-codegen": "workspace:*",
     "@unconfirmed/test-support": "workspace:*"
   }
 }

@@ -1,5 +1,5 @@
 /**
- * zkLogin for `@unconfirmed/sui`: a `SignatureScheme` (flag 0x05) to install
+ * zkLogin for `@unconfirmed/effect-sui`: a `SignatureScheme` (flag 0x05) to install
  * in the registry and a `Signer` that wraps any ephemeral `Signer`.
  *
  *   SignatureSchemes.layer(Ed25519.scheme, ZkLogin.scheme, MultiSig.scheme)
@@ -13,9 +13,9 @@
  * Because the scheme has `verifyMember`, multisigs with zkLogin members verify
  * through the same registry.
  */
-import type * as Address from "@unconfirmed/sui/Address"
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import * as Signer from "@unconfirmed/sui/Signer"
+import type * as Address from "../Address.ts"
+import * as SignatureScheme from "../SignatureScheme.ts"
+import * as Signer from "../Signer.ts"
 import * as Effect from "effect/Effect"
 import { reasonOf } from "./Errors.ts"
 import * as Parse from "./internal/parse.ts"
@@ -23,7 +23,7 @@ import { issuerOfUnsafe } from "./Jwt.ts"
 import * as PublicIdentifier from "./PublicIdentifier.ts"
 import * as Signature from "./Signature.ts"
 import { ZkLoginVerifier } from "./ZkLoginVerifier.ts"
-import * as Bytes from "@unconfirmed/bcs/Bytes"
+import * as Bytes from "@unconfirmed/effect-bcs/Bytes"
 
 export const FLAG = PublicIdentifier.FLAG
 const NAME = "ZkLogin"

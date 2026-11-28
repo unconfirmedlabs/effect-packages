@@ -1,13 +1,13 @@
 // Head-to-head on testnet, build only: ours (server default, and client path) vs @mysten/sui 3.0.1. Interleaved, median of RUNS.
 // Reads only; nothing is signed. The sender must hold testnet SUI: set SUI_FUNDED_ADDRESS.
-//   bun packages/sui/bench/build-vs-mysten.ts [runs]
+//   bun packages/effect-sui/bench/build-vs-mysten.ts [runs]
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import * as SuiGrpc from "@unconfirmed/sui/grpc"
-import * as Address from "@unconfirmed/sui/Address"
-import * as Ptb from "@unconfirmed/sui/Ptb"
-import * as Tx from "@unconfirmed/sui/Tx"
+import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
+import * as Tx from "@unconfirmed/effect-sui/Tx"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Transaction } from "@mysten/sui/transactions"
 import { fundedAddress } from "@unconfirmed/test-support/funded"

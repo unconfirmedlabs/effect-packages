@@ -9,7 +9,7 @@
  *
  * Point it at the same endpoint as `Transactions`.
  */
-import { call, U64 } from "@unconfirmed/sui-graphql/convert"
+import { call, U64 } from "../graphql/convert.ts"
 import * as Effect from "effect/Effect"
 import * as GraphQL from "effect/graphql/GraphQL"
 import * as GraphQLClient from "effect/graphql/GraphQLClient"

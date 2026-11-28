@@ -1,6 +1,6 @@
 /** Error classes render a short `message` from their fields (review X-6). */
 import { describe, expect, test } from "bun:test"
-import * as Outcome from "../src/Outcome.ts"
+import * as Outcome from "../../src/lifecycle/Outcome.ts"
 
 describe("error messages", () => {
   test("SubmissionUnknown names the digest and reason, never the signed bytes", () => {

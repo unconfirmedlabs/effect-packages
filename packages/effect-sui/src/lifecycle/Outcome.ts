@@ -11,8 +11,8 @@
  * signed bytes: re-send them (`Lifecycle.resubmit`) or reconcile them later;
  * identical bytes land at most once.
  */
-import * as Tx from "@unconfirmed/sui/Tx"
-import type { Effects } from "@unconfirmed/sui/Transactions"
+import * as Tx from "../Tx.ts"
+import type { Effects } from "../Transactions.ts"
 import * as Schema from "effect/Schema"
 import { SignedTransaction } from "./SignedTransaction.ts"
 

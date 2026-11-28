@@ -12,13 +12,13 @@
  * encode it to JSON) and the ephemeral key, then pass both back:
  * `complete({ ...yield* Schema.decodeUnknownEffect(SessionData)(saved), ephemeral }, jwt)`.
  */
-import * as Address from "@unconfirmed/sui/Address"
-import * as Signer from "@unconfirmed/sui/Signer"
-import type { InvalidJwt } from "@unconfirmed/sui-zklogin/Errors"
-import * as Jwt from "@unconfirmed/sui-zklogin/Jwt"
-import * as Nonce from "@unconfirmed/sui-zklogin/Nonce"
-import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
-import * as ZkLogin from "@unconfirmed/sui-zklogin/ZkLogin"
+import * as Address from "../Address.ts"
+import * as Signer from "../Signer.ts"
+import type { InvalidJwt } from "../zklogin/Errors.ts"
+import * as Jwt from "../zklogin/Jwt.ts"
+import * as Nonce from "../zklogin/Nonce.ts"
+import * as PublicIdentifier from "../zklogin/PublicIdentifier.ts"
+import * as ZkLogin from "../zklogin/ZkLogin.ts"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import { EnokiClient, type EnokiError, EnokiNetwork, Epoch, type ZkLoginZkp } from "./EnokiClient.ts"

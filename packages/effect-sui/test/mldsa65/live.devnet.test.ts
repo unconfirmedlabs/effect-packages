@@ -2,11 +2,11 @@
  * ML-DSA-65 on devnet: a transaction signed by an ML-DSA key. (ML-DSA as a
  * multisig member is byte-checked against @mysten/sui offline.) Opt in with SUI_LIVE=1.
  */
-import { Ed25519, Ptb, Resolve, Signer, Tx } from "@unconfirmed/sui"
+import { Ed25519, Ptb, Resolve, Signer, Tx } from "@unconfirmed/effect-sui"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { DEVNET, faucet, grpcLayer, live } from "@unconfirmed/test-support/live"
-import * as MlDsa65 from "../src/index.ts"
+import * as MlDsa65 from "../../src/MlDsa65.ts"
 
 const suite = live ? describe : describe.skip
 

@@ -5,10 +5,10 @@
  *
  *   ZkLoginVerifierGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url })))
  */
-import * as GrpcWeb from "@unconfirmed/sui/grpc/GrpcWeb"
-import * as Rpc from "@unconfirmed/sui/grpc/generated/rpc"
-import * as Hash from "@unconfirmed/sui/Hash"
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
+import * as GrpcWeb from "../grpc/GrpcWeb.ts"
+import * as Rpc from "../grpc/generated/rpc.ts"
+import * as Hash from "../Hash.ts"
+import * as SignatureScheme from "../SignatureScheme.ts"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { ZkLoginVerifier } from "./ZkLoginVerifier.ts"

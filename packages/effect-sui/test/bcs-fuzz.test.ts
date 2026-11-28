@@ -5,7 +5,7 @@
  */
 import { bcs as mysten } from "@mysten/sui/bcs"
 import { base58 } from "@scure/base"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import { describe, expect, test } from "bun:test"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"

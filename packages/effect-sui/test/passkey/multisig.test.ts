@@ -3,12 +3,12 @@ import { PasskeyKeypair, PasskeyPublicKey } from "@mysten/sui/keypairs/passkey"
 import type { PasskeyProvider as MystenProvider } from "@mysten/sui/keypairs/passkey"
 import { MultiSigPublicKey } from "@mysten/sui/multisig"
 import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
-import { Bcs } from "@unconfirmed/bcs"
-import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
-import * as MultiSig from "@unconfirmed/sui-multisig"
+import { Bcs } from "@unconfirmed/effect-bcs"
+import { Ed25519, SignatureScheme, Signer, Verify } from "@unconfirmed/effect-sui"
+import * as MultiSig from "@unconfirmed/effect-sui/MultiSig"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as Passkey from "../src/index.ts"
+import * as Passkey from "../../src/Passkey.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
 const fromB64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"))

@@ -11,7 +11,7 @@
  * (`scripts/bundle-report.ts`, aggregator-only program), too little to be
  * worth one module per class (§6.5).
  */
-import * as Address from "@unconfirmed/sui/Address"
+import * as Address from "@unconfirmed/effect-sui/Address"
 import * as Schema from "effect/Schema"
 import { BlobId, InvalidBlobId } from "./BlobId.ts"
 import { BlobStatusType } from "./Status.ts"

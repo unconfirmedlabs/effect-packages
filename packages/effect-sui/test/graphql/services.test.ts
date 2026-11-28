@@ -5,10 +5,10 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Result, Stream } from "effect"
 import { GraphQLClientError, GraphQLProtocol } from "effect/graphql"
-import { Address, CheckpointData, Checkpoints, Coins, DynamicFields, Events, Objects } from "@unconfirmed/sui"
-import { mergeSorted } from "../src/merge.ts"
-import * as SuiGraphQL from "../src/index.ts"
-import { plan } from "../src/EventsGraphQL.ts"
+import { Address, CheckpointData, Checkpoints, Coins, DynamicFields, Events, Objects } from "@unconfirmed/effect-sui"
+import { mergeSorted } from "../../src/graphql/merge.ts"
+import * as SuiGraphQL from "../../src/graphql/index.ts"
+import { plan } from "../../src/graphql/EventsGraphQL.ts"
 
 const A = Address.normalize
 type Request = GraphQLProtocol.GraphQLRequest

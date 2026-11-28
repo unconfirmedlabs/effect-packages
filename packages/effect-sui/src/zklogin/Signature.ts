@@ -6,7 +6,7 @@
  * `ZkLoginSignatureInputs` is both the BCS layout and the Schema for the JSON
  * a prover (or Enoki's `zklogin/zkp`) returns: decode that JSON with it.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
 import { InvalidZkLoginInput, reasonOf } from "./Errors.ts"

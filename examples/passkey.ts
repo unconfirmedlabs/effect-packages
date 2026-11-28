@@ -4,10 +4,10 @@
  * packages/test-support checks that they stay identical. Not meant to run.
  */
 import * as Effect from "effect/Effect"
-import * as Passkey from "@unconfirmed/sui-passkey"
-import * as Ed25519 from "@unconfirmed/sui/Ed25519"
-import * as Tx from "@unconfirmed/sui/Tx"
-import * as MultiSig from "@unconfirmed/sui-multisig"
+import * as Passkey from "@unconfirmed/effect-sui/Passkey"
+import * as Ed25519 from "@unconfirmed/effect-sui/Ed25519"
+import * as Tx from "@unconfirmed/effect-sui/Tx"
+import * as MultiSig from "@unconfirmed/effect-sui/MultiSig"
 import { recipe, SignatureSchemes } from "./shared.ts"
 
 export const passkeys = Effect.gen(function*() {

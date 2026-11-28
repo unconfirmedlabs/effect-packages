@@ -2,7 +2,7 @@
  * Regenerate the fixture's package summaries (`sui move summary`), pruned to
  * the modules the tests reach, then the golden output.
  *
- *   bun packages/sui-codegen/scripts/fixtures.ts
+ *   bun packages/effect-sui-codegen/scripts/fixtures.ts
  */
 import * as Effect from "effect/Effect"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"

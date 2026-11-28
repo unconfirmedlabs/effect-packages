@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
-description = "Walrus RS2 erasure coding, sliver Merkle roots and BLS12-381 min-pk for @unconfirmed/walrus"
+description = "Walrus RS2 erasure coding, sliver Merkle roots and BLS12-381 min-pk for @unconfirmed/effect-walrus"
 
 [lib]
 crate-type = ["cdylib"]

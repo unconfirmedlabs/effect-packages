@@ -1,5 +1,5 @@
 /**
- * Parity of our WASM (`@unconfirmed/walrus-wasm`) with `@mysten/walrus` 2.0.1
+ * Parity of our WASM (`@unconfirmed/effect-walrus/wasm`) with `@mysten/walrus` 2.0.1
  * and `@mysten/walrus-wasm` 0.3.1 (§6.2): `Encoder.encode` against
  * `getWasmBindings().encodeBlob` (`walrus/dist/wasm.mjs`) byte for byte —
  * blob id, root hash, metadata bytes, every sliver buffer — and `blobId` /

@@ -1,11 +1,11 @@
 /**
- * `@unconfirmed/sui`: the core.
+ * `@unconfirmed/effect-sui`: the core.
  *
  * Pure modules (no services): Address, TypeTag, TransactionData, TransactionJson, Hash, Ptb.
- * Capability services (implemented by `@unconfirmed/sui/grpc`): Chain, Objects,
+ * Capability services (implemented by `@unconfirmed/effect-sui/grpc`): Chain, Objects,
  * Coins, Packages, Transactions, Checkpoints, DynamicFields, Events, CheckpointData.
  * Signing: Signer (+ TransactionSigner for wallets), SignatureScheme (the plugin registry), Verify, Ed25519, PrivateKey (suiprivkey, sui.keystore).
- * Other schemes are packages: `@unconfirmed/sui-secp256k1`, `-secp256r1`, `-multisig`, ...
+ * Other schemes are packages: `@unconfirmed/effect-sui/Secp256k1`, `-secp256r1`, `-multisig`, ...
  */
 export * as Address from "./Address.ts"
 export * as AddressAlias from "./AddressAlias.ts"

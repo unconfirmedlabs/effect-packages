@@ -1,9 +1,9 @@
 /**
- * Wire formats (E9, M1, M2) as `@unconfirmed/bcs` schemas, and the checks a
+ * Wire formats (E9, M1, M2) as `@unconfirmed/effect-bcs` schemas, and the checks a
  * client runs on what nodes send before using it.
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import type * as Address from "@unconfirmed/sui/Address"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import type * as Address from "@unconfirmed/effect-sui/Address"
 import * as Result from "effect/Result"
 import * as BlobId from "./BlobId.ts"
 import * as Encoding from "./Encoding.ts"

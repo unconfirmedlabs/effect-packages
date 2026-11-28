@@ -14,9 +14,9 @@
  */
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
-import * as Address from "@unconfirmed/sui/Address"
-import type * as Move from "@unconfirmed/sui/Move"
-import * as Ptb from "@unconfirmed/sui/Ptb"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import type * as Move from "@unconfirmed/effect-sui/Move"
+import * as Ptb from "@unconfirmed/effect-sui/Ptb"
 import * as BlobId from "./BlobId.ts"
 import type { Certificate } from "./Certificate.ts"
 import { signersBitmap } from "./Certificate.ts"

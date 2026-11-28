@@ -53,7 +53,7 @@ export const defaults: SubmitConfigService = {
   visibilityTimeout: Duration.seconds(15)
 }
 
-export const SubmitConfig = Context.Reference<SubmitConfigService>("@unconfirmed/sui-lifecycle/SubmitConfig", {
+export const SubmitConfig = Context.Reference<SubmitConfigService>("@unconfirmed/effect-sui/lifecycle/SubmitConfig", {
   defaultValue: () => defaults
 })
 

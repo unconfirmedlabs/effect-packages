@@ -16,7 +16,7 @@
  * optionally a `u16` LE tags length and the BCS tags map, then the contents.
  * Entries are sorted by identifier (UTF-8 bytes, as Rust's `String` order).
  */
-import * as Bcs from "@unconfirmed/bcs/Bcs"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
 import * as Result from "effect/Result"
 import * as BlobId from "./BlobId.ts"
 import * as Encoding from "./Encoding.ts"

@@ -18,4 +18,4 @@ export interface ChainInfo {
 export class Chain extends /* @__PURE__ */ Context.Service<Chain, {
   readonly info: Effect.Effect<ChainInfo, RpcError>
   readonly referenceGasPrice: Effect.Effect<bigint, RpcError>
-}>()("@unconfirmed/sui/Chain") {}
+}>()("@unconfirmed/effect-sui/Chain") {}

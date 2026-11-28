@@ -12,14 +12,14 @@ import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Address from "@unconfirmed/sui/Address"
-import * as DynamicFields from "@unconfirmed/sui/DynamicFields"
-import * as Move from "@unconfirmed/sui/Move"
-import * as Objects from "@unconfirmed/sui/Objects"
-import * as Packages from "@unconfirmed/sui/Packages"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
-import * as TypeTag from "@unconfirmed/sui/TypeTag"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Address from "@unconfirmed/effect-sui/Address"
+import * as DynamicFields from "@unconfirmed/effect-sui/DynamicFields"
+import * as Move from "@unconfirmed/effect-sui/Move"
+import * as Objects from "@unconfirmed/effect-sui/Objects"
+import * as Packages from "@unconfirmed/effect-sui/Packages"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
+import * as TypeTag from "@unconfirmed/effect-sui/TypeTag"
 import { WalrusConfig } from "./Config.ts"
 import { UnsupportedSystemVersion } from "./Errors.ts"
 import * as system from "./generated/walrus/system.ts"
@@ -58,7 +58,7 @@ export class System extends Context.Service<System, {
   readonly refresh: Effect.Effect<SystemState, SystemError>
   /** `Coin<T>`'s `T` in `system::reserve_space`'s `payment` parameter; cached for the layer's life. */
   readonly walType: Effect.Effect<string, SystemError>
-}>()("@unconfirmed/walrus/System") {}
+}>()("@unconfirmed/effect-walrus/System") {}
 
 // -----------------------------------------------------------------------------
 // Reading

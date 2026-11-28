@@ -5,15 +5,15 @@
  *
  *   SealGrpc.layer({ servers: [...], grpc: { url } }).pipe(Layer.provide(FetchHttpClient.layer))
  *
- * `@unconfirmed/sui/grpc`'s `layer` provides every capability and so ships
+ * `@unconfirmed/effect-sui/grpc`'s `layer` provides every capability and so ships
  * every RPC's codec (about 90 KB minified more); a program that also builds
  * and executes transactions should provide that instead and use `Seal.layer`.
  */
-import type * as Objects from "@unconfirmed/sui/Objects"
-import type * as Packages from "@unconfirmed/sui/Packages"
-import { GrpcWeb, type GrpcWebOptions } from "@unconfirmed/sui/grpc/GrpcWeb"
-import * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"
-import * as PackagesGrpc from "@unconfirmed/sui/grpc/PackagesGrpc"
+import type * as Objects from "@unconfirmed/effect-sui/Objects"
+import type * as Packages from "@unconfirmed/effect-sui/Packages"
+import { GrpcWeb, type GrpcWebOptions } from "@unconfirmed/effect-sui/grpc/GrpcWeb"
+import * as ObjectsGrpc from "@unconfirmed/effect-sui/grpc/ObjectsGrpc"
+import * as PackagesGrpc from "@unconfirmed/effect-sui/grpc/PackagesGrpc"
 import type * as HttpClient from "effect/http/HttpClient"
 import * as Layer from "effect/Layer"
 import type * as Config from "./Config.ts"

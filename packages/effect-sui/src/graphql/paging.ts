@@ -9,7 +9,7 @@ import * as GraphQL from "effect/graphql/GraphQL"
 import type * as GraphQLClientError from "effect/graphql/GraphQLClientError"
 import * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
-import { RpcError } from "@unconfirmed/sui/RpcError"
+import { RpcError } from "../RpcError.ts"
 import {
   BALANCE_CHANGE_FIELDS,
   BalanceChangeNode,

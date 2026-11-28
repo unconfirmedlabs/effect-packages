@@ -7,8 +7,8 @@
  */
 import * as Effect from "effect/Effect"
 import type * as HttpClient from "effect/http/HttpClient"
-import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"
-import type { RpcError } from "@unconfirmed/sui/RpcError"
+import { GrpcWeb } from "@unconfirmed/effect-sui/grpc/GrpcWeb"
+import type { RpcError } from "@unconfirmed/effect-sui/RpcError"
 import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"

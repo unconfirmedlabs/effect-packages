@@ -1,5 +1,5 @@
 /**
- * `@unconfirmed/sui-lifecycle`: crash-safe submission for `@unconfirmed/sui`.
+ * `@unconfirmed/effect-sui/lifecycle`: crash-safe submission for `@unconfirmed/effect-sui`.
  */
 export * as Evidence from "./Evidence.ts"
 export * as Journal from "./Journal.ts"

@@ -1,11 +1,11 @@
 /**
  * Regenerate `src/generated` from the testnet Walrus package.
  *
- *   bun packages/walrus/scripts/codegen.ts
+ *   bun packages/effect-walrus/scripts/codegen.ts
  */
 import * as Effect from "effect/Effect"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import * as Generate from "@unconfirmed/sui-codegen/Generate"
+import * as Generate from "@unconfirmed/effect-sui-codegen/Generate"
 import { dirname, join, relative } from "node:path"
 import config from "../sui-codegen.config.ts"
 
