@@ -10,10 +10,7 @@
   },
   "dependencies": {
     "@mysten/sui": "3.0.1",
-    "@unconfirmed/sui": "workspace:*",
-    "@unconfirmed/sui-secp256k1": "workspace:*",
-    "@unconfirmed/sui-secp256r1": "workspace:*",
-    "@unconfirmed/sui-wallet": "workspace:*",
+    "@unconfirmed/effect-sui": "workspace:*",
     "@wallet-standard/base": "^1.1.1"
   },
   "peerDependencies": {

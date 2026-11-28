@@ -6,7 +6,7 @@
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Schedule from "effect/Schedule"
-import * as Quorum from "@unconfirmed/quorum"
+import * as Quorum from "@unconfirmed/effect-quorum"
 
 interface Node { readonly shards: ReadonlyArray<number>; readonly url: string }
 declare const committee: { readonly nodes: ReadonlyArray<Node> }

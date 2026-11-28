@@ -3,7 +3,7 @@
  * `// #region readme` is a README block verbatim; `readme.test.ts` in
  * packages/test-support checks that they stay identical. Not meant to run.
  */
-import { defineConfig } from "@unconfirmed/sui-codegen/Config"
+import { defineConfig } from "@unconfirmed/effect-sui-codegen/Config"
 
 // #region readme
 export default defineConfig({

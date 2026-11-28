@@ -1,0 +1,20 @@
+{
+  "name": "@unconfirmed/effect-quorum",
+  "version": "0.0.0",
+  "description": "Weighted first-threshold-of-n for Effect: run a call over many members and stop once enough weight succeeded or agrees on one answer.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unconfirmedlabs/effect-packages.git",
+    "directory": "packages/effect-quorum"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "peerDependencies": {
+    "effect": "^4.1.6"
+  }
+}

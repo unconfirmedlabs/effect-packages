@@ -3,9 +3,9 @@
  * an endpoint). Declarations only: the examples are compiled, never run.
  */
 import * as Effect from "effect/Effect"
-import type { PtbBuilder } from "@unconfirmed/sui/Ptb"
-import * as SignatureScheme from "@unconfirmed/sui/SignatureScheme"
-import type * as Signer from "@unconfirmed/sui/Signer"
+import type { PtbBuilder } from "@unconfirmed/effect-sui/Ptb"
+import * as SignatureScheme from "@unconfirmed/effect-sui/SignatureScheme"
+import type * as Signer from "@unconfirmed/effect-sui/Signer"
 
 export declare const signer: Signer.Signer
 export declare const url: string

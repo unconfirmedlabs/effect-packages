@@ -1,5 +1,7 @@
 # Cross-cutting review
 
+> **Package names changed on 2026-11-28.** The 17 packages became six; the README's [migration table](../../README.md#migrating-from-the-old-package-names) maps every old import. This review predates the change: it names the packages as they were (`sui-zklogin` is now `@unconfirmed/effect-sui/zklogin`, `sui-secp256k1` is `@unconfirmed/effect-sui/Secp256k1`, `walrus-wasm` is `@unconfirmed/effect-walrus/wasm`, and so on), and its line numbers refer to the files as they were then. Import specifiers and paths were updated mechanically.
+
 Scope: concerns that span packages (bundle size, API consistency, dependency hygiene, test suite health, docs). Package internals are in the other review files.
 
 ## Summary
@@ -13,18 +15,18 @@ Scope: concerns that span packages (bundle size, API consistency, dependency hyg
 
 Counts: 1 high, 6 medium, 9 low, 4 nit.
 
-Not reproduced: the known flake in `packages/walrus/test/live.gateway.test.ts` (since merged into `live.read.test.ts`) passed in both live runs (10.4 s and 10.3 s); see the Walrus review.
+Not reproduced: the known flake in `packages/effect-walrus/test/live.gateway.test.ts` (since merged into `live.read.test.ts`) passed in both live runs (10.4 s and 10.3 s); see the Walrus review.
 
 ## Findings
 
 ### X-1 · high · correctness · CONFIRMED
 **`Events.list({ descending: true })` without `start` silently returns nothing when the pruning floor moves.**
-`packages/sui/src/grpc/EventsGrpc.ts:50-70`, `packages/sui/src/grpc/scan.ts:83-99` (`pinned`).
+`packages/effect-sui/src/grpc/EventsGrpc.ts:50-70`, `packages/effect-sui/src/grpc/scan.ts:83-99` (`pinned`).
 
 - `pinned` reads `lowest_available_checkpoint` with `GetServiceInfo`, then sends it as `start_checkpoint`. The floor advances continuously on testnet (five different values in 60 calls, in steps of 10–30 checkpoints).
 - If the floor passes the pinned start before `ListEvents` is served, the node answers `OUT_OF_RANGE`. `EventsGrpc.ts:69` turns every `OUT_OF_RANGE` into `Stream.empty`, including one on the first request with no item emitted.
 - Measured on `fullnode.testnet.sui.io`: 2 of 60 `events.list({ descending: true }).pipe(Stream.take(1))` calls returned zero events; the same request by hand returned `OUT_OF_RANGE: requested data below earliest available; lowest available checkpoint is 405807407` in 2 of 60.
-- This is what failed `packages/sui/test/extensions.live.test.ts:87` in live run 1 (`expect(filtered.length).toBeGreaterThan(0)`, received 0).
+- This is what failed `packages/effect-sui/test/extensions.live.test.ts:87` in live run 1 (`expect(filtered.length).toBeGreaterThan(0)`, received 0).
 - Fix: on `OUT_OF_RANGE`, re-read the floor and resume from the last watermark with the new start; end the stream only when the watermark is at or below the new floor. Never swallow it before the first item. Effort S–M.
 
 **Resolution:** fixed as proposed. `resumable` takes a recovery hook; a descending scan to the floor re-reads it on `OUT_OF_RANGE` and resumes from the last watermark with the new start, ending only when what is left is below the floor; without progress it fails typed after 3 tries. Other `OUT_OF_RANGE`s (an explicit start) are no longer swallowed. Offline tests in `core-review.test.ts`; live on testnet, 20 descending `take(1)` lists all returned an event, and the full live suite passed.
@@ -34,17 +36,17 @@ Not reproduced: the known flake in `packages/walrus/test/live.gateway.test.ts` (
 
 | README line | Problem | Fix |
 |---|---|---|
-| 46 | `import * as Quorum from "@unconfirmed/quorum"` then `Quorum.run`: TS2339. `packages/quorum/src/index.ts:1` is `export * as Quorum`, so the root namespace only has the key `Quorum`. | `import { Quorum } from "@unconfirmed/quorum"`, or make the index `export * from "./Quorum.ts"` like the other single-module packages (X-18). |
-| 118 | `yield* Quilt.encode(entries, nShards)`: `Quilt.encode` returns a `Result` (`packages/walrus/src/Quilt.ts:90-93`). A `Result` is not yieldable in Effect 4.1.6: TS2345, and at runtime the fiber dies with `Not a valid effect: success(1)`. | `yield* Effect.fromResult(Quilt.encode(...))`. |
-| 90 | "`onStep` receives each step as plain JSON". It receives the decoded `Write.Step` with `Uint8Array` fields (`packages/walrus/src/Write.ts:154`, `:846`), and `resume` takes the same type (`:152`). `JSON.stringify` in `onStep` then `JSON.parse` into `resume` breaks. | Say that `Schema.encode(Write.Step)` gives the JSON and `Schema.decode` gives it back. |
+| 46 | `import * as Quorum from "@unconfirmed/effect-quorum"` then `Quorum.run`: TS2339. `packages/effect-quorum/src/index.ts:1` is `export * as Quorum`, so the root namespace only has the key `Quorum`. | `import { Quorum } from "@unconfirmed/effect-quorum"`, or make the index `export * from "./Quorum.ts"` like the other single-module packages (X-18). |
+| 118 | `yield* Quilt.encode(entries, nShards)`: `Quilt.encode` returns a `Result` (`packages/effect-walrus/src/Quilt.ts:90-93`). A `Result` is not yieldable in Effect 4.1.6: TS2345, and at runtime the fiber dies with `Not a valid effect: success(1)`. | `yield* Effect.fromResult(Quilt.encode(...))`. |
+| 90 | "`onStep` receives each step as plain JSON". It receives the decoded `Write.Step` with `Uint8Array` fields (`packages/effect-walrus/src/Write.ts:154`, `:846`), and `resume` takes the same type (`:152`). `JSON.stringify` in `onStep` then `JSON.parse` into `resume` breaks. | Say that `Schema.encode(Write.Step)` gives the JSON and `Schema.decode` gives it back. |
 
-Also: line 205 (`const [coin] = yield* Ptb.splitCoins(...)` then `[coin]`) fails under `noUncheckedIndexedAccess`, which this repo uses; `splitCoins` (`packages/sui/src/Ptb.ts:182`) returns an array, not a tuple typed by `amounts`. Returning a mapped tuple would remove the `coin!` every caller writes. Effort S for all.
+Also: line 205 (`const [coin] = yield* Ptb.splitCoins(...)` then `[coin]`) fails under `noUncheckedIndexedAccess`, which this repo uses; `splitCoins` (`packages/effect-sui/src/Ptb.ts:182`) returns an array, not a tuple typed by `amounts`. Returning a mapped tuple would remove the `coin!` every caller writes. Effort S for all.
 
-**Resolution:** fixed, and guarded. Re-verified all three (and the `splitCoins` one). `@unconfirmed/quorum`'s root now exports both shapes (`export *` and `export * as Quorum`), so the README's `import * as Quorum` works; the quilt example uses `yield* Effect.fromResult(Quilt.encode(...))`; the steps bullet says `onStep` gets a `Write.Step` and that `Schema.encodeSync(Write.Step)` / `Schema.decodeSync` give and restore the JSON. `Ptb.splitCoins` returns a tuple typed by `amounts`, so `const [coin] = …` needs no `!`. The check found two more: the `TransactionJson` block used `await` inside `Effect.gen` and declared `data` twice. Guard: every ```` ```ts ```` README block now lives verbatim in a `// #region readme` of a file under `examples/` (compiled by `bun run typecheck`, which now includes `examples/` and `scripts/`), and `packages/test-support/test/readme.test.ts` fails when a block and its region differ or a region is unused. Three illustrative blocks (type signatures, a hypothetical generated module, the scheme skeleton) are fenced ```` ```ts nocheck ````. Reverting the quilt fix fails both typecheck (TS2345) and the test.
+**Resolution:** fixed, and guarded. Re-verified all three (and the `splitCoins` one). `@unconfirmed/effect-quorum`'s root now exports both shapes (`export *` and `export * as Quorum`), so the README's `import * as Quorum` works; the quilt example uses `yield* Effect.fromResult(Quilt.encode(...))`; the steps bullet says `onStep` gets a `Write.Step` and that `Schema.encodeSync(Write.Step)` / `Schema.decodeSync` give and restore the JSON. `Ptb.splitCoins` returns a tuple typed by `amounts`, so `const [coin] = …` needs no `!`. The check found two more: the `TransactionJson` block used `await` inside `Effect.gen` and declared `data` twice. Guard: every ```` ```ts ```` README block now lives verbatim in a `// #region readme` of a file under `examples/` (compiled by `bun run typecheck`, which now includes `examples/` and `scripts/`), and `packages/test-support/test/readme.test.ts` fails when a block and its region differ or a region is unused. Three illustrative blocks (type signatures, a hypothetical generated module, the scheme skeleton) are fenced ```` ```ts nocheck ````. Reverting the quilt fix fails both typecheck (TS2345) and the test.
 
 ### X-3 · medium · bundle · CONFIRMED
 **Module-level calls without `/* @__PURE__ */` in `bcs` and the `sui` core keep unused code in every bundle.**
-Walrus and Seal annotate consistently; the older packages do not. 925 module-evaluation-time calls lack the annotation; the files that matter are `packages/bcs/src/Bcs.ts:86-122` (22), `packages/sui/src/Address.ts` (10), `TransactionData.ts` (52), `Signer.ts`, `Objects.ts`, plus `packages/walrus/src/Status.ts` (11) and `BlobId.ts` (5).
+Walrus and Seal annotate consistently; the older packages do not. 925 module-evaluation-time calls lack the annotation; the files that matter are `packages/effect-bcs/src/Bcs.ts:86-122` (22), `packages/effect-sui/src/Address.ts` (10), `TransactionData.ts` (52), `Signer.ts`, `Objects.ts`, plus `packages/effect-walrus/src/Status.ts` (11) and `BlobId.ts` (5).
 
 - Consequence: any program that touches `Bcs.ts` ships every primitive schema, and through `Bcs.Digest` all of `@scure/base` (3.1 KB), whether or not it uses base58.
 - Measured by annotating a scratch copy (KB minified / gzip, change against today):
@@ -64,12 +66,12 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 
 ### X-4 · medium · bundle · CONFIRMED (cost), prototype measured (saving)
 **Protobuf descriptors are the largest part of our own code, and most of them describe fields nothing reads.**
-`packages/sui/src/grpc/generated/rpc.ts`, `packages/sui/src/grpc/Rpc.ts`, `packages/sui/scripts/codegen-grpc.ts`.
+`packages/effect-sui/src/grpc/generated/rpc.ts`, `packages/effect-sui/src/grpc/Rpc.ts`, `packages/effect-sui/scripts/codegen-grpc.ts`.
 
 - `rpc.ts` is 104.9 KB of the 388.7 KB "build + resolve + sign + execute" program (27%). A chunk is a whole message, so a handle ships every field its messages reach.
 - `ChainGrpc` ships 20.5 KB (`Epoch` → `SystemState` → `ValidatorSet` → `Validator` …) to read three scalars. `TransactionsGrpc` ships 61.4 KB to read `digest` and three `effects` paths.
 - `SuiGrpc.layer` adds every capability. The same program with only the layers `Tx.run` needs (Chain, Packages, Transactions, Coins, Objects) is 361.2 / 107.5 instead of 388.7 / 112.4 (bun).
-- Prototype: pruning the descriptors of four handles (`GetEpoch`, `GetTransaction`, `ExecuteTransaction`, `SimulateTransaction`) to the fields in their read masks and requests. Offline tests still pass and `packages/sui/test/live.test.ts` executed on devnet with it.
+- Prototype: pruning the descriptors of four handles (`GetEpoch`, `GetTransaction`, `ExecuteTransaction`, `SimulateTransaction`) to the fields in their read masks and requests. Offline tests still pass and `packages/effect-sui/test/live.test.ts` executed on devnet with it.
 
 | Program (bun, KB min / gzip) | Today | Pruned | Change |
 |---|---|---|---|
@@ -88,8 +90,8 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 
 - `exports` point at `./src/*.ts`. There is no build, no `types`, no `files`. Node refuses to strip types under `node_modules`, and a consumer's `tsc` typechecks our sources under their own flags (`skipLibCheck` does not cover `.ts`).
 - `effect` is an exact `dependencies` entry (`4.1.6`) in all 17 packages. An app on any other Effect version gets two runtimes (about 35 KB for `Effect` + `Layer` alone, more with `Schema`) and two sets of service tags. It should be a `peerDependency`.
-- No `files`: tests, fixtures (`packages/walrus/test/fixtures/*.json`, `packages/sui-codegen/test/`), scripts and `sui-codegen.config.ts` would ship.
-- `"./*": "./src/*.ts"` makes internals public: `@unconfirmed/walrus/internal/gateway`, `@unconfirmed/sui/grpc/scan`, `@unconfirmed/sui/grpc/generated/rpc`.
+- No `files`: tests, fixtures (`packages/effect-walrus/test/fixtures/*.json`, `packages/effect-sui-codegen/test/`), scripts and `sui-codegen.config.ts` would ship.
+- `"./*": "./src/*.ts"` makes internals public: `@unconfirmed/effect-walrus/internal/gateway`, `@unconfirmed/effect-sui/grpc/scan`, `@unconfirmed/effect-sui/grpc/generated/rpc`.
 - `version` is `0.0.0`; no `repository`, `description` or per-package `LICENSE` file; `sui-codegen`'s `bin` is a `.ts` file with a `bun` shebang.
 - Fix: a build step (or an explicit "TypeScript source, bundlers only" contract), `peerDependencies` for `effect`, `files`, and an `exports` map that excludes `internal/` and `generated/`. Effort M.
 
@@ -107,7 +109,7 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 
 ### X-7 · medium · correctness · CONFIRMED (code read; reproduced by the delegated doc audit)
 **`ThresholdNotMet.reason` is `"unreachable"` instead of `"denied"` when a server's keys are cached.**
-`packages/seal/src/Keys.ts:142` and `:277`.
+`packages/effect-seal/src/Keys.ts:142` and `:277`.
 
 - `reasonOf` computes `askableWeight - denied < threshold - cachedWeight`, but line 277 passes `totalWeight`, which includes the cached servers (`:194`). The cached weight is subtracted twice.
 - Scenario: 3 of 3, one server cached, one `NoAccess`, one slow. `3 − 1 < 3 − 1` is false, so the reason is `"unreachable"`. Without the cache the same case is `"denied"`, as `docs/design/seal.md:646` says it should be.
@@ -117,9 +119,9 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 
 ### X-8 · low · api · CONFIRMED
 **`SuiGrpc.layer` hides `GrpcWeb`, so everything else that needs it builds a second transport.**
-`packages/sui/src/grpc/index.ts:59-68` ends in `Layer.provide(GrpcWeb.layer(options))`.
+`packages/effect-sui/src/grpc/index.ts:59-68` ends in `Layer.provide(GrpcWeb.layer(options))`.
 
-- `ZkLoginVerifierGrpc.layer`, `sui-lifecycle`'s `EvidenceGrpc.layer` and the README's escape hatch (`grpc.unary(Rpc.NameService_LookupName, …)`, line 280) all require `GrpcWeb`. With `SuiGrpc.layer` in place they fail with `Service not found: @unconfirmed/sui/GrpcWeb` until the caller adds `GrpcWeb.layer({ baseUrl })` again, repeating `baseUrl` and `headers`.
+- `ZkLoginVerifierGrpc.layer`, `sui-lifecycle`'s `EvidenceGrpc.layer` and the README's escape hatch (`grpc.unary(Rpc.NameService_LookupName, …)`, line 280) all require `GrpcWeb`. With `SuiGrpc.layer` in place they fail with `Service not found: @unconfirmed/effect-sui/GrpcWeb` until the caller adds `GrpcWeb.layer({ baseUrl })` again, repeating `baseUrl` and `headers`.
 - Fix: `Layer.provideMerge`, with `Services | GrpcWeb` in the type. Same for `SuiGraphQL.layer` and `GraphQLProtocol`. Effort S.
 
 **Resolution:** fixed. `SuiGrpc.layer` provides `Services | GrpcWeb` and `SuiGraphQL.layer` provides `Services | GraphQLProtocol` (`Layer.provideMerge`), so `EvidenceGrpc`, `ZkLoginVerifierGrpc` and `grpc.unary(Rpc.…)` reuse the transport. README lifecycle example uses it. Test in `grpc-lean.test.ts`.
@@ -163,18 +165,18 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 - Base64: `@scure/base` (`sui`, `sui-wallet`, `seal`), `effect/encoding/Base64` (`walrus/UploadRelay.ts`), `Schema.Uint8ArrayFromBase64` (`sui-graphql/convert.ts:35`), `btoa` / `atob` (`sui-enoki/EnokiHttp.ts:39`, `sui-zklogin/Jwt.ts:60`, `sui-graphql/convert.ts:299`), hand-written base64url in `walrus/Quilt.ts:430`.
 - `concat`: `seal/Kdf.ts:29`, `seal/Dem.ts:72`, `sui-passkey/Passkey.ts:133`, `sui/grpc/GrpcWeb.ts:76`.
 - Size: `effect/encoding/Base64` + `Hex` is 2.0 KB and already ships with `Schema`; `@scure/base` is 3.2 KB for base58 alone and 8.0 KB with base64, bech32 and base64url. Using Effect's base64 and hex and keeping `@scure/base` for base58 and bech32 saves up to about 3 KB in programs that use `PrivateKey`, `TransactionJson` or a wallet.
-- Fix: one `Bytes` module (in `@unconfirmed/bcs`, which everything already depends on). Effort S.
+- Fix: one `Bytes` module (in `@unconfirmed/effect-bcs`, which everything already depends on). Effort S.
 
-**Resolution:** fixed for the duplicates that are true copies. New `@unconfirmed/bcs/Bytes` (a leaf: `equal`, `concat`, `toHex`, `fromHex`) replaces the 9 `sameBytes`, the hand-written hex in `Bcs.ts`, `Address.ts`, `CoinReservation.ts` and `PublicIdentifier.ts`, and `concat` in Seal (`bytes.ts` re-exports it) and `sui-passkey`; every user already depended on `bcs`, so no coupling is added, and each function shakes out on its own. `GrpcWeb`'s frame builder is not a generic concat and stays. Not changed: base64. Swapping `@scure/base`'s base64 for Effect's in `PrivateKey`, `TransactionJson` and `sui-wallet` saves about 3 KB only in programs that use them, and the two decoders differ on padding and whitespace, so it would change which strings `PrivateKey.decodeKeystore` and `TransactionJson.decode` accept; `@scure/base` stays for base58/bech32 regardless.
+**Resolution:** fixed for the duplicates that are true copies. New `@unconfirmed/effect-bcs/Bytes` (a leaf: `equal`, `concat`, `toHex`, `fromHex`) replaces the 9 `sameBytes`, the hand-written hex in `Bcs.ts`, `Address.ts`, `CoinReservation.ts` and `PublicIdentifier.ts`, and `concat` in Seal (`bytes.ts` re-exports it) and `sui-passkey`; every user already depended on `bcs`, so no coupling is added, and each function shakes out on its own. `GrpcWeb`'s frame builder is not a generic concat and stays. Not changed: base64. Swapping `@scure/base`'s base64 for Effect's in `PrivateKey`, `TransactionJson` and `sui-wallet` saves about 3 KB only in programs that use them, and the two decoders differ on padding and whitespace, so it would change which strings `PrivateKey.decodeKeystore` and `TransactionJson.decode` accept; `@scure/base` stays for base58/bech32 regardless.
 
 ### X-12 · low · tests · CONFIRMED
 **Test support is duplicated or shared through relative paths into other packages.**
 
-- `recordObject`, `restoreObject`, `objectsLayer`, `loadFixture`, `fixturesDir`, `BIGINT_OWNER_FIELDS` are in both `packages/walrus/test/fixtures.ts` and `packages/seal/test/fixtures.ts`; `mystenBcs` / `mystenUtils` in both `oracle.ts` files; `recorded`, `synthesized`, `scripted` in two or three `support.ts` files.
-- The Sui CLI keystore loader (`client.yaml` regex plus `PrivateKey.decodeKeystore`) is copied between `packages/walrus/test/live.write.test.ts:98-100` and `packages/seal/test/live.owned.test.ts:66-68`.
+- `recordObject`, `restoreObject`, `objectsLayer`, `loadFixture`, `fixturesDir`, `BIGINT_OWNER_FIELDS` are in both `packages/effect-walrus/test/fixtures.ts` and `packages/effect-seal/test/fixtures.ts`; `mystenBcs` / `mystenUtils` in both `oracle.ts` files; `recorded`, `synthesized`, `scripted` in two or three `support.ts` files.
+- The Sui CLI keystore loader (`client.yaml` regex plus `PrivateKey.decodeKeystore`) is copied between `packages/effect-walrus/test/live.write.test.ts:98-100` and `packages/effect-seal/test/live.owned.test.ts:66-68`.
 - Eight packages import `../../sui/test/support.ts` (`live`, `faucet`, `grpcLayer`); Seal imports `../../sui-wallet/test/FakeWallet.ts`; Enoki imports `../../sui-zklogin/test/fixtures.ts`.
 - `const run =` is defined in 22 test files, `ok` and `failure` in 12 each, `b64` in 11.
-- `faucet` (`packages/sui/test/support.ts:65`) has no timeout and no retry on 429, and a live run calls it about 17 times from one IP. It did not fail in two runs, but it is the obvious next flake.
+- `faucet` (`packages/effect-sui/test/support.ts:65`) has no timeout and no retry on 429, and a live run calls it about 17 times from one IP. It did not fail in two runs, but it is the obvious next flake.
 - Fix: a private workspace package (`packages/test-support`) with the recorded-`Objects` layer, the oracle helpers, the keystore loader and a faucet with retry. Effort M.
 
 **Resolution:** fixed. New private workspace package `packages/test-support` (`@unconfirmed/test-support`, test-only): `live` (switch, endpoints, `grpcLayer`, and a `faucet` with a 30 s bound and backoff on no answer / 429 / 5xx), `keystore` (`loadCliSigner`, replacing the Walrus and Seal copies), `recorded` (`recordObject`, `restoreObject`, the recorded `Objects` layer, used by both fixture files), `wallet` (the fake wallet, moved from `sui-wallet/test`), `zklogin` (moved from `sui-zklogin/test`), and `readme` (X-2). No test imports another package's `test/` directory any more. Not merged: the two `oracle.ts` files load different Mysten packages, and the one-line `run` / `ok` / `failure` helpers differ in shape per file.
@@ -182,12 +184,12 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 ### X-13 · low · tests · CONFIRMED
 **A quarter of the offline suite's time is one file stepping virtual time 10 ms at a time.**
 
-- `packages/seal/test/keys.test.ts`: 12.3 s of 49 s. It steps `TestClock` in 10 ms increments through 10 s timeouts (`:48`, `:72-92`); "Timeout and definitive errors are not retried" alone takes 4.4 s.
+- `packages/effect-seal/test/keys.test.ts`: 12.3 s of 49 s. It steps `TestClock` in 10 ms increments through 10 s timeouts (`:48`, `:72-92`); "Timeout and definitive errors are not retried" alone takes 4.4 s.
 - Other slow files are inherent: `walrus/test/encoder.test.ts` 7.9 s (WASM at n = 1000), `seal/test/envelope.test.ts` 6.9 s (255 shares, 3.5 s), `seal/test/parity.envelope.test.ts` 3.0 s, `walrus/test/messages.test.ts` 2.6 s.
-- `packages/bcs/test/` is empty. BCS is covered only through `packages/sui/test/parity.test.ts` and its users.
+- `packages/effect-bcs/test/` is empty. BCS is covered only through `packages/effect-sui/test/parity.test.ts` and its users.
 - Fix: step to the next scheduled wake-up instead of a fixed 10 ms (or use larger steps outside the asserted windows). Effort S.
 
-**Resolution:** fixed. The `keys.test.ts` harness jumps `TestClock` to the next scheduled wake-up (read from the clock's pending sleeps; 10 ms when none) after its real macrotasks: the file runs in 2.4 s instead of 12.3 s, with the same virtual-time assertions. `packages/bcs/test` exists since CORE-25.
+**Resolution:** fixed. The `keys.test.ts` harness jumps `TestClock` to the next scheduled wake-up (read from the clock's pending sleeps; 10 ms when none) after its real macrotasks: the file runs in 2.4 s instead of 12.3 s, with the same virtual-time assertions. `packages/effect-bcs/test` exists since CORE-25.
 
 ### X-14 · low · bundle · CONFIRMED
 **The Rolldown column counts `/* @__PURE__ */` comments, which Rolldown keeps in minified output.**
@@ -203,18 +205,18 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 ### X-15 · low · docs · CONFIRMED (found by the delegated doc audits, each reproduced with a script or pinned to a line)
 **Design-doc and README statements the code contradicts.**
 
-- `README.md:160`: "A short or unprefixed id is refused". `packages/seal/src/Config.ts:51,60` accepts 64 hex digits without `0x` for configured servers (`seal.md:420` says so).
-- `docs/design/seal.md:566` (As built S5): "every function given one dies". `SessionKey.verify` (`packages/seal/src/SessionKey.ts:354-364`) accepts a spread copy.
-- `docs/design/seal.md:655` (As built S6): "every askable server is in `unsettled`". `packages/seal/src/Keys.ts:202` omits servers whose keys are cached.
-- `docs/design/walrus.md:191`: `QuiltRead.ts` is listed as importing `@unconfirmed/quorum`; only `Read.ts:23` and `Write.ts:30` do.
-- `README.md:135` and `docs/design/walrus.md:787`: "32-byte blobs"; `packages/walrus/test/live.write.test.ts:314-358` also writes a 445,556-byte quilt.
+- `README.md:160`: "A short or unprefixed id is refused". `packages/effect-seal/src/Config.ts:51,60` accepts 64 hex digits without `0x` for configured servers (`seal.md:420` says so).
+- `docs/design/seal.md:566` (As built S5): "every function given one dies". `SessionKey.verify` (`packages/effect-seal/src/SessionKey.ts:354-364`) accepts a spread copy.
+- `docs/design/seal.md:655` (As built S6): "every askable server is in `unsettled`". `packages/effect-seal/src/Keys.ts:202` omits servers whose keys are cached.
+- `docs/design/walrus.md:191`: `QuiltRead.ts` is listed as importing `@unconfirmed/effect-quorum`; only `Read.ts:23` and `Write.ts:30` do.
+- `README.md:135` and `docs/design/walrus.md:787`: "32-byte blobs"; `packages/effect-walrus/test/live.write.test.ts:314-358` also writes a 445,556-byte quilt.
 - Everything else checked in the As-built notes was correct (about 170 Walrus claims, about 150 Seal and Quorum claims).
 
 **Resolution:** fixed, each re-verified against the code. README "short or unprefixed id" was already corrected by the Seal batch; `seal.md` S5 now says `SessionKey.verify` accepts a spread copy (it reads only the copied public fields); S6 says only servers whose keys are not all cached are in `unsettled`; `walrus.md` says only `Read.ts` and `Write.ts` import the quorum; the README live-test paragraph and `walrus.md` live case 1 mention the 445,556-byte quilt.
 
 ### X-16 · low · performance · CONFIRMED
 **`Chain` over gRPC calls `GetEpoch` twice for one resolve.**
-`packages/sui/src/grpc/ChainGrpc.ts:13-30`: `info` asks for `epoch, first_checkpoint` and `referenceGasPrice` asks for `epoch, reference_gas_price` separately. The live log shows both in one `Tx.run` (`GetEpoch`, `GetBalance`, `GetServiceInfo`, `GetEpoch`). One request with both paths, cached once, saves a round trip per cold resolve. Effort S.
+`packages/effect-sui/src/grpc/ChainGrpc.ts:13-30`: `info` asks for `epoch, first_checkpoint` and `referenceGasPrice` asks for `epoch, reference_gas_price` separately. The live log shows both in one `Tx.run` (`GetEpoch`, `GetBalance`, `GetServiceInfo`, `GetEpoch`). One request with both paths, cached once, saves a round trip per cold resolve. Effort S.
 
 **Resolution:** fixed. Since CORE-10 one `GetEpoch` served both members; with CT-23, `Chain.info` reads only `GetServiceInfo` and the gas price only `GetEpoch` (`reference_gas_price`).
 
@@ -238,12 +240,12 @@ Walrus and Seal annotate consistently; the older packages do not. 925 module-eva
 
 So `import * as X from "@unconfirmed/<pkg>"` works for the flat ones and fails for `quorum` (X-2). Also `GrpcWeb.layer` is a static on the service class, imported by name, while every other layer is a module-level `layer`; `sui-zklogin`'s doc comment writes `GrpcWeb.GrpcWeb.layer`. Core capability services have no accessors (`Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(id))`), while Walrus and Seal export them (`Aggregator.blob(id)`).
 
-**Resolution:** partly fixed. `@unconfirmed/quorum` and `@unconfirmed/sui-zklogin` roots also export their main module as a namespace (`import { Quorum }` and `import * as Quorum` both work; `import { ZkLogin }` now works, which `bundle-report --named` needed). Not changed: flattening the namespace packages or adding accessors to the core services (API additions with no bug behind them). The zkLogin doc comments now write `GrpcWeb.layer`, as a user importing `{ GrpcWeb }` (like the README) would.
+**Resolution:** partly fixed. `@unconfirmed/effect-quorum` and `@unconfirmed/effect-sui/zklogin` roots also export their main module as a namespace (`import { Quorum }` and `import * as Quorum` both work; `import { ZkLogin }` now works, which `bundle-report --named` needed). Not changed: flattening the namespace packages or adding accessors to the core services (API additions with no bug behind them). The zkLogin doc comments now write `GrpcWeb.layer`, as a user importing `{ GrpcWeb }` (like the README) would.
 
 **Resolution (conventions):** reviewed with X-9 and left as is. Flattening the namespace packages can't be done without collisions, because every module there exports `layer`, `make` and its own errors. The flat packages already work with both `import { X }` and `import * as X`. Accessors for the core services would add API surface and bundle weight with no bug behind them. `Effect.service(X)` with a method call is the Effect 4 idiom, and Walrus / Seal keep their accessors because those are the packages' entry points. Leaving `GrpcWeb.layer` as a static is deliberate. Exporting a module-level `layer` too would give one thing two names, and moving the static would churn every caller for no change in behaviour.
 
 ### X-19 · nit · api · CONFIRMED
-**`BcsDecodeError` is a `Data.TaggedError`** (`packages/bcs/src/Bcs.ts:461`) in a package that already ships `Schema`. Quorum's two `Data.TaggedError`s are justified (generic, no `Schema`); this one is not.
+**`BcsDecodeError` is a `Data.TaggedError`** (`packages/effect-bcs/src/Bcs.ts:461`) in a package that already ships `Schema`. Quorum's two `Data.TaggedError`s are justified (generic, no `Schema`); this one is not.
 
 **Resolution:** fixed: `BcsDecodeError` is a `Schema.TaggedError` with `message` and `offset`; all construction sites pass a string and a number.
 

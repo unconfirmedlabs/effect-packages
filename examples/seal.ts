@@ -6,11 +6,11 @@
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as FetchHttpClient from "effect/http/FetchHttpClient"
-import * as Bcs from "@unconfirmed/bcs/Bcs"
-import * as Approval from "@unconfirmed/seal/Approval"
-import * as Config from "@unconfirmed/seal/Config"
-import * as Seal from "@unconfirmed/seal/Seal"
-import * as SealGrpc from "@unconfirmed/seal/SealGrpc"
+import * as Bcs from "@unconfirmed/effect-bcs/Bcs"
+import * as Approval from "@unconfirmed/effect-seal/Approval"
+import * as Config from "@unconfirmed/effect-seal/Config"
+import * as Seal from "@unconfirmed/effect-seal/Seal"
+import * as SealGrpc from "@unconfirmed/effect-seal/SealGrpc"
 import { signer } from "./shared.ts"
 
 declare const packageId: string

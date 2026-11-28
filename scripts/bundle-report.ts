@@ -35,31 +35,31 @@ const programs: Record<string, string> = {
     Effect.runPromise(Effect.flatMap(Effect.service(HttpClient.HttpClient), (h) => h.get("https://x")).pipe(Effect.map(() => Schema.decodeUnknownSync(S)({ a: 1n })), Effect.provide(FetchHttpClient.layer))).then(console.log)`,
   "ours: Quorum.run over three members": `
     ${E("Effect")}
-    ${style === "named" ? `import { Quorum } from "@unconfirmed/quorum"` : `import * as Quorum from "@unconfirmed/quorum/Quorum"`}
+    ${style === "named" ? `import { Quorum } from "@unconfirmed/effect-quorum"` : `import * as Quorum from "@unconfirmed/effect-quorum/Quorum"`}
     Effect.runPromise(Quorum.run([1, 2, 3], { weight: () => 1, threshold: 2, run: (n) => Effect.succeed(n) })).then(console.log)`,
   "ours: verify, Ed25519 only": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui", "Ed25519", "SignatureScheme", "Verify")}
+    ${I("@unconfirmed/effect-sui", "Ed25519", "SignatureScheme", "Verify")}
     Effect.runPromise(Verify.personalMessage(new Uint8Array([1]), new Uint8Array(97)).pipe(Effect.provide(SignatureScheme.SignatureSchemes.layer(Ed25519.scheme)))).then(console.log)`,
   "ours: verify, Ed25519 + k1 + r1 + multisig": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui", "Ed25519", "SignatureScheme", "Verify")}
-    import * as Secp256k1 from "@unconfirmed/sui-secp256k1"
-    import * as Secp256r1 from "@unconfirmed/sui-secp256r1"
-    import * as MultiSig from "@unconfirmed/sui-multisig"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "SignatureScheme", "Verify")}
+    import * as Secp256k1 from "@unconfirmed/effect-sui/Secp256k1"
+    import * as Secp256r1 from "@unconfirmed/effect-sui/Secp256r1"
+    import * as MultiSig from "@unconfirmed/effect-sui/MultiSig"
     Effect.runPromise(Verify.personalMessage(new Uint8Array([1]), new Uint8Array(97)).pipe(Effect.provide(SignatureScheme.SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, Secp256r1.scheme, MultiSig.scheme)))).then(console.log)`,
   "ours: read one object": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Address", "Objects")}
-    ${style === "named" ? `import { GrpcWeb, ObjectsGrpc } from "@unconfirmed/sui/grpc"` : `import { GrpcWeb } from "@unconfirmed/sui/grpc/GrpcWeb"\nimport * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"`}
+    ${I("@unconfirmed/effect-sui", "Address", "Objects")}
+    ${style === "named" ? `import { GrpcWeb, ObjectsGrpc } from "@unconfirmed/effect-sui/grpc"` : `import { GrpcWeb } from "@unconfirmed/effect-sui/grpc/GrpcWeb"\nimport * as ObjectsGrpc from "@unconfirmed/effect-sui/grpc/ObjectsGrpc"`}
     const layer = ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.flatMap(Effect.service(Objects.Objects), (o) => o.get(Address.normalize("0x6"))).pipe(Effect.provide(layer))).then(console.log)`,
   "ours: build + resolve + sign + execute": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "Ptb", "Tx")}
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = SuiGrpc.layerCore({ url: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -68,8 +68,8 @@ const programs: Record<string, string> = {
   "ours: the same with SuiGrpc.layer (all nine)": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "Ptb", "Tx")}
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -77,18 +77,18 @@ const programs: Record<string, string> = {
     }).pipe(Effect.provide(layer))).then(console.log)`,
   "ours: hand-written moveCall": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui", "Ptb")}
+    ${I("@unconfirmed/effect-sui", "Ptb")}
     Effect.runPromise(Ptb.build(Effect.gen(function*() { yield* Ptb.moveCall({ target: "0x1::blob::burn", arguments: [yield* Ptb.object("0x6")] }) }))).then(console.log)`,
   "ours: one generated call (walrus blob.burn)": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui", "Ptb")}
-    import * as blob from "@unconfirmed/walrus/generated/walrus/blob"
+    ${I("@unconfirmed/effect-sui", "Ptb")}
+    import * as blob from "@unconfirmed/effect-walrus/generated/walrus/blob"
     Effect.runPromise(Ptb.build(blob.burn({ arguments: ["0x6"] }))).then(console.log)`,
   "ours: Tx.run over GraphQL": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519", "Ptb", "Tx")}
-    import * as SuiGraphQL from "@unconfirmed/sui-graphql"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "Ptb", "Tx")}
+    import * as SuiGraphQL from "@unconfirmed/effect-sui/graphql"
     const layer = SuiGraphQL.layer({ url: "https://graphql.testnet.sui.io/graphql" }).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -98,9 +98,9 @@ const programs: Record<string, string> = {
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
     ${I("effect/persistence", "KeyValueStore")}
-    ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
-    ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "Ptb")}
+    ${I("@unconfirmed/effect-sui/lifecycle", "JournalKeyValueStore", "Lifecycle")}
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = Layer.mergeAll(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStore.layerMemory))).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -110,11 +110,11 @@ const programs: Record<string, string> = {
   "ours: Lifecycle.run, browser (IndexedDB, Web Locks)": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
-    ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
-    import * as KeyValueStoreIndexedDb from "@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb"
-    import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "Ptb")}
+    ${I("@unconfirmed/effect-sui/lifecycle", "JournalKeyValueStore", "Lifecycle")}
+    import * as KeyValueStoreIndexedDb from "@unconfirmed/effect-sui/lifecycle/KeyValueStoreIndexedDb"
+    import * as SenderLockWebLocks from "@unconfirmed/effect-sui/lifecycle/SenderLockWebLocks"
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = Layer.mergeAll(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreIndexedDb.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -123,11 +123,11 @@ const programs: Record<string, string> = {
   "ours: the same over OPFS": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519", "Ptb")}
-    ${I("@unconfirmed/sui-lifecycle", "JournalKeyValueStore", "Lifecycle")}
-    import * as KeyValueStoreOpfs from "@unconfirmed/sui-lifecycle/KeyValueStoreOpfs"
-    import * as SenderLockWebLocks from "@unconfirmed/sui-lifecycle/SenderLockWebLocks"
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519", "Ptb")}
+    ${I("@unconfirmed/effect-sui/lifecycle", "JournalKeyValueStore", "Lifecycle")}
+    import * as KeyValueStoreOpfs from "@unconfirmed/effect-sui/lifecycle/KeyValueStoreOpfs"
+    import * as SenderLockWebLocks from "@unconfirmed/effect-sui/lifecycle/SenderLockWebLocks"
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = Layer.mergeAll(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" }), JournalKeyValueStore.layer().pipe(Layer.provide(KeyValueStoreOpfs.layer())), SenderLockWebLocks.layer).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -136,25 +136,25 @@ const programs: Record<string, string> = {
   "walrus: read via aggregator": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/walrus", "Aggregator")}
+    ${I("@unconfirmed/effect-walrus", "Aggregator")}
     const layer = Aggregator.layer({ url: Aggregator.TESTNET_URL }).pipe(Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Aggregator.blob(process.argv[2]).pipe(Effect.provide(layer))).then(console.log)`,
   "walrus: Bft + Encoding only": `
-    ${I("@unconfirmed/walrus", "Bft", "Encoding")}
+    ${I("@unconfirmed/effect-walrus", "Bft", "Encoding")}
     console.log(Bft.minCorrect(1000), Encoding.encodedLength(1, 1000))`,
   "walrus: read a blob (nodes)": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/walrus", "Read", "Walrus")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-walrus", "Read", "Walrus")}
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provide(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Read.blob(process.argv[2]).pipe(Effect.provide(layer))).then(console.log)`,
   "walrus: write a blob (nodes)": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519")}
-    ${I("@unconfirmed/walrus", "Walrus", "Write")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519")}
+    ${I("@unconfirmed/effect-walrus", "Walrus", "Write")}
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = Walrus.layer({ network: "testnet" }).pipe(Layer.provideMerge(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
@@ -163,20 +163,20 @@ const programs: Record<string, string> = {
   "walrus: write a blob (relay)": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519")}
-    ${I("@unconfirmed/walrus", "UploadRelay", "Walrus", "Write")}
-    import * as SuiGrpc from "@unconfirmed/sui/grpc"
+    ${I("@unconfirmed/effect-sui", "Ed25519")}
+    ${I("@unconfirmed/effect-walrus", "UploadRelay", "Walrus", "Write")}
+    import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
     const layer = Layer.mergeAll(Walrus.layer({ network: "testnet" }), UploadRelay.layer({ url: UploadRelay.TESTNET_URL })).pipe(Layer.provideMerge(SuiGrpc.layer({ url: "https://fullnode.testnet.sui.io:443" })), Layer.provide(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
       return yield* Write.run(new Uint8Array(32), { epochs: 1, deletable: true, executor: Write.viaTx(signer), via: "relay" })
     }).pipe(Effect.provide(layer))).then(console.log)`,
   "seal: parse an encrypted object": `
-    ${I("@unconfirmed/seal", "EncryptedObject")}
+    ${I("@unconfirmed/effect-seal", "EncryptedObject")}
     console.log(EncryptedObject.parse(new Uint8Array(process.argv.length)))`,
   "seal: encrypt with pinned keys": `
     ${E("Effect")}
-    ${I("@unconfirmed/seal", "Envelope")}
+    ${I("@unconfirmed/effect-seal", "Envelope")}
     const objectId = "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75"
     const publicKey = new Uint8Array(96)
     Effect.runPromise(Effect.flatMap(Envelope.randomness(1), (randomness) => Envelope.seal({
@@ -187,8 +187,8 @@ const programs: Record<string, string> = {
   "seal: encrypt + decrypt": `
     ${E("Effect")}; ${E("Layer")}
     ${I("effect/http", "FetchHttpClient")}
-    ${I("@unconfirmed/sui", "Ed25519")}
-    ${I("@unconfirmed/seal", "Approval", "Config", "Seal", "SealGrpc")}
+    ${I("@unconfirmed/effect-sui", "Ed25519")}
+    ${I("@unconfirmed/effect-seal", "Approval", "Config", "Seal", "SealGrpc")}
     const packageId = "0x58dce5d91278bceb65d44666ffa225ab397fc3ae9d8398c8c779c5530bd978c2"
     const layer = SealGrpc.layer({ servers: [Config.testnet.mysten1, Config.testnet.mysten2, Config.testnet.committee], grpc: { url: "https://fullnode.testnet.sui.io:443" } }).pipe(Layer.provideMerge(FetchHttpClient.layer))
     Effect.runPromise(Effect.gen(function*() {
@@ -201,25 +201,25 @@ const programs: Record<string, string> = {
     }).pipe(Effect.provide(layer))).then(console.log)`,
   "zklogin: Nonce.generate": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui-zklogin", "Nonce")}
+    ${I("@unconfirmed/effect-sui/zklogin", "Nonce")}
     Effect.runPromise(Nonce.generate({ flag: 0, bytes: new Uint8Array(32) }, 10, 1n)).then(console.log)`,
   "zklogin: ZkLoginAddress.fromJwt": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui-zklogin", "ZkLoginAddress")}
+    ${I("@unconfirmed/effect-sui/zklogin", "ZkLoginAddress")}
     Effect.runPromise(ZkLoginAddress.fromJwt(process.argv[2], 1n)).then(console.log)`,
   "zklogin: ZkLogin.signer (no Poseidon)": `
     ${E("Effect")}
-    ${I("@unconfirmed/sui", "Ed25519")}
-    ${I("@unconfirmed/sui-zklogin", "ZkLogin")}
+    ${I("@unconfirmed/effect-sui", "Ed25519")}
+    ${I("@unconfirmed/effect-sui/zklogin", "ZkLogin")}
     Effect.runPromise(Effect.flatMap(Ed25519.generate, (ephemeral) => ZkLogin.signer({ ephemeral, inputs: JSON.parse(process.argv[2]), maxEpoch: 10n }))).then(console.log)`,
   // Ed25519 is SLIP-0010; BIP32 (secp256k1/r1 derivation) must stay out.
   "mnemonic: Ed25519 signer": `
     ${E("Effect")}
-    import * as Mnemonic from "@unconfirmed/sui-mnemonic${style === "named" ? "" : "/Mnemonic"}"
+    import * as Mnemonic from "@unconfirmed/effect-sui/Mnemonic"
     Effect.runPromise(Mnemonic.ed25519Signer(process.argv[2])).then((s) => console.log(s.address))`,
   "mnemonic: Secp256k1 secret key (BIP32)": `
     ${E("Effect")}
-    import * as Bip32 from "@unconfirmed/sui-mnemonic${style === "named" ? "" : "/Bip32"}"
+    import * as Bip32 from "@unconfirmed/effect-sui/Bip32"
     Effect.runPromise(Bip32.secp256k1SecretKey(process.argv[2])).then(console.log)`,
   "mysten: verify a signature": `
     import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
@@ -296,18 +296,18 @@ const bucket = (path: string) => {
   if (/@noble[/\\]curves[/\\](bls12-381|abstract[/\\](bls|tower|hash-to-curve))/.test(path)) return "noble bls12-381"
   if (/@noble[/\\]curves[/\\](abstract[/\\]weierstrass|secp256k1|nist)/.test(path)) return "secp curves"
   if (/@noble|@scure/.test(path)) return "noble/scure"
-  if (/walrus-wasm/.test(path)) return "walrus-wasm glue"
-  if (/packages[/\\]walrus[/\\]src[/\\]generated/.test(path)) return "walrus generated"
-  if (/packages[/\\]walrus/.test(path)) return "walrus"
-  if (/packages[/\\]seal/.test(path)) return "seal"
-  if (/packages[/\\]quorum/.test(path)) return "quorum"
-  if (/packages[/\\]sui-multisig/.test(path)) return "sui-multisig"
-  if (/packages[/\\]sui-secp/.test(path)) return "sui-secp*"
-  if (/packages[/\\]sui-graphql/.test(path)) return "sui-graphql"
-  if (/packages[/\\]sui-lifecycle/.test(path)) return "sui-lifecycle"
-  if (/packages[/\\]sui[/\\]src[/\\]grpc/.test(path)) return "sui/grpc"
-  if (/packages[/\\]sui[/\\]src/.test(path)) return "sui core"
-  if (/packages[/\\]bcs/.test(path)) return "bcs"
+  if (/walrus-wasm|packages[/\\]effect-walrus[/\\]wasm/.test(path)) return "walrus wasm glue"
+  if (/packages[/\\]effect-walrus[/\\]src[/\\]generated/.test(path)) return "walrus generated"
+  if (/packages[/\\]effect-walrus/.test(path)) return "walrus"
+  if (/packages[/\\]effect-seal/.test(path)) return "seal"
+  if (/packages[/\\]effect-quorum/.test(path)) return "quorum"
+  if (/packages[/\\]effect-sui[/\\]src[/\\]MultiSig/.test(path)) return "sui MultiSig"
+  if (/packages[/\\]effect-sui[/\\]src[/\\]Secp256/.test(path)) return "sui Secp256*"
+  if (/packages[/\\]effect-sui[/\\]src[/\\]graphql/.test(path)) return "sui/graphql"
+  if (/packages[/\\]effect-sui[/\\]src[/\\]lifecycle/.test(path)) return "sui/lifecycle"
+  if (/packages[/\\]effect-sui[/\\]src[/\\]grpc/.test(path)) return "sui/grpc"
+  if (/packages[/\\]effect-sui[/\\]src/.test(path)) return "sui core"
+  if (/packages[/\\]effect-bcs/.test(path)) return "bcs"
   if (/@mysten/.test(path)) return "@mysten"
   return "other"
 }
@@ -370,15 +370,15 @@ for (const [name, source] of Object.entries(programs)) {
 await Bun.$`rm -rf ${dir}`
 console.log("\nKB minified / KB minified+gzip, JS only (all chunks)")
 {
-  // Our programs ship @unconfirmed/walrus-wasm's glue; @mysten/walrus ships @mysten/walrus-wasm's.
+  // Our programs ship @unconfirmed/effect-walrus/wasm's glue; @mysten/walrus ships @mysten/walrus-wasm's.
   const asset = async (path: string) => {
     const file = Bun.file(`${import.meta.dir}/../${path}`)
     return (await file.exists()) ? `${kb(file.size)} KB / ${kb(gzipSync(await file.bytes()).length)} KB gzip` : "missing"
   }
   console.log(
     `Walrus programs that encode, decode or verify also load one WASM asset, not counted above: ` +
-      `${await asset("packages/walrus-wasm/web/walrus_wasm_bg.wasm")} (SIMD build), or ` +
-      `${await asset("packages/walrus-wasm/web/walrus_wasm_nosimd_bg.wasm")} (scalar fallback, engines without WebAssembly SIMD); ` +
+      `${await asset("packages/effect-walrus/wasm/web/walrus_wasm_bg.wasm")} (SIMD build), or ` +
+      `${await asset("packages/effect-walrus/wasm/web/walrus_wasm_nosimd_bg.wasm")} (scalar fallback, engines without WebAssembly SIMD); ` +
       `@mysten/walrus-wasm: ${await asset("node_modules/@mysten/walrus-wasm/web/walrus_wasm_bg.wasm")}`
   )
 }

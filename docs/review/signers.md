@@ -1,5 +1,7 @@
 # Review: signing and authentication packages
 
+> **Package names changed on 2026-11-28.** The 17 packages became six; the README's [migration table](../../README.md#migrating-from-the-old-package-names) maps every old import. This review predates the change: it names the packages as they were (`sui-zklogin` is now `@unconfirmed/effect-sui/zklogin`, `sui-secp256k1` is `@unconfirmed/effect-sui/Secp256k1`, `walrus-wasm` is `@unconfirmed/effect-walrus/wasm`, and so on), and its line numbers refer to the files as they were then. Import specifiers and paths were updated mechanically.
+
 Scope: `sui-multisig`, `sui-secp256k1`, `sui-secp256r1`, `sui-mldsa65`, `sui-mnemonic`, `sui-passkey`, `sui-zklogin`, `sui-enoki`, `sui-wallet`, plus the core pieces they lean on (`Tx.ts` `checkChange`, `SignatureScheme.ts`, `Verify.ts`).
 
 ## Summary
@@ -22,7 +24,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-1: zkLogin ships all 16 Poseidon arities (589 KB min / 421 KB gzip)
 
 - **Severity** medium · **Category** bundle · **CONFIRMED** (measured) · **Effort** S–M
-- **Where** `packages/sui-zklogin/src/Poseidon.ts:7-44`
+- **Where** `packages/effect-sui/src/zklogin/Poseidon.ts:7-44`
 - **What** `Poseidon.ts` imports `poseidon1..16` from the `poseidon-lite` index and holds them in `BY_ARITY`. `poseidon-lite` is CommonJS, so no bundler can drop an arity. The round constants are base64 and barely compress.
 - **Measurement** (bun / esbuild / rolldown, KB min/gzip):
 
@@ -41,7 +43,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-2: `MultiSig.publicKey` accepts member keys of the wrong length; `address` answers anyway, `signer` throws
 
 - **Severity** medium · **Category** correctness · **CONFIRMED** · **Effort** S
-- **Where** `packages/sui-multisig/src/index.ts:80-96` (validation), `:112-116` (`address`), `:119-122` (`toPublicKey`), `:243-245` (`signer`)
+- **Where** `packages/effect-sui/src/MultiSig.ts:80-96` (validation), `:112-116` (`address`), `:119-122` (`toPublicKey`), `:243-245` (`signer`)
 - **What** `publicKey()` checks flag, weight, duplicates and threshold, but never the key bytes. `PublicKey` is a structural `{ flag, bytes }`, so nothing upstream checks either (Mysten's key classes do, in their constructors). `address()` hashes whatever it is given.
 - **Failure scenario** a member `{ flag: 0x00, bytes: <31 bytes> }` (or a 65-byte uncompressed secp key, or a 32-byte key under the secp flag):
   - `MultiSig.publicKey(...)` succeeds.
@@ -54,7 +56,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-3: a failed `signAndExecuteTransaction` is a `SigningError`, though the wallet may have submitted
 
 - **Severity** medium · **Category** correctness · **CONFIRMED** (mapping) / PLAUSIBLE (wallet behaviour) · **Effort** S
-- **Where** `packages/sui-wallet/src/Wallet.ts:337-341`
+- **Where** `packages/effect-sui/src/wallet/Wallet.ts:337-341`
 - **What** `ExecutionUnconfirmed` is raised only when the wallet *resolves* with a malformed answer. When the wallet's promise *rejects*, the error is `SigningError`, reason `"failed"` or `"rejected"`. A wallet signs, submits, then waits for effects; a timeout or RPC error in that last step rejects the promise after the transaction is on its way.
 - **Failure scenario** the wallet rejects with `Error("Request timed out waiting for transaction effects")`. Result: `SigningError { reason: "failed" }`. The caller reads "nothing was signed", retries, and the transfer executes twice.
 - **Fix** for this one feature, map every rejection that is not a coded user refusal (4001000 / 4001) to `ExecutionUnconfirmed` without a digest, and say so in the README line that describes it (`README.md:274`).
@@ -63,7 +65,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-4: `isRejection` wording heuristics read validator and RPC failures as a user's refusal
 
 - **Severity** medium · **Category** correctness · **CONFIRMED** (regex behaviour) · **Effort** S
-- **Where** `packages/sui-wallet/src/Wallet.ts:95-106`
+- **Where** `packages/effect-sui/src/wallet/Wallet.ts:95-106`
 - **What** the third alternative of `USER_WORDING` matches any message that *starts* with an optional "request / transaction / signature" and then "rejected / denied / declined / cancelled". The first matches any message where "user" precedes one of those words. `REJECTION_NAME` matches any error class whose name contains "rejected" or "cancelled". The existing test passes only because its samples have a word in between ("Transaction **is** rejected…", "Transaction **execution** cancelled…").
 - **Failure scenario** all of these classify as `"rejected"`:
   - `"Transaction rejected by validators"`
@@ -81,7 +83,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-5: Enoki sponsored execute failure drops the signed transaction; a retry sponsors a second one
 
 - **Severity** medium · **Category** correctness · **CONFIRMED** · **Effort** S–M
-- **Where** `packages/sui-enoki/src/Sponsor.ts:166-167`
+- **Where** `packages/effect-sui/src/enoki/Sponsor.ts:166-167`
 - **What** `sponsorAndExecute` signs the sponsored bytes and posts the signature. If that post fails, the caller gets a bare `EnokiError` and loses `bytes`, `signature` and the sponsored `digest`. Enoki may have executed it. Retrying `Sponsor.run` asks Enoki for a *new* sponsored transaction (new gas, new digest), which is not idempotent with the first.
 - **Failure scenario** execute returns 504 from a gateway: `EnokiError { status: 504, code: "unknown_error", message: "Request to Enoki API failed (status: 504)" }`, with no digest anywhere. On a transport error the digest survives only by accident, inside the URL in the message.
 - **Also** the header says "each step is exported for flows that stop in between", but the bytes check (`check`) and the sponsor step are private. A caller who wants to sponsor, check, sign and execute separately has to re-implement the check.
@@ -91,7 +93,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-6: wallet accounts are not filtered by chain; a multi-chain wallet's first account may not be a Sui account
 
 - **Severity** medium · **Category** correctness · **CONFIRMED** · **Effort** S
-- **Where** `packages/sui-wallet/src/Wallet.ts:178-187` (`toAccount`, `accounts`), `:242-255` (`pick`)
+- **Where** `packages/effect-sui/src/wallet/Wallet.ts:178-187` (`toAccount`, `accounts`), `:242-255` (`pick`)
 - **What** `isSuiWallet` filters wallets, but nothing filters accounts. `Address.normalize` pads short hex, so a 20-byte EVM address becomes a "valid" Sui address. `pick` defaults to `all[0]`.
 - **Failure scenario** a wallet with accounts `[ { address: "0x5290…9EE7", chains: ["eip155:1"] }, { address: <sui>, chains: ["sui:mainnet", "sui:testnet"] } ]`:
   - `Wallet.accounts(wallet)` lists the EVM account as `0x000000000000000000000000529084…9ee7`.
@@ -103,7 +105,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-7: wallet failures that can't be stringified, and malformed wallet answers, escape as defects
 
 - **Severity** low · **Category** correctness · **CONFIRMED** · **Effort** S
-- **Where** `packages/sui-wallet/src/Wallet.ts:108` (`describe`), `:196-200` (`connect`), `:187` (`accounts`)
+- **Where** `packages/effect-sui/src/wallet/Wallet.ts:108` (`describe`), `:196-200` (`connect`), `:187` (`accounts`)
 - **What / scenario**
   - `describe` calls `JSON.stringify(e)` inside the `catch` mapper. A wallet rejecting with a circular object or one holding a `bigint` makes the mapper throw: `signTransaction`, `signAndExecuteTransaction`, `signPersonalMessage` and `connect` all end in `Die` instead of `SigningError` / `ConnectionError`.
   - An error-like object that is not `instanceof Error` (cross-realm) is described as `"{}"`, losing its message.
@@ -115,7 +117,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-8: zkLogin accepts address seeds and epochs the chain cannot represent, and derives an address from them
 
 - **Severity** low · **Category** correctness · **CONFIRMED** · **Effort** S
-- **Where** `packages/sui-zklogin/src/PublicIdentifier.ts:25-26, 42-51`; `ZkLoginAddress.ts:25-33`; `ZkLogin.ts:33, 117, 121`; `Signature.ts:52`
+- **Where** `packages/effect-sui/src/zklogin/PublicIdentifier.ts:25-26, 42-51`; `ZkLoginAddress.ts:25-33`; `ZkLogin.ts:33, 117, 121`; `Signature.ts:52`
 - **What** seeds go through `BigInt(...)` and `toPaddedBigEndianBytes`, which truncates to 32 bytes and never checks sign or range.
 - **Scenarios** (all succeed where `InvalidZkLoginInput` / `InvalidKey` is promised):
   - `ZkLoginAddress.fromSeed(2n ** 300n + 7n, iss)` equals `fromSeed(7n, iss)`.
@@ -128,7 +130,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-9: `hashASCIIStrToField` hashes UTF-16 code units, so a non-ASCII claim derives a different address than its UTF-8 bytes
 
 - **Severity** low · **Category** correctness · **CONFIRMED** (local behaviour) / PLAUSIBLE (on-chain consequence) · **Effort** S
-- **Where** `packages/sui-zklogin/src/AddressSeed.ts:26-30`
+- **Where** `packages/effect-sui/src/zklogin/AddressSeed.ts:26-30`
 - **What** the string is split into `charCodeAt` values. `"é"` is hashed as the single byte `0xE9`, not UTF-8 `C3 A9`. A code unit above 255 prints as 3–4 hex digits and shifts every byte after it. The circuit hashes raw JWT bytes. The module already refuses JSON escapes for exactly this reason (`assertNoJsonEscape`), but lets non-ASCII through.
 - **Scenario** `genAddressSeed(1n, "sub", "é", "aud")` differs from the seed of the same claim taken as UTF-8 bytes. `ZkLoginAddress.fromJwt` for a provider with non-ASCII `sub` or `aud` then names an address the proof cannot sign for. `@mysten/sui` behaves the same, so parity tests don't see it.
 - **Fix** refuse code units above 0x7F in `assertNoJsonEscape` (the function is named ASCII), unless the circuit's handling is confirmed and UTF-8 bytes are hashed instead.
@@ -137,7 +139,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-10: member signers and key signers are asked concurrently; two passkeys overlap their prompts
 
 - **Severity** low · **Category** correctness · **CONFIRMED** (overlap) / PLAUSIBLE (browser outcome) · **Effort** S
-- **Where** `packages/sui-multisig/src/index.ts:247-255`; `packages/sui/src/Tx.ts:126-133`; `packages/sui-passkey/src/BrowserProvider.ts:34-42`
+- **Where** `packages/effect-sui/src/MultiSig.ts:247-255`; `packages/effect-sui/src/Tx.ts:126-133`; `packages/effect-sui/src/internal/passkey/BrowserProvider.ts:34-42`
 - **What** `MultiSig.signer` and `Tx.sign` run every `Signer.sign` with `concurrency: "unbounded"`. For in-memory keys that is right. For interactive signers it issues overlapping prompts, and WebAuthn allows one pending request.
 - **Scenario** a 2-of-2 multisig of two passkeys, with a provider that allows one request at a time: both `provider.get` calls are in flight together (max concurrent 2), and the second fails. In a browser that failure is a `NotAllowedError`, which `toSigningError` reports as `"rejected"`, so the user appears to have cancelled.
 - **Fix** serialise inside `browserProvider` (a one-permit semaphore around `ask`), which fixes both call sites. Alternatively give `MultiSig.signer` a `concurrency` option.
@@ -146,7 +148,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-11: multisig verification refuses a bitmap with more bits than signatures, which `@mysten/sui` accepts
 
 - **Severity** low · **Category** correctness (protocol parity) · **CONFIRMED** against `@mysten/sui` / PLAUSIBLE against validators · **Effort** S
-- **Where** `packages/sui-multisig/src/index.ts:145-146`
+- **Where** `packages/effect-sui/src/MultiSig.ts:145-146`
 - **What** we require `popcount(bitmap) === sigs.length`. `@mysten/sui` walks the signatures and takes the i-th set bit for each. From memory, validators zip signatures with bitmap indices the same way; I could not check the Rust source here.
 - **Scenario** one valid signature from member 0, bitmap `0b11`, threshold 1: `MultiSigPublicKey.verifyPersonalMessage` returns `true`, ours fails with "bitmap does not match the signature count". Off-chain verification then rejects something the chain may execute.
 - **Fix** confirm against `sui-types/src/multisig.rs`, then either match it or record the stricter rule as a decision next to the code.
@@ -155,16 +157,16 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-12: `checkChange` lets a wallet sponsor change the expiration a key sender then signs
 
 - **Severity** low · **Category** security · **CONFIRMED** · **Effort** S
-- **Where** `packages/sui/src/Tx.ts:77-90` (core, exercised through the wallet signer)
+- **Where** `packages/effect-sui/src/Tx.ts:77-90` (core, exercised through the wallet signer)
 - **What** gas data and expiration are treated as one bundle that only a key *gas owner* protects (`:88`). Expiration is the sender's term, not the payer's.
 - **Scenario** key sender `K`, wallet sponsor `W`, transaction with `expiration: Epoch(5)`. `W` returns bytes with `expiration: None`. `checkChange` accepts, `K` signs bytes it never saw, and they are submitted. The reverse case (wallet sender, key sponsor) is correctly refused, as are sender, command, input and gas owner changes.
 - **Fix** refuse an expiration change whenever a key signer is the sender; keep the gas-terms rule for the gas owner.
-- **Resolution** Fixed in core (`Tx.ts` `checkChange`): an expiration change is refused whenever a key signer is the sender or the gas owner; gas-term changes stay refused only when a key signer is the gas owner. Tests in `packages/sui/test/core-review.test.ts`; README updated.
+- **Resolution** Fixed in core (`Tx.ts` `checkChange`): an expiration change is refused whenever a key signer is the sender or the gas owner; gas-term changes stay refused only when a key signer is the gas owner. Tests in `packages/effect-sui/test/core-review.test.ts`; README updated.
 
 ### SIGN-13: low-S and prehash rules rest on noble's defaults, with no k1/r1 test
 
 - **Severity** low · **Category** security, tests · **CONFIRMED** (currently enforced) · **Effort** S
-- **Where** `packages/sui-secp256k1/src/index.ts:24`; `packages/sui-secp256r1/src/index.ts:24`; `packages/sui-passkey/src/Passkey.ts:192`
+- **Where** `packages/effect-sui/src/Secp256k1.ts:24`; `packages/effect-sui/src/Secp256r1.ts:24`; `packages/effect-sui/src/internal/passkey/Passkey.ts:192`
 - **What** `verify(signature, hash, publicKey)` passes no options. Rejecting high-S and applying SHA-256 are noble 2.x defaults; the dependency is `^2.3.0`. I flipped S on valid signatures: all three schemes refuse them today, while `verify(..., { lowS: false })` accepts the same bytes. Only the passkey package has a test for it.
 - **Fix** pass `{ lowS: true, prehash: true }` explicitly at the three call sites, and add a high-S rejection test to the k1 and r1 suites.
 - **Resolution** Fixed. `{ lowS: true, prehash: true }` passed explicitly at the k1, r1 and passkey verify sites (and the k1/r1 sign sites); high-S rejection tests added to the k1 and r1 suites (they also show noble accepts the same bytes with `lowS: false`).
@@ -186,15 +188,15 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 
 - **Severity** low · **Category** correctness, api · **CONFIRMED** · **Effort** S
 - **Where / scenario**
-  - `packages/sui-multisig/src/index.ts:135`: `scheme.address` uses `Bcs.decodeSync`. `SignatureScheme.addressOf({ flag: 3, bytes: Uint8Array.of(1, 2, 3) })` dies with `BcsDecodeError`.
-  - `packages/sui-passkey/src/Passkey.ts:113-118`: `spkiFromPublicKey(new Uint8Array(33))` throws "bad point".
+  - `packages/effect-sui/src/MultiSig.ts:135`: `scheme.address` uses `Bcs.decodeSync`. `SignatureScheme.addressOf({ flag: 3, bytes: Uint8Array.of(1, 2, 3) })` dies with `BcsDecodeError`.
+  - `packages/effect-sui/src/internal/passkey/Passkey.ts:113-118`: `spkiFromPublicKey(new Uint8Array(33))` throws "bad point".
 - **Fix** make `SignatureScheme.address` able to fail (or have `addressOf` catch into `InvalidKey`), and return an `Effect` from `spkiFromPublicKey`, as `publicKeyFromSpki` does.
-- **Resolution** Partly fixed. `spkiFromPublicKey` now returns `Effect<Uint8Array, InvalidKey>`. The multisig half is not changed: `SignatureScheme.address` / `addressOf` are core (`packages/sui`, out of scope) and can't fail, so `MultiSig.scheme.address` still throws on non-BCS bytes; documented at the call site. It is only reached with keys a verification answered.
+- **Resolution** Partly fixed. `spkiFromPublicKey` now returns `Effect<Uint8Array, InvalidKey>`. The multisig half is not changed: `SignatureScheme.address` / `addressOf` are core (`packages/effect-sui`, out of scope) and can't fail, so `MultiSig.scheme.address` still throws on non-BCS bytes; documented at the call site. It is only reached with keys a verification answered.
 
 ### SIGN-16: `Sponsor` asks Enoki for the app on every transaction, and pins no sponsor when `network` is omitted
 
 - **Severity** low · **Category** performance, security · **CONFIRMED** (extra calls) / PLAUSIBLE (default network) · **Effort** S
-- **Where** `packages/sui-enoki/src/Sponsor.ts:125-137`
+- **Where** `packages/effect-sui/src/enoki/Sponsor.ts:125-137`
 - **What** `sponsorFor` calls `getApp` per `sponsorAndExecute`: three sponsored transactions made three `GET /v1/app` calls. They run alongside the sponsor call, so latency is unaffected, but the request count doubles against Enoki's rate limits. With `network` undefined (or devnet) no sponsor address is pinned, and only "gas owner is not the sender" is checked. If the API defaults to mainnet, the default call path gets the weaker check.
 - **Fix** cache `getApp` in the layer (`Effect.cached`, with a TTL), and treat an omitted network as the API's default when looking up the sponsor.
 - **Resolution** Fixed. `EnokiHttp.layer` caches a successful `getApp` for 5 minutes (failures not cached) and drops it on `invalid_gas_owner` / `invalid_gas_price`, as `@mysten/enoki` does. An omitted network is treated as mainnet (Enoki's default; `@mysten/enoki` assumes the same) when pinning the sponsor.
@@ -202,7 +204,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-17: `ZkLoginFlow.complete` spends a prover call before checking the JWT; `Session` can't be persisted as is
 
 - **Severity** low · **Category** api, performance · **CONFIRMED** (from code) · **Effort** S
-- **Where** `packages/sui-enoki/src/ZkLoginFlow.ts:82-97`, `:22-30`
+- **Where** `packages/effect-sui/src/enoki/ZkLoginFlow.ts:82-97`, `:22-30`
 - **What**
   - `complete` sends the JWT to `zklogin/zkp` without first comparing its `nonce` claim to `session.nonce`. A stale or foreign token costs a round trip to the slowest, most rate-limited endpoint and comes back as an opaque `EnokiError`. `Jwt.decode` is already a dependency.
   - `Session` holds a `Signer` (functions), yet the header says persisting it across the redirect is the app's job. Every app has to split it by hand.
@@ -212,7 +214,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-18: `EnokiError` drops the cause and carries no `retryable`
 
 - **Severity** low · **Category** api · **CONFIRMED** (from code) · **Effort** S
-- **Where** `packages/sui-enoki/src/EnokiHttp.ts:107, 114-116`; `EnokiClient.ts:32-44`
+- **Where** `packages/effect-sui/src/enoki/EnokiHttp.ts:107, 114-116`; `EnokiClient.ts:32-44`
 - **What** transport and decode failures keep only `e.message`. `RpcError` and `VerificationUnavailable` elsewhere in the repo carry `retryable`; here callers must infer it from `status` 0 / 429 / 5xx.
 - **Fix** add `retryable` (status 0, 429, 5xx) and keep the underlying error as `cause`.
 - **Resolution** Fixed. `EnokiError.retryable` (status 0, 429, 5xx) and an optional `cause`. HTTP client errors are kept as name + message only, since they hold the request with the API key and JWT headers; Schema errors are kept as is.
@@ -225,7 +227,7 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
   - `sameBytes` is defined four times in these packages (`sui-multisig`, `sui-passkey`, `sui-zklogin`, `sui-enoki`), written inline in `sui-wallet`, and defined five more times elsewhere in the repo (`sui/Tx.ts`, `sui/grpc/scan.ts`, three in `walrus`).
   - "Prefix the flag byte" is written out about eight times.
   - Only `Sponsor.sponsorAndExecute` uses `Effect.fn`; the other effectful entry points (`Wallet.*`, `ZkLoginFlow.*`, `Passkey.create` / `recover`, `MultiSig.signer`) have no span.
-- **Resolution** Fixed for the duplicates. New `@unconfirmed/sui/Ecdsa` (`Ecdsa.make(curve, flag, name)`, the curve passed in, so the core links no curve); `sui-secp256k1` and `sui-secp256r1` are now 25-line modules over noble's `secp256k1` / `p256` with the same exports and behaviour. "Verify, Ed25519 + k1 + r1 + multisig" went from 179.0 to 178.5 KB (Bun). `sameBytes` everywhere is `@unconfirmed/bcs/Bytes.equal` (X-11). Not changed: the "flag byte prefix" lines (each is one `out[0] = flag` inside a function that builds a different layout; a helper would not shorten them) and spans on the other entry points (`Effect.fn` adds weight to every caller; Seal chose `withSpan` for the same reason, and none of these is a hot or opaque path).
+- **Resolution** Fixed for the duplicates. New `@unconfirmed/effect-sui/Ecdsa` (`Ecdsa.make(curve, flag, name)`, the curve passed in, so the core links no curve); `sui-secp256k1` and `sui-secp256r1` are now 25-line modules over noble's `secp256k1` / `p256` with the same exports and behaviour. "Verify, Ed25519 + k1 + r1 + multisig" went from 179.0 to 178.5 KB (Bun). `sameBytes` everywhere is `@unconfirmed/effect-bcs/Bytes.equal` (X-11). Not changed: the "flag byte prefix" lines (each is one `out[0] = flag` inside a function that builds a different layout; a helper would not shorten them) and spans on the other entry points (`Effect.fn` adds weight to every caller; Seal chose `withSpan` for the same reason, and none of these is a hot or opaque path).
 
 ### SIGN-20: unused dependencies
 
@@ -244,14 +246,14 @@ Every CONFIRMED finding was reproduced with a throwaway script (in the session s
 ### SIGN-22: `Signature.MAX_SIZE` is described as a Sui rule
 
 - **Severity** nit · **Category** docs · PLAUSIBLE · **Effort** S
-- **Where** `packages/sui-zklogin/src/Signature.ts:34-35`
+- **Where** `packages/effect-sui/src/zklogin/Signature.ts:34-35`
 - **What** the comment says "Sui refuses zkLogin signatures over this size". In `@mysten/sui` the 2048 is the BCS serializer's buffer cap (`zklogin/signature.ts`, `{ maxSize: 2048 }`). I could not confirm a validator limit.
 - **Resolution** Fixed (comment only): `MAX_SIZE` is described as `@mysten/sui`'s serializer cap, with no confirmed validator limit. Behaviour unchanged.
 
 ### SIGN-23: two more `clientDataJSON` differences from `serde_json`
 
 - **Severity** nit · **Category** correctness · PLAUSIBLE · **Effort** S
-- **Where** `packages/sui-passkey/src/Passkey.ts:150-174`
+- **Where** `packages/effect-sui/src/internal/passkey/Passkey.ts:150-174`
 - **What** beyond the two accepted gaps (duplicate keys, lone surrogates), `JSON.parse` accepts a number such as `1e999` and nesting deeper than 128 in an unknown key; both verify here. `serde_json` refuses out-of-range numbers and has a recursion limit of 128, so validators should reject them. Same class as the accepted gaps: a signature we accept that the chain would not, and no forgery.
 - **Resolution** Fixed. After `JSON.parse`, a number out of f64 range or nesting at serde_json's recursion limit (depth 128) is refused. PLAUSIBLE as the review says: based on `CollectedClientData` flattening unknown keys into `serde_json::Value`, not run against a validator.
 

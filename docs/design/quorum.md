@@ -1,4 +1,6 @@
-# `@unconfirmed/quorum` — design
+# `@unconfirmed/effect-quorum` — design
+
+> **Package names changed on 2026-11-28.** The 17 packages became six; the README's [migration table](../../README.md#migrating-from-the-old-package-names) maps every old import. Import specifiers and paths here use the new names. Where this document plans dependencies between separate packages, read them as modules of `@unconfirmed/effect-sui` (signers, zkLogin, wallet, GraphQL, lifecycle) or as part of `@unconfirmed/effect-walrus` (the WASM, now its `wasm/` directory and `./wasm` export).
 
 Status: implemented (Q1, Q2 and Q3: `giveUp`, from `seal.md` §5), 2026-11-27; open questions decided as recommended (§9). Differences from the original draft are listed in §10. Implementers: read this whole file, then `EXPLORATION.md` §7.
 
@@ -12,8 +14,8 @@ Reference versions read for this design: `@mysten/walrus` 2.0.1, `@mysten/seal` 
 ## 1. Package layout
 
 ```
-packages/quorum/
-  package.json      name @unconfirmed/quorum, type module, sideEffects false,
+packages/effect-quorum/
+  package.json      name @unconfirmed/effect-quorum, type module, sideEffects false,
                     exports { ".": "./src/index.ts", "./*": "./src/*.ts" }, dependencies { effect: "4.1.6" }
   tsconfig.json     { "extends": "../../tsconfig.base.json", "include": ["src", "test"] }
   src/Quorum.ts     everything public
@@ -322,7 +324,7 @@ Not binding, but the semantics above must hold.
 
 ## 7. Test plan
 
-All offline, `bun:test`, driven by `TestClock` (`import { TestClock } from "effect/testing"`, `Effect.provide(TestClock.layer())`, as in `packages/sui-lifecycle/test/lifecycle.test.ts`). A member is modelled as `Effect.sleep(d)` followed by success or failure, with a `Ref` recording starts, completions and interruptions (`Effect.onInterrupt`). Each test forks the call, advances the clock, and asserts both the result and the virtual time at which it was produced.
+All offline, `bun:test`, driven by `TestClock` (`import { TestClock } from "effect/testing"`, `Effect.provide(TestClock.layer())`, as in `packages/effect-sui/test/lifecycle/lifecycle.test.ts`). A member is modelled as `Effect.sleep(d)` followed by success or failure, with a `Ref` recording starts, completions and interruptions (`Effect.onInterrupt`). Each test forks the call, advances the clock, and asserts both the result and the virtual time at which it was produced.
 
 `run.test.ts`
 
@@ -366,7 +368,7 @@ Measured (KB minified / gzip): Bun 59.0 / 20.1, esbuild 57.9 / 20.2, Rolldown 57
 
 | # | Scope | Depends on | Files | Acceptance |
 |---|---|---|---|---|
-| Q1 | Package scaffold; the engine; `run` with retry, concurrency, order, linger; `QuorumFailed`; helpers. | — | `packages/quorum/{package.json,tsconfig.json}`, `src/Quorum.ts`, `src/index.ts`, `test/run.test.ts`, `test/order.test.ts`; root `package.json` devDependency `@unconfirmed/quorum: workspace:*` | Tests 1–12, 18–19 and the type tests pass; `bun run typecheck` clean; no import from `"effect"` (barrel) or `effect/Schema` in `src/`. |
+| Q1 | Package scaffold; the engine; `run` with retry, concurrency, order, linger; `QuorumFailed`; helpers. | — | `packages/effect-quorum/{package.json,tsconfig.json}`, `src/Quorum.ts`, `src/index.ts`, `test/run.test.ts`, `test/order.test.ts`; root `package.json` devDependency `@unconfirmed/effect-quorum: workspace:*` | Tests 1–12, 18–19 and the type tests pass; `bun run typecheck` clean; no import from `"effect"` (barrel) or `effect/Schema` in `src/`. |
 | Q2 | `agree`, `AgreementFailed`; bundle-report row; README package-table row and a short section. | Q1 | `src/Quorum.ts`, `test/agree.test.ts`, `scripts/bundle-report.ts`, `README.md` | Tests 13–17 pass; bundle sizes recorded for all three bundlers; `run` behaviour unchanged (Q1 tests still pass). |
 
 Q1 and Q2 are sequential and small; one agent can take both. Walrus work packages W1–W4 and W10 (see `walrus.md`) do not need this package and can run in parallel with it.

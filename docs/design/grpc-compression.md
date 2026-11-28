@@ -1,8 +1,10 @@
 # Compressed gRPC streams — design
 
+> **Package names changed on 2026-11-28.** The 17 packages became six; the README's [migration table](../../README.md#migrating-from-the-old-package-names) maps every old import. Import specifiers and paths here use the new names. Where this document plans dependencies between separate packages, read them as modules of `@unconfirmed/effect-sui` (signers, zkLogin, wallet, GraphQL, lifecycle) or as part of `@unconfirmed/effect-walrus` (the WASM, now its `wasm/` directory and `./wasm` export).
+
 Status: SDK side implemented 2026-11-28 (`GrpcWeb` `compression` option, `scripts/check-compression.ts` with a reference proxy). §6 lists where the implementation differs from §4–§5.
 
-How an RPC provider compresses Sui gRPC-web responses, and above all `SubscriptionService/SubscribeCheckpoints`, so that clients built on `@unconfirmed/sui` decompress them without code of their own. It has two layers, and both are existing standards:
+How an RPC provider compresses Sui gRPC-web responses, and above all `SubscriptionService/SubscribeCheckpoints`, so that clients built on `@unconfirmed/effect-sui` decompress them without code of their own. It has two layers, and both are existing standards:
 
 1. **Per-message gRPC compression** (`grpc-encoding`): standard gRPC. Sui full nodes already apply it to every service except subscriptions. It gives about 4.6×.
 2. **Stream compression** (`Content-Encoding: zstd` on a gRPC-web response, flushed after every frame): standard HTTP. One zstd context covers the whole response, so later checkpoints compress against earlier ones. It gives about 8–10× on checkpoint streams.
@@ -13,7 +15,7 @@ The SDK negotiates both and decodes whichever one the server picks. A provider c
 
 Workload: 200 consecutive mainnet checkpoints (from 349 964 851 on, at 4.15 checkpoints/s), read with `GetCheckpoint` under two read masks:
 
-- **SDK mask:** `CHECKPOINT_PATHS` in `packages/sui/src/grpc/convert.ts` (summary fields, transaction digests, effects, events). Averages 116.7 KB/message, 536 KB/s.
+- **SDK mask:** `CHECKPOINT_PATHS` in `packages/effect-sui/src/grpc/convert.ts` (summary fields, transaction digests, effects, events). Averages 116.7 KB/message, 536 KB/s.
 - **Full mask:** `sequence_number, digest, summary, signature, contents, transactions`. Averages 327.7 KB/message, 1.51 MB/s.
 
 Dictionaries were trained on the 200 checkpoints before the test range. Compression uses Node 24 `node:zlib` (libzstd), one core; "stream" means one context with `ZSTD_e_flush` after each message.
@@ -139,7 +141,7 @@ The SDK's own tests run against a local Bun server that implements S1–S9, so t
 
 ## 6. As built
 
-`GrpcWeb.layer({ url, compression?: boolean })`, default `true`, in `packages/sui/src/grpc/GrpcWeb.ts`. Tests are in `packages/sui/test/grpc-compression.test.ts`: a local Bun server implements both layers, and one `SUI_LIVE=1` test checks testnet. Where the build differs from §4 and §5:
+`GrpcWeb.layer({ url, compression?: boolean })`, default `true`, in `packages/effect-sui/src/grpc/GrpcWeb.ts`. Tests are in `packages/effect-sui/test/grpc-compression.test.ts`: a local Bun server implements both layers, and one `SUI_LIVE=1` test checks testnet. Where the build differs from §4 and §5:
 
 - **`grpc-accept-encoding`** is `zstd,gzip` on Bun and `gzip` on Node and in browsers. It is `identity` in a runtime with no `DecompressionStream` at all. The probe runs once per process, when the first layer is built, not at import.
 - **`Accept-Encoding` is set only on Node 24+, not "outside browsers".** Node 24 is the one runtime whose `fetch` decodes zstd but doesn't ask for it. Bun's `fetch` already sends `gzip, deflate, br, zstd`. In browsers `Accept-Encoding` is a forbidden request header: the Fetch spec's header-append step skips it without an error, and `FetchHttpClient` hands `fetch` a plain object, so nothing throws. The browser sends its own value. Everywhere else (older Node, Deno, React Native) we leave the runtime's default alone: a client that asks for zstd and can't decode it gets a body it can't read. Detection is `process.versions.node` major ≥ 24, excluding Bun and Deno, which also set `versions.node`.

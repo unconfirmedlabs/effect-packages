@@ -1,6 +1,8 @@
 # A ground-up Effect implementation of the Sui, Walrus and Seal SDKs
 
-Exploration, 2026-11-26. Grounded in a working spike (`spike/`, ~1,650 lines, 15 passing tests including live testnet reads and a devnet transaction executed end to end) and a read-through of `@mysten/sui` 3.0.1, `@mysten/walrus` 2.0.1, `@mysten/seal` 2.0.1, `effect` 4.1.6 and `@unconfirmed/sui-effect` 0.6.0.
+> The package names in this document are from before the implementation; the packages as built, and their names since 2026-11-28, are in the [README](README.md#packages).
+
+Exploration, 2026-11-26. Grounded in a working spike (`spike/`, ~1,650 lines, 15 passing tests including live testnet reads and a devnet transaction executed end to end) and a read-through of `@mysten/sui` 3.0.1, `@mysten/walrus` 2.0.1, `@mysten/seal` 2.0.1, `effect` 4.1.6 and `sui-effect` 0.6.0, the predecessor.
 
 ## TL;DR
 

@@ -1,0 +1,33 @@
+{
+  "name": "@unconfirmed/effect-seal",
+  "version": "0.0.0",
+  "description": "Seal for Effect: threshold identity-based encryption to key servers registered on Sui, session keys, approvals, verified key fetching and decryption.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unconfirmedlabs/effect-packages.git",
+    "directory": "packages/effect-seal"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@scure/base": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@unconfirmed/effect-bcs": "workspace:^",
+    "@unconfirmed/effect-quorum": "workspace:^",
+    "@unconfirmed/effect-sui": "workspace:^",
+    "effect": "^4.1.6"
+  },
+  "devDependencies": {
+    "@mysten/seal": "2.0.1",
+    "@mysten/sui": "3.0.1",
+    "@unconfirmed/test-support": "workspace:*"
+  }
+}
