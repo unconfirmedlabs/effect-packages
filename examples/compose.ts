@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import type * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
-import type { KeyValueStore } from "effect/persistence/KeyValueStore"
+import * as KeyValueStore from "effect/persistence/KeyValueStore"
 import * as Coins from "@unconfirmed/effect-sui/Coins"
 import * as Events from "@unconfirmed/effect-sui/Events"
 import * as Packages from "@unconfirmed/effect-sui/Packages"
@@ -15,6 +15,7 @@ import * as Transactions from "@unconfirmed/effect-sui/Transactions"
 import type { Transaction } from "@mysten/sui/transactions"
 import * as SuiGrpc from "@unconfirmed/effect-sui/grpc"
 import * as TransactionJson from "@unconfirmed/effect-sui/TransactionJson"
+import * as Connection from "@unconfirmed/effect-sui/wallet/Connection"
 import * as Wallet from "@unconfirmed/effect-sui/wallet/Wallet"
 import * as EvidenceGrpc from "@unconfirmed/effect-sui/lifecycle/EvidenceGrpc"
 import { JournalKeyValueStore, Lifecycle } from "@unconfirmed/effect-sui/lifecycle"
@@ -43,7 +44,7 @@ declare const pkg: string
 declare const sender: Address
 declare const data: TransactionData.TransactionData
 declare const mystenTx: Transaction
-declare const myKeyValueStore: Layer.Layer<KeyValueStore>
+declare const myKeyValueStore: Layer.Layer<KeyValueStore.KeyValueStore>
 declare const owner: Address
 declare const packageId: Address
 declare const RecordSold: Schema.Codec<{ readonly price: bigint }, unknown>
@@ -176,6 +177,20 @@ export const wallets = (draft: Ptb.Draft, recipe: typeof aRecipe) =>
     yield* signer.signAndExecuteTransaction({ draft })               // or: the wallet resolves and submits
                                                                     // (a failure after the wallet may have submitted is ExecutionUnconfirmed: check before retrying)
     yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
+    // #endregion
+  })
+
+export const connection = (wallet: Wallet.Wallet, recipe: typeof aRecipe) =>
+  Effect.gen(function*() {
+    // #region readme
+    const layer = Connection.layer({ chain: "sui:testnet", storage: "my-app:wallet" }).pipe(
+      Layer.provide(KeyValueStore.layerStorage(() => localStorage))  // remembered; restored silently on the next load
+    )
+    const connection = yield* Connection.Connection
+    connection.changes                       // Stream: Disconnected | Connecting | Reconnecting | Connected { wallet, account, accounts }
+    connection.wallets                       // Stream of the registered Sui wallets
+    yield* connection.connect(wallet)        // from the click handler: the wallet is called before anything suspends
+    yield* Tx.run(recipe, { signer: yield* connection.signer })   // NotConnected if nobody is
     // #endregion
   })
 

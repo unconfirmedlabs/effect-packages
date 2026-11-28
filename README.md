@@ -32,7 +32,7 @@ Six packages. Every module is its own subpath (`"./*"` in `exports`), so an app 
 | `/Mnemonic`, `/Bip32` | BIP39 mnemonics; Ed25519 / ML-DSA-65 (SLIP-0010) derivation in `Mnemonic`, Secp256k1 / r1 (BIP32) in `Bip32`, on Sui's paths | `@scure/bip39`; `@scure/bip32` (`Bip32` only) |
 | `/zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite`, `@scure/base` |
 | `/enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
-| `/wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app`, `@scure/base` (+ types from `@wallet-standard/base`) |
+| `/wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage`; `Connection`, the app's connection state (remembered, restored, following the wallet's events) | `@wallet-standard/app`, `@scure/base` (+ types from `@wallet-standard/base`) |
 
 ### BCS
 
@@ -374,6 +374,21 @@ yield* signer.signPersonalMessage(new TextEncoder().encode("hi"))
 ```
 
 A missing feature is `UnsupportedFeature`; a user rejection is `SigningError` with reason `"rejected"`. For `signAndExecuteTransaction`, only a coded refusal (wallet-standard `4001000`, EIP-1193 `4001`) is a rejection: any other failure (a timeout waiting for effects, an RPC error) or a bad answer is `ExecutionUnconfirmed`, with the digest when the wallet reported one. Only accounts on a `sui:` chain are used, so a multi-chain wallet's EVM account is never picked.
+
+`wallet/Connection` is the app-level connection dApp Kit keeps, as a service for any UI (or none): the state in a `SubscriptionRef` (`state`, and `changes` as a Stream), `connect` / `disconnect` / `switchAccount`, the current `address` and `signer`. A connection is to one chain, and `accounts` are the wallet's accounts on it. With `storage`, the wallet and account are saved in a `KeyValueStore` and restored on load: wait up to `reconnectTimeout` (3 s) for the wallet to register, connect with `silent: true`, take the saved account or else the first; a failure is `Disconnected` and forgets them. Once connected, the wallet's `standard:events` are followed: a removed account is replaced by the first remaining one, and no accounts left or the wallet unregistering is `Disconnected`.
+
+```ts
+const layer = Connection.layer({ chain: "sui:testnet", storage: "my-app:wallet" }).pipe(
+  Layer.provide(KeyValueStore.layerStorage(() => localStorage))  // remembered; restored silently on the next load
+)
+const connection = yield* Connection.Connection
+connection.changes                       // Stream: Disconnected | Connecting | Reconnecting | Connected { wallet, account, accounts }
+connection.wallets                       // Stream of the registered Sui wallets
+yield* connection.connect(wallet)        // from the click handler: the wallet is called before anything suspends
+yield* Tx.run(recipe, { signer: yield* connection.signer })   // NotConnected if nobody is
+```
+
+Browsers open a wallet's popup only during a user gesture, so `connect` calls `standard:connect` in the first steps of its fiber, before any state update or anything else that could suspend: `Effect.runFork(connection.connect(wallet))` in an `onClick` reaches the wallet before `runFork` returns (tested). The actions need no services, so a React or plain app can take the service once and run them with `Effect.runFork`. The signer's `sui:signTransaction` / `sui:signPersonalMessage` calls are just as immediate, but `Tx.run` resolves over the network before it signs; for a wallet that needs the gesture to sign, resolve first and sign in the click (`signer.signTransaction(data)`), or let the wallet resolve (`signUnresolved`, `signAndExecuteTransaction({ draft })`).
 
 **5. The transport ships only the RPCs you call, and only the fields it reads.** The generated code has one descriptor constant per protobuf message and one handle per RPC that references only what it reaches. The capability services use pruned handles (`generated/lean.ts`, generated from `packages/effect-sui/scripts/grpc-lean.ts`) whose descriptors carry just the fields in their read masks; the rest of a response is skipped as unknown fields. `grpc.unary(Rpc.NameService_LookupName, …)` is the escape hatch for anything the capability services don't cover, with full descriptors.
 
