@@ -214,7 +214,7 @@ ObjectsGrpc.layer.pipe(Layer.provide(GrpcWeb.layer({ url })))  // just Objects
 SuiGrpc.layer({ url })                                  // all nine, adding Checkpoints, CheckpointData, Events, DynamicFields
 ```
 
-Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 28 KB of checkpoint, event and dynamic-field code that a transaction never calls.
+Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 27 KB of checkpoint, event and dynamic-field code that a transaction never calls.
 
 Effects carry status, gas and changed objects; a transaction's events and balance changes come on request (`include`), so the default read stays small. gRPC and GraphQL implement all of these:
 
@@ -566,37 +566,37 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 |---|---|---|---|---|
 | Effect baseline (HttpClient + Schema) | 128 / 43 | 125 / 43 | 122 / 40 | — |
 | `Quorum.run`, three members (no Schema) | 66 / 23 | 65 / 23 | 62 / 21 | — |
-| Verify, Ed25519 only | 143 / 51 | 142 / 51 | 140 / 49 | 129 / 44 (ships every scheme) |
-| Verify, Ed25519 + k1 + r1 + multisig | 179 / 64 | 176 / 64 | 173 / 61 | — |
-| Read one object | 196 / 65 | 196 / 66 | 187 / 62 | 289 / 76 (ships all 30 RPCs) |
-| Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 315 / 103 | 311 / 103 | 307 / 99 | 373 / 105 |
-| The same with `SuiGrpc.layer` (all nine services) | 343 / 108 | 339 / 108 | 334 / 104 | — |
-| The same over GraphQL (`SuiGraphQL.layer`) | 310 / 107 | 304 / 106 | 297 / 101 | — |
-| `Lifecycle.run` (`SuiGrpc.layer`, KeyValueStore journal) | 375 / 119 | 370 / 119 | 362 / 113 | — |
-| `Lifecycle.run` in a browser (IndexedDB journal, Web Locks) | 380 / 121 | 375 / 120 | 367 / 115 | — |
-| The same over OPFS | 379 / 120 | 373 / 120 | 366 / 114 | — |
+| Verify, Ed25519 only | 144 / 52 | 143 / 52 | 142 / 50 | 129 / 44 (ships every scheme) |
+| Verify, Ed25519 + k1 + r1 + multisig | 177 / 64 | 175 / 64 | 172 / 61 | — |
+| Read one object | 196 / 65 | 196 / 66 | 188 / 62 | 289 / 76 (ships all 30 RPCs) |
+| Build + resolve + sign + execute (`SuiGrpc.layerCore`) | 344 / 110 | 339 / 110 | 335 / 105 | 373 / 105 |
+| The same with `SuiGrpc.layer` (all nine services) | 371 / 115 | 366 / 114 | 362 / 110 | — |
+| The same over GraphQL (`SuiGraphQL.layer`) | 329 / 113 | 322 / 113 | 315 / 107 | — |
+| `Lifecycle.run` (`SuiGrpc.layer`, KeyValueStore journal) | 403 / 126 | 398 / 125 | 390 / 119 | — |
+| `Lifecycle.run` in a browser (IndexedDB journal, Web Locks) | 408 / 128 | 402 / 127 | 395 / 121 | — |
+| The same over OPFS | 407 / 127 | 401 / 127 | 394 / 121 | — |
 | Hand-written `Ptb.moveCall` | 82 / 28 | 84 / 29 | 79 / 26 | — |
 | One generated call (Walrus `blob.burn`) | 84 / 29 | 86 / 30 | 81 / 27 | — |
 | Walrus: read via the aggregator | 139 / 47 | 139 / 47 | 133 / 45 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
-| Walrus: read a blob from the nodes | 341 / 107 | 335 / 106 | 332 / 102 | 401 / 110 (`readBlob`) |
-| Walrus: write a blob through the nodes | 417 / 134 | 411 / 134 | 403 / 127 | 446 / 127 (`writeBlob`) |
-| Walrus: write a blob through the relay | 422 / 136 | 416 / 135 | 409 / 129 | — |
-| Seal: parse an encrypted object | 91 / 31 | 89 / 31 | 93 / 31 | — |
-| Seal: encrypt with pinned keys (`Envelope.seal`) | 176 / 63 | 175 / 63 | 177 / 62 | — |
-| Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 386 / 135 | 381 / 135 | 375 / 129 | 460 / 135 (`SealClient` + `SuiGrpcClient`) |
+| Walrus: read a blob from the nodes | 361 / 111 | 355 / 110 | 351 / 106 | 401 / 110 (`readBlob`) |
+| Walrus: write a blob through the nodes | 445 / 140 | 438 / 140 | 431 / 133 | 446 / 127 (`writeBlob`) |
+| Walrus: write a blob through the relay | 450 / 142 | 443 / 142 | 436 / 135 | — |
+| Seal: parse an encrypted object | 92 / 31 | 90 / 31 | 93 / 31 | — |
+| Seal: encrypt with pinned keys (`Envelope.seal`) | 178 / 64 | 177 / 64 | 179 / 62 | — |
+| Seal: encrypt + decrypt (`SealGrpc.layer`, `FetchHttpClient`) | 388 / 136 | 383 / 136 | 377 / 130 | 460 / 135 (`SealClient` + `SuiGrpcClient`) |
 | zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 95 / 41 | — |
 | zkLogin: `ZkLoginAddress.fromJwt` | 148 / 72 | 148 / 72 | 145 / 72 | — |
-| zkLogin: `ZkLogin.signer` | 139 / 49 | 138 / 49 | 140 / 49 | — |
+| zkLogin: `ZkLogin.signer` | 138 / 49 | 137 / 49 | 139 / 49 | — |
 | Mnemonic: Ed25519 signer (`Mnemonic`) | 136 / 52 | 138 / 53 | 135 / 50 | — |
 | Mnemonic: Secp256k1 secret key (`Bip32`) | 148 / 56 | 149 / 56 | 146 / 54 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only, our WASM glue included. Programs that read or write from the nodes also fetch one WASM asset, which no bundler counts: ours is 261 KB / 98 KB gzip (SIMD build; the scalar fallback is 248 KB), `@mysten/walrus`'s 349 KB / 182 KB gzip. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
-- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 86 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (5 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 58 KB, the RPCs of the services Seal doesn't use.
-- **Mnemonics.** The report fails if the Ed25519 program ships `@scure/bip32` under any bundler; BIP32 (Secp256k1/r1 derivation) adds ~12 KB / 4 KB gzip.
-- **With barrel imports in the app,** esbuild grows by 4–84 KB per program (24–60 KB for most; `--named`); before the library itself switched to namespace imports, it grew ~3×.
-- **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
+- **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 83 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (4.5 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 58 KB, the RPCs of the services Seal doesn't use.
+- **Mnemonics.** The report fails if the Ed25519 program ships `@scure/bip32` under any bundler; BIP32 (Secp256k1/r1 derivation) adds ~11 KB / 3.5 KB gzip.
+- **With barrel imports in the app,** esbuild grows by 2.5–84 KB per program (24–60 KB for most; `--named`); before the library itself switched to namespace imports, it grew ~3×.
+- **The Effect runtime dominates** (52–97% of our bundles, `--detail`). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.
   - `HttpClient` (which brings `Stream`): +52 / +16.
   - `Schema` (from `Schema.TaggedError` errors and BCS-as-Schema): +40 / +13.
