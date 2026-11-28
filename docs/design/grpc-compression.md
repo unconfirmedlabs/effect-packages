@@ -1,6 +1,6 @@
 # Compressed gRPC streams — design
 
-Status: design, 2026-11-28. SDK side not yet implemented.
+Status: SDK side implemented 2026-11-28 (`GrpcWeb` `compression` option, `scripts/check-compression.ts` with a reference proxy). §6 lists where the implementation differs from §4–§5.
 
 How an RPC provider compresses Sui gRPC-web responses, and above all `SubscriptionService/SubscribeCheckpoints`, so that clients built on `@unconfirmed/sui` decompress them without code of their own. It has two layers, and both are existing standards:
 
@@ -136,3 +136,53 @@ The script `scripts/check-compression.ts <url>` runs against a provider endpoint
 - layer 1 on a unary call.
 
 The SDK's own tests run against a local Bun server that implements S1–S9, so they need neither a network nor a provider.
+
+## 6. As built
+
+`GrpcWeb.layer({ url, compression?: boolean })`, default `true`, in `packages/sui/src/grpc/GrpcWeb.ts`. Tests are in `packages/sui/test/grpc-compression.test.ts`: a local Bun server implements both layers, and one `SUI_LIVE=1` test checks testnet. Where the build differs from §4 and §5:
+
+- **`grpc-accept-encoding`** is `zstd,gzip` on Bun and `gzip` on Node and in browsers. It is `identity` in a runtime with no `DecompressionStream` at all. The probe runs once per process, when the first layer is built, not at import.
+- **`Accept-Encoding` is set only on Node 24+, not "outside browsers".** Node 24 is the one runtime whose `fetch` decodes zstd but doesn't ask for it. Bun's `fetch` already sends `gzip, deflate, br, zstd`. In browsers `Accept-Encoding` is a forbidden request header: the Fetch spec's header-append step skips it without an error, and `FetchHttpClient` hands `fetch` a plain object, so nothing throws. The browser sends its own value. Everywhere else (older Node, Deno, React Native) we leave the runtime's default alone: a client that asks for zstd and can't decode it gets a body it can't read. Detection is `process.versions.node` major ≥ 24, excluding Bun and Deno, which also set `versions.node`.
+- **Bodies left encoded are diagnosed.** A frame byte with reserved bits set (0x02–0x40) isn't gRPC-web. zstd starts with 0x28 and gzip with 0x1f, so such a byte usually means the `HttpClient` didn't decode `Content-Encoding`. Node's `node:http` and undici's `request` don't decode it; only `fetch` does. `toFrames` stops at the first such frame. The call fails with `RpcError` `INTERNAL`, and the message names the coding and the fix (`FetchHttpClient`, or `compression: false`). Before this change the frame parser waited for a frame length read from compressed bytes, then reported a retryable `UNAVAILABLE`.
+- **No `node:zlib` for layer-1 zstd on Node.** Every way of reaching `node:zlib` from library code (a static import, or a dynamic one behind a runtime check) is something browser bundlers must stub or warn about. The gain would be small: per message, zstd-1 gives 4.71× against gzip's 4.35× (SDK mask). Node gets zstd where it matters, on streams through layer 2.
+- **Decoding.** A compressed data frame goes through the platform `DecompressionStream`, which is async, inside the existing per-frame `Stream.mapEffect`, so streams stay incremental. Uncompressed frames keep the synchronous path. `toFrames` still does O(1) work per frame and stays linear: about 1 GB/s on 100 MB of 2 KB frames in 16 KiB chunks, the same as before. A compressed frame with no `grpc-encoding`, with one we didn't offer, or that fails to decompress is `INTERNAL`. A trailer frame is never decompressed.
+- **`compression: false` doesn't turn layer 2 off on Bun or in browsers.** Their `Accept-Encoding` still includes zstd, so a layer-2 provider still compresses the stream (`fetch` decodes it). To measure plain sizes from Bun or Node, also pass `headers: { "accept-encoding": "identity" }`, or use the check script.
+- **CORS (browsers, layer 1).** The browser preflights the `grpc-accept-encoding` request header, so the provider must list it in `Access-Control-Allow-Headers`. Page code can read the `grpc-encoding` response header only if the provider lists it in `Access-Control-Expose-Headers`. Without it, every compressed frame fails as "no grpc-encoding". Sui full nodes answer `*` to both. Layer 2 needs no CORS changes.
+- **Bundle cost.** `+1.4 KB` minified and `+0.6 KB` gzip on every gRPC program under Bun, esbuild and Rolldown, for example "read one object" goes from 187.5/61.8 to 188.9/62.4 KB (Rolldown).
+
+### The conformance check and the reference proxy
+
+`bun scripts/check-compression.ts <url> [--count N] [--mask paths]` (Bun, or Node 24+) uses only `node:*` modules and encodes the protobuf by hand, so a provider can copy it. It sends its requests with `node:http(s)`, which never decodes `Content-Encoding`. Each rule is checked like this:
+
+- **SubscribeCheckpoints, layer 2.** The request carries the headers the SDK sends on Node 24 (`Accept-Encoding: zstd, gzip`, `grpc-accept-encoding: zstd,gzip`).
+  - S2: the response headers.
+  - S3: the zstd frame and block headers are walked; the stream must be a single zstd frame.
+  - S5: the window comes from the frame header's `Window_Descriptor` (or from `Frame_Content_Size` for a single-segment frame).
+  - S6: no `grpc-encoding`, and no frame with flag bit 0 set.
+  - Ratio: plain bytes over compressed bytes, up to the end of checkpoint N.
+- **S4 is measured in two ways:**
+  - Idle points: wherever the connection goes quiet for 50 ms or more, the bytes decoded so far must end exactly on a gRPC-web frame. A server that doesn't flush leaves part of a frame in its encoder.
+  - Arrival: each checkpoint must arrive within 100 ms (p90) of the same checkpoint on a parallel uncompressed subscription. This catches a server that holds a message back until the next one.
+
+  A copy of the proxy without the flush fails both: "2 idle points, 2 with a frame held back", and "p50 400.5 ms, p90 637.5 ms later than without compression".
+- **S1.** A second subscription with `Accept-Encoding: gzip, deflate` (Node's default) must come back with no `Content-Encoding` at all. It also serves as the baseline for the arrival check.
+- **Layer 1.** A unary `GetCheckpoint` with `Accept-Encoding: identity`, offering `zstd,gzip` and then `gzip`. The answer must name an offered encoding, set flag bit 0, and decompress.
+
+`--serve <upstream> [--port 8790]` is a reference layer-2 proxy. It compresses only binary gRPC-web responses (`application/grpc-web`, `+proto`), and only when the request's `Accept-Encoding` has zstd with q > 0. In that case it asks upstream for `grpc-accept-encoding: identity` (S6). It compresses with one `node:zlib` zstd stream per response at level 3 with `windowLog` 23 (S3, S5, S7), calls `flush(ZSTD_e_flush)` after every gRPC-web frame, and ends the stream after the trailers (S4). Trailers-only answers and HTTP errors pass through uncompressed (S9). Every other request passes through, layer 1 from upstream included.
+
+Run against the proxy in front of `https://fullnode.testnet.sui.io:443` (2026-11-28, full mask):
+
+```
+PASS  S2 headers                     HTTP 200, content-encoding: zstd, vary: origin, access-control-request-method, access-control-request-headers, Accept-Encoding, cache-control: no-transform, content-length: -
+PASS  S3 one zstd stream             1 zstd frame(s)
+PASS  S4 flush at every frame        99 idle points (≥ 50 ms without bytes), 0 with a frame held back
+PASS  S4 arrival vs uncompressed     100 checkpoints: p50 17.1 ms, p90 39.3 ms later than without compression
+PASS  S5 window ≤ 8 MiB              8.00 MiB
+PASS  S6 no grpc-encoding            grpc-encoding: -, compressed frames: none
+INFO  ratio                          7.91× over 100 checkpoints (5699103 bytes in 720475); 32.6 KB/s instead of 257.9
+PASS  S1 plain without zstd          Accept-Encoding: gzip, deflate -> content-encoding: -, 100 checkpoints as plain gRPC-web
+PASS  layer 1 unary (zstd)           grpc-accept-encoding: zstd,gzip -> grpc-encoding: zstd, 124809 bytes in 27257 (4.58×)
+PASS  layer 1 unary (gzip)           grpc-accept-encoding: gzip -> grpc-encoding: gzip, 39861 bytes in 11383 (3.50×)
+```
+
+Against the full node itself, layer 1 passes and S2 fails: no `Content-Encoding`, as §1 found. Through the proxy, `GrpcWeb.serverStream(SubscribeCheckpoints)` on Node 24 and on Bun received `Content-Encoding: zstd` and delivered checkpoints at the chain's pace, about 250 ms apart.
