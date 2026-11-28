@@ -52,8 +52,12 @@ const statusOf = (method: string, get: (key: string) => string | undefined): Rpc
 }
 
 interface Frame {
-  /** `data` and `trailer` are wire frames; `incomplete` marks a body that ended inside a frame or before its trailers. */
-  readonly kind: "data" | "trailer" | "incomplete"
+  /**
+   * `data`, `compressed` (flag bit 0: compressed per `grpc-encoding`) and `trailer` are wire frames.
+   * `malformed` is a frame header with reserved flag bits set (its payload is the flag byte); nothing
+   * after it is parsed. `incomplete` marks a body that ended inside a frame or before its trailers.
+   */
+  readonly kind: "data" | "compressed" | "trailer" | "malformed" | "incomplete"
   readonly payload: Uint8Array
 }
 
@@ -63,6 +67,7 @@ interface Reassembly {
   offset: number
   size: number
   trailerSeen: boolean
+  broken: boolean
 }
 
 /** Consume `n` buffered bytes; each byte is copied at most once. */
@@ -115,26 +120,69 @@ const peekHeader = (s: Reassembly) => {
  */
 export const toFrames = <E>(body: Stream.Stream<Uint8Array, E>): Stream.Stream<Frame, E> =>
   body.pipe(
-    Stream.mapAccum((): Reassembly => ({ chunks: [], offset: 0, size: 0, trailerSeen: false }), (s, chunk: Uint8Array) => {
+    Stream.mapAccum((): Reassembly => ({ chunks: [], offset: 0, size: 0, trailerSeen: false, broken: false }), (s, chunk: Uint8Array) => {
+      const out: Array<Frame> = []
+      if (s.broken) return [s, out] as const
       if (chunk.length > 0) {
         s.chunks.push(chunk)
         s.size += chunk.length
       }
-      const out: Array<Frame> = []
       while (s.size >= 5) {
         const { flags, length } = peekHeader(s)
+        if ((flags & 0x7e) !== 0) {
+          // Not gRPC-web, e.g. a body still under its Content-Encoding (zstd starts 0x28, gzip 0x1f).
+          s.broken = true
+          s.chunks.length = 0
+          s.size = 0
+          out.push({ kind: "malformed", payload: new Uint8Array([flags]) })
+          break
+        }
         if (s.size - 5 < length) break
         take(s, 5)
         const payload = length === 0 ? new Uint8Array(0) : take(s, length)
-        const trailer = (flags & 0x80) !== 0
-        if (trailer) s.trailerSeen = true
-        out.push({ kind: trailer ? "trailer" : "data", payload })
+        const kind = (flags & 0x80) !== 0 ? "trailer" : (flags & 1) !== 0 ? "compressed" : "data"
+        if (kind === "trailer") s.trailerSeen = true
+        out.push({ kind, payload })
       }
       return [s, out] as const
     }, {
-      onHalt: (s): ReadonlyArray<Frame> => (s.trailerSeen && s.size === 0 ? [] : [{ kind: "incomplete", payload: new Uint8Array(0) }])
+      onHalt: (s): ReadonlyArray<Frame> =>
+        s.broken || (s.trailerSeen && s.size === 0) ? [] : [{ kind: "incomplete", payload: new Uint8Array(0) }]
     })
   )
+
+// -----------------------------------------------------------------------------
+// Compression (docs/design/grpc-compression.md §4)
+// -----------------------------------------------------------------------------
+
+let decodable: ReadonlyArray<string> | undefined
+
+/** Per-message encodings this runtime's `DecompressionStream` decodes, best first; probed once. */
+const decodableEncodings = (): ReadonlyArray<string> =>
+  decodable ??= ["zstd", "gzip"].filter((encoding) => {
+    try {
+      new DecompressionStream(encoding as "gzip")
+      return true
+    } catch {
+      return false
+    }
+  })
+
+/**
+ * Whether to ask for `Accept-Encoding: zstd` ourselves: only on Node 24+, whose `fetch` decodes zstd
+ * but doesn't ask for it. Bun's `fetch` already asks, and browsers set the header themselves (it is
+ * forbidden to page code; `fetch` drops a page's value without an error). Elsewhere the client's
+ * default stands, since a client that asked for zstd and can't decode it would get an unreadable body.
+ */
+const askForZstd = (): boolean => {
+  const v = (globalThis as { process?: { versions?: Record<string, string | undefined> } }).process?.versions
+  return v?.node !== undefined && v.bun === undefined && v.deno === undefined && Number(v.node.split(".")[0]) >= 24
+}
+
+const inflate = (encoding: string, bytes: Uint8Array): Promise<Uint8Array> =>
+  new Response(new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream(encoding as "gzip")))
+    .arrayBuffer()
+    .then((b) => new Uint8Array(b))
 
 /** gRPC's HTTP-to-status mapping, for a response that carries no `grpc-status` (5xx are kept retryable). */
 export const httpCode = (status: number): RpcCode =>
@@ -173,6 +221,14 @@ export interface GrpcWebOptions {
    * allow-list refuses them. Spans are recorded either way.
    */
   readonly tracerPropagation?: boolean
+  /**
+   * Ask for compressed responses; the server picks what to apply. On (the default): per-message
+   * `grpc-encoding` with the encodings this runtime decodes (`zstd` where `DecompressionStream`
+   * has it, and `gzip`), and on Node 24+ `Accept-Encoding: zstd, gzip`, so a provider can compress
+   * a whole stream (`fetch` decodes it). Off: `grpc-accept-encoding: identity`, `Accept-Encoding`
+   * left to the client. See docs/design/grpc-compression.md.
+   */
+  readonly compression?: boolean
 }
 
 export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
@@ -187,6 +243,14 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
         const base = options.url.replace(/\/+$/, "")
         const timeout = Duration.fromInputUnsafe(options.requestTimeout ?? "30 seconds")
         const tracerPropagation = options.tracerPropagation ?? false
+        const decodes = options.compression === false ? [] : decodableEncodings()
+        const headers: Record<string, string> = {
+          ...options.headers,
+          "x-grpc-web": "1",
+          accept: "application/grpc-web+proto",
+          "grpc-accept-encoding": decodes.length > 0 ? decodes.join(",") : "identity"
+        }
+        if (options.compression !== false && askForZstd()) headers["accept-encoding"] = "zstd, gzip"
 
         const call = <I, O>(method: Rpc<I, O, boolean>, request: I): Stream.Stream<O, RpcError> => {
           const path = method.path
@@ -199,7 +263,7 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
           }).pipe(
             Effect.flatMap((body) =>
               HttpClientRequest.post(`${base}/${path}`).pipe(
-                HttpClientRequest.setHeaders({ ...options.headers, "x-grpc-web": "1", accept: "application/grpc-web+proto" }),
+                HttpClientRequest.setHeaders(headers),
                 HttpClientRequest.bodyUint8Array(body, "application/grpc-web+proto"),
                 http.execute,
                 Effect.provideService(HttpClient.TracerPropagationEnabled, tracerPropagation),
@@ -211,19 +275,42 @@ export class GrpcWeb extends /* @__PURE__ */ Context.Service<GrpcWeb, {
               const err = statusOf(path, (k) => res.headers[k])
               if (err) return Effect.fail(err)
               if (res.status !== 200) return Effect.fail(fail(`HTTP ${res.status}`, httpCode(res.status)))
+              const decode = (payload: Uint8Array) =>
+                Result.match(codec.decode(payload), {
+                  onSuccess: (m) => Effect.succeed<ReadonlyArray<O>>([m]),
+                  onFailure: (e) => Effect.fail(fail(`malformed response: ${e.message}`, "DATA_LOSS"))
+                })
               return Effect.succeed(
                 toFrames(res.stream.pipe(Stream.mapError((e) => fail(e.message)))).pipe(
                   Stream.mapEffect((f) => {
+                    if (f.kind === "data") return decode(f.payload)
                     if (f.kind === "incomplete") return Effect.fail(fail("the response ended before its gRPC trailers"))
                     if (f.kind === "trailer") {
                       const t = parseTrailers(f.payload)
                       const e = statusOf(path, (k) => t[k])
                       return e ? Effect.fail(e) : Effect.succeed<ReadonlyArray<O>>([])
                     }
-                    return Result.match(codec.decode(f.payload), {
-                      onSuccess: (m) => Effect.succeed<ReadonlyArray<O>>([m]),
-                      onFailure: (e) => Effect.fail(fail(`malformed response: ${e.message}`, "DATA_LOSS"))
-                    })
+                    if (f.kind === "malformed") {
+                      const coding = res.headers["content-encoding"]
+                      return Effect.fail(fail(
+                        coding !== undefined && coding !== "identity"
+                          ? `the body is still Content-Encoding: ${coding}: this HttpClient doesn't decode it (use FetchHttpClient, or compression: false)`
+                          : `malformed gRPC-web frame (flags 0x${f.payload[0]!.toString(16)})`,
+                        "INTERNAL"
+                      ))
+                    }
+                    // gRPC: a compressed message we can't decompress is INTERNAL.
+                    const encoding = res.headers["grpc-encoding"]?.trim().toLowerCase()
+                    if (encoding === undefined || !decodes.includes(encoding)) {
+                      return Effect.fail(fail(
+                        `compressed message with ${encoding === undefined ? "no grpc-encoding" : `grpc-encoding ${encoding}, which we didn't offer`}`,
+                        "INTERNAL"
+                      ))
+                    }
+                    return Effect.tryPromise({
+                      try: () => inflate(encoding, f.payload),
+                      catch: (e) => fail(`could not decompress a ${encoding} message: ${e instanceof Error ? e.message : String(e)}`, "INTERNAL")
+                    }).pipe(Effect.flatMap(decode))
                   }),
                   Stream.flatMap((xs) => Stream.fromIterable(xs))
                 )
