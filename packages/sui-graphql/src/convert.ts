@@ -144,7 +144,7 @@ export const OBJECT_CHANGES_FIELDS = `pageInfo{hasNextPage endCursor} nodes{addr
  * kept small, because the server bounds the product of nested page sizes.
  */
 export const effectsFields = (changesPage: number) =>
-  `digest status executionError{message abortCode} ` +
+  `digest status executionError{message abortCode module{name package{address}} function{name} instructionOffset sourceLineNumber identifier constant} ` +
   `gasEffects{gasSummary{computationCost storageCost storageRebate nonRefundableStorageFee}} ` +
   `objectChanges(first:${changesPage}){${OBJECT_CHANGES_FIELDS}}`
 
@@ -186,7 +186,16 @@ const GasSummary = Schema.Struct({
 export const EffectsNode = Schema.Struct({
   digest: Schema.String,
   status: Schema.Literals(["SUCCESS", "FAILURE"]),
-  executionError: Schema.NullOr(Schema.Struct({ message: Schema.String, abortCode: Schema.NullOr(U64) })),
+  executionError: Schema.NullOr(Schema.Struct({
+    message: Schema.String,
+    abortCode: Schema.NullOr(U64),
+    module: Schema.optionalKey(Schema.NullOr(Schema.Struct({ name: Schema.String, package: Schema.NullOr(Schema.Struct({ address: Schema.String })) }))),
+    function: Schema.optionalKey(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
+    instructionOffset: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+    sourceLineNumber: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+    identifier: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    constant: Schema.optionalKey(Schema.NullOr(Schema.String))
+  })),
   gasEffects: Schema.NullOr(Schema.Struct({ gasSummary: Schema.NullOr(GasSummary) })),
   objectChanges: Schema.NullOr(ObjectChangesPage)
 })
@@ -204,12 +213,31 @@ const commandOf = (message: string): number | undefined => {
 
 const status = (e: typeof EffectsNode.Type): Transactions.Status => {
   if (e.status === "SUCCESS") return { _tag: "Success" }
-  const description = e.executionError?.message ?? "unknown execution failure"
+  const x = e.executionError
+  const description = x?.message ?? "unknown execution failure"
+  const pkg = x?.module?.package?.address
   return {
     _tag: "Failure",
     description,
     command: commandOf(description),
-    abortCode: e.executionError?.abortCode ?? undefined
+    abortCode: x?.abortCode ?? undefined,
+    ...(x?.module && pkg !== undefined && {
+      location: {
+        package: Address.normalize(pkg),
+        module: x.module.name,
+        function: x.function?.name ?? undefined,
+        instruction: x.instructionOffset ?? undefined
+      }
+    }),
+    ...(x && (x.identifier != null || x.sourceLineNumber != null) && {
+      cleverError: {
+        errorCode: undefined,
+        lineNumber: x.sourceLineNumber == null ? undefined : BigInt(x.sourceLineNumber),
+        constantName: x.identifier ?? undefined,
+        constantType: undefined,
+        rendered: x.constant ?? undefined
+      }
+    })
   }
 }
 

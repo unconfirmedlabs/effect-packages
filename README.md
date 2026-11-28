@@ -228,6 +228,20 @@ SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, MultiSig.scheme)
 
 **3. Signers are values.** `Signer = { address, publicKey, sign(intentMessage) }`. An in-memory key, a hardware wallet, a KMS and `MultiSig.signer(pk, [a, b])` are all the same type, and anything that takes a `Signer` (`Tx.run`, `Signer.signPersonalMessage`) works with all of them.
 
+`Tx.run` / `Tx.execute` refuse a signer whose address is neither the sender nor the gas owner (`SignerMismatch`) before anything is resolved, signed or sent.
+
+**Address aliases** (`0x2::address_alias`): an address that enabled aliases accepts signatures from any address in its alias set (up to eight).
+
+```ts
+const set = yield* AddressAlias.get(owner.address)       // { enabled, aliases, objectId }; never enabled: [owner.address]
+yield* Tx.run(AddressAlias.enable, { signer: owner })     // then add / remove / replaceAll, at most MAX_ALIASES (8)
+yield* Tx.run(AddressAlias.add(owner.address, key.address), { signer: owner })
+const asOwner = yield* AddressAlias.checkedSigner(owner.address, key)  // AliasNotAllowed unless key is in the set
+yield* Tx.run(recipe, { signer: asOwner })                // sender owner.address, signed by key
+```
+
+`AddressAlias.signer(address, key)` is the unchecked form (the node refuses a key outside the set). `aliasesId(address)` is the derived id of the set, from `DynamicFields.deriveObjectId(parent, keyType, keyBcs)`, which computes any `0x2::derived_object` id offline. Adding an alias gives that key full control of the address; `@mysten/sui` refuses `0x2::address_alias` calls unless the client allows them, so treat these steps like exporting a key.
+
 A browser wallet never signs raw intent messages: it signs a whole transaction and may change it first (re-resolving gas). That is a `TransactionSigner = { address, signTransaction(data) => { bytes, signature } }`. `Tx.execute` and `Tx.run` take either kind, and submit exactly the bytes the wallet signed. With several signers, wallets sign first; key signers then sign the final bytes. A wallet may re-pick only gas terms it pays for: a changed sender, command, input or gas owner, changed gas terms a key signer (a sponsor) pays for, or a changed expiration when a key signer is the sender or sponsor, is a `SigningError` before any key signs.
 
 **4. Transactions are Effects; resolution is a pipeline of steps.**
@@ -278,6 +292,32 @@ yield* Ptb.sendFunds(yield* Ptb.redeemCoin(w, type), yield* Ptb.address(to), typ
 - The transaction's own withdrawals are counted against the address balance before choosing how to pay gas.
 - Coin reservation refs match `@mysten/sui`'s encoding and are proven on devnet.
 - `Resolve.unchecked` (empty payment, no balance check) is for simulation and for bytes whose payer is funded later.
+
+```ts
+// Fold every SUI coin into the address balance, in one transaction: a command uses the
+// gas coin, so every coin pays gas, and send_funds deposits what is left of it.
+yield* Tx.run(Effect.gen(function*() {
+  yield* Ptb.sendFunds(Ptb.gas, yield* Ptb.address(signer.address))
+}), { signer })
+```
+
+**Kind bytes, digests and dry runs.**
+
+```ts
+const { bytes } = yield* Ptb.buildKind(recipe)          // TransactionKind bytes (Mysten's onlyTransactionKind): every input resolved
+const more = Effect.gen(function*() {
+  const { results } = yield* Ptb.fromKind(bytes)       // the same inputs and commands, to build on
+  yield* Ptb.memo("register-key", registerKey)         // once per build, however many steps ask for it
+})
+const digest = yield* Tx.digest(data)                   // of resolved data, to sign and submit apart
+const { effects, returnValues } = yield* Tx.simulate(recipe, { sender })   // build, then simulate: a failure is SimulationFailed
+```
+
+- `buildKind` is byte-identical to `@mysten/sui`'s `tx.build({ onlyTransactionKind: true })`. An input left for the resolver (`Ptb.object(id)`) or a coin/balance intent is `Incomplete`. Resolved inputs come from `Ptb.owned` / `Ptb.receiving` (`{ objectId, version, digest }`, the digest as plain base58, checked: `InvalidPureValue`), `Ptb.sharedObject` and `Ptb.objectArg`.
+- `fromKind` adds the kind's inputs and commands to the current build (`Transaction.fromKind`), deduplicating objects with earlier steps, and answers their arguments. Built alone it gives the same bytes back.
+- `Ptb.memo(key, step)` runs `step` once per build; later uses in the same build, concurrent ones too, get its result. Keys compare by identity. Use it instead of keying anything on the builder service, which is internal.
+- `Tx.simulate` runs `Tx.build` (so the resolver's own dry run may be the one that fails) and then a simulation with checks (`checks: false` for dev-inspect). A sender without gas passes `payment: Resolve.unchecked`, and the node mocks the gas coin.
+- **One abort shape.** A Move abort is `abort: Resolve.MoveAbort` (`{ code, package, module, function, instruction, constant, line, rendered }`) on `GasEstimationFailed` (resolution), `Tx.SimulationFailed` and `Tx.ExecutionFailed`, next to `description` and `command`. It is read from the node's structured error, not the description text, and gRPC and GraphQL give the same value: for a clever error (`#[error(code = N)]`) `code` is `N` on both (`@mysten/sui`'s gRPC client reports the encoded u64 there); match clever errors by `constant`.
 
 **Transaction JSON interop with `@mysten/sui`.** `TransactionJson` reads and writes the v2 JSON that `Transaction.toJSON()` / `Transaction.from(json)` use, unresolved or resolved:
 
@@ -469,9 +509,9 @@ counter.calls                                  // the module's call builders by 
 - **Names.** A Move name that would clash in TypeScript is renamed deterministically: a struct named `Move`, `Bcs`, `Package` or `Origins` is bound as `Move_` and still exported as `Move` (a module exporting a type `Package` or `Origins` then leaves that reference in `$package.ts`); of `foo_bar` and `fooBar` the camelCase one keeps its name and the other keeps its Move name (a function named `calls` is exported as `calls2`); an argument key taken by an auto-filled object or an earlier argument keeps its Move name if that differs, else gets a numeric suffix (`random: u64` next to `&Random` is `random2`). Functions with a `signer` parameter are skipped with a comment.
 - **Writing.** `generate` replaces `<output>/<package>` and `<output>/deps` only when they hold nothing but generated files (otherwise it fails and writes nothing), and fails when two packages would be written to one path. Directories of packages removed from the config are left in place.
 - **Schemas.** Structs and enums are BCS Schemas (`_tag` enums, positional structs as tuples). Generic types are functions of their non-phantom parameters' schemas (`Pair(Bcs.u8, Bcs.u64)`); `.type(...)` takes every type argument. Framework types use built-ins (`Move.UID`, `Coin`, `Balance`, `Table`, `VecMap`, `TypeName`, `Referent`, ...).
-- **Arguments.** Objects take an id or an argument; pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. Other struct and enum values (`Data`, `vector<Data>`, `Option<Data>`) take an argument only: Sui refuses a user-defined struct as a pure input (`InvalidUsageOfPureArg`), even one with no `UID`. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
+- **Arguments.** Objects take an id, an argument, a shared ref `{ objectId, initialSharedVersion, mutable }`, an owned ref `{ objectId, version, digest }`, or an unrun step such as `Ptb.receiving(ref)`; all but an argument become inputs in parameter order, as `@mysten/sui` adds them for the same call. Pure values take plain TS values (`bigint` for u64+, `string` for addresses, `Uint8Array` for `vector<u8>`, `Option` / bare value / `undefined` for `Option<T>`) or an argument; a generic `T` is encoded by its type argument. Other struct and enum values (`Data`, `vector<Data>`, `Option<Data>`) take an argument only: Sui refuses a user-defined struct as a pure input (`InvalidUsageOfPureArg`), even one with no `UID`. `&mut TxContext` is dropped; `Clock`, `Random`, `DenyList`, `SuiSystemState` and `AccumulatorRoot` are filled in as `@mysten/sui` does, and can be overridden by name.
 - **Results.** A call returning one value gives the command's `Result`, as `Ptb.moveCall` and `@mysten/sui`'s result used directly do; one returning several gives a `NestedResult` each.
-- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~0.6 KB min / 0.3 KB gzip over a hand-written `Ptb.moveCall` (Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report).
+- **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2 KB min / 0.8 KB gzip over a hand-written `Ptb.moveCall`, most of it the ref and step forms of object parameters. Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report.
 - Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
 
 ## Importing
@@ -519,7 +559,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | `Lifecycle.run` in a browser (IndexedDB journal, Web Locks) | 380 / 121 | 375 / 120 | 367 / 115 | — |
 | The same over OPFS | 379 / 120 | 373 / 120 | 366 / 114 | — |
 | Hand-written `Ptb.moveCall` | 82 / 28 | 84 / 29 | 79 / 26 | — |
-| One generated call (Walrus `blob.burn`) | 82 / 28 | 85 / 29 | 79 / 27 | — |
+| One generated call (Walrus `blob.burn`) | 84 / 29 | 86 / 30 | 81 / 27 | — |
 | Walrus: read via the aggregator | 139 / 47 | 139 / 47 | 133 / 45 | — |
 | Walrus: `Bft` + `Encoding` sizes only | 0.5 / 0.3 | 0.5 / 0.3 | 0.5 / 0.3 | — |
 | Walrus: read a blob from the nodes | 341 / 107 | 335 / 106 | 332 / 102 | 401 / 110 (`readBlob`) |

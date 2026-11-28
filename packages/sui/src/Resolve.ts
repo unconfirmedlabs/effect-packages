@@ -80,16 +80,55 @@ export class InvalidTransaction extends /* @__PURE__ */ Schema.TaggedError<Inval
   }
 }
 
-/** The budget dry run failed: the transaction would fail on chain as it stands. */
-export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", {
+/**
+ * A Move abort as the node reports it, from its structured error (not the
+ * description text). The same field (`abort`) on `GasEstimationFailed`,
+ * `Tx.SimulationFailed` and `Tx.ExecutionFailed`, so a caller matches one
+ * shape wherever the abort surfaced. Location fields are present when the
+ * transport reports them (gRPC and GraphQL do).
+ */
+export const MoveAbort = /* @__PURE__ */ Schema.Struct({
+  /**
+   * The abort code: for a clever error (`#[error(code = N)] const E: vector<u8> = ...`)
+   * the code it declares, otherwise the u64 the chain aborted with (for a clever
+   * error without a code, its encoded u64). gRPC and GraphQL agree on it. Match
+   * a clever error by `constant`.
+   */
+  code: Schema.BigInt,
+  /** The aborting module's package. */
+  package: /* @__PURE__ */ Schema.optionalKey(Schema.String),
+  module: /* @__PURE__ */ Schema.optionalKey(Schema.String),
+  function: /* @__PURE__ */ Schema.optionalKey(Schema.String),
+  /** The bytecode offset of the abort in `function`. */
+  instruction: /* @__PURE__ */ Schema.optionalKey(Schema.Number),
+  /** A clever error's constant (`EAliasAlreadyExists`). */
+  constant: /* @__PURE__ */ Schema.optionalKey(Schema.String),
+  /** A clever error's source line. */
+  line: /* @__PURE__ */ Schema.optionalKey(Schema.Number),
+  /** A clever error's value, rendered as text by the node. */
+  rendered: /* @__PURE__ */ Schema.optionalKey(Schema.String)
+})
+export type MoveAbort = typeof MoveAbort.Type
+
+/** The fields every failed-execution error shares: the node's description, the failing command, the Move abort. */
+export const FailureFields = {
+  /** The node's description of the failure (free text; match on `command` and `abort` instead). */
   description: Schema.String,
-  command: Schema.optionalKey(Schema.Number),
-  abortCode: Schema.optionalKey(Schema.BigInt),
-  /** The aborting module, `0x…::module` (and `::function` when known). */
-  location: Schema.optionalKey(Schema.String)
-}) {
+  command: /* @__PURE__ */ Schema.optionalKey(Schema.Number),
+  abort: /* @__PURE__ */ Schema.optionalKey(MoveAbort)
+}
+
+/** `<description> in command N, abort code C at 0x…::module::function`. */
+export const describeFailure = (f: { readonly description: string; readonly command?: number; readonly abort?: MoveAbort }) => {
+  const a = f.abort
+  const at = a?.module === undefined ? "" : ` at ${a.package ?? "?"}::${a.module}${a.function === undefined ? "" : `::${a.function}`}`
+  return `${f.description}${f.command === undefined ? "" : ` in command ${f.command}`}${a === undefined ? "" : `, abort code ${a.code}${at}`}`
+}
+
+/** The budget dry run (or the node's resolving simulation) failed: the transaction would fail on chain as it stands. */
+export class GasEstimationFailed extends /* @__PURE__ */ Schema.TaggedError<GasEstimationFailed>()("GasEstimationFailed", FailureFields) {
   override get message(): string {
-    return `gas estimation failed: ${this.description}${this.command === undefined ? "" : ` in command ${this.command}`}${this.abortCode === undefined ? "" : `, abort code ${this.abortCode}`}${this.location === undefined ? "" : ` at ${this.location}`}`
+    return `gas estimation failed: ${describeFailure(this)}`
   }
 }
 
@@ -795,8 +834,8 @@ const programmable = (draft: Draft) =>
       })
   )
 
-/** Commands may only use results of earlier commands. */
-const checkReferences = (kind: T.TransactionKind): InvalidTransaction | undefined => {
+/** Commands may only use results of earlier commands, and inputs that exist. */
+export const checkReferences = (kind: T.TransactionKind): InvalidTransaction | undefined => {
   if (kind._tag !== "ProgrammableTransaction") return undefined
   for (const [i, c] of kind.commands.entries()) {
     for (const a of argumentsOf(c)) {
@@ -819,15 +858,45 @@ export const encode = (data: T.TransactionData): Effect.Effect<Uint8Array, Inval
     })
   })
 
-/** A failure status's fields, for the errors that report one. */
-export const failureFields = (status: Extract<Status, { _tag: "Failure" }>) => ({
-  description: status.description,
-  ...(status.command !== undefined && { command: status.command }),
-  ...(status.abortCode !== undefined && { abortCode: status.abortCode }),
-  ...(status.location !== undefined && {
-    location: `${status.location.package}::${status.location.module}${status.location.function !== undefined ? `::${status.location.function}` : ""}`
+const encodeTransactionKind = /* @__PURE__ */ Bcs.encodeSync(T.TransactionKind)
+
+/** BCS bytes of a transaction kind (`Ptb.buildKind`), checked like `encode`. */
+export const encodeKind = (kind: T.TransactionKind): Effect.Effect<Uint8Array, InvalidTransaction> =>
+  Effect.suspend(() => {
+    const bad = checkReferences(kind)
+    if (bad) return Effect.fail(bad)
+    return Effect.try({
+      try: () => encodeTransactionKind(kind),
+      catch: (e) => new InvalidTransaction({ reason: e instanceof Error ? e.message : String(e) })
+    })
   })
-})
+
+/** A failure status's Move abort, when it is one. */
+export const abortOf = (status: Extract<Status, { _tag: "Failure" }>): MoveAbort | undefined => {
+  if (status.abortCode === undefined) return undefined
+  const loc = status.location
+  const clever = status.cleverError
+  return {
+    // A clever error's own code when it declares one, as GraphQL reports it; else the u64 the chain aborted with.
+    code: clever?.errorCode ?? status.abortCode,
+    ...(loc !== undefined && { package: loc.package, module: loc.module }),
+    ...(loc?.function !== undefined && { function: loc.function }),
+    ...(loc?.instruction !== undefined && { instruction: loc.instruction }),
+    ...(clever?.constantName !== undefined && { constant: clever.constantName }),
+    ...(clever?.lineNumber !== undefined && { line: Number(clever.lineNumber) }),
+    ...(clever?.rendered !== undefined && { rendered: clever.rendered })
+  }
+}
+
+/** A failure status's fields (`FailureFields`), for the errors that report one. */
+export const failureFields = (status: Extract<Status, { _tag: "Failure" }>) => {
+  const abort = abortOf(status)
+  return {
+    description: status.description,
+    ...(status.command !== undefined && { command: status.command }),
+    ...(abort !== undefined && { abort })
+  }
+}
 
 /**
  * Estimate the budget with a dry run: maximum budget, empty payment and a

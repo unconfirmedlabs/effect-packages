@@ -11,7 +11,7 @@ import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import type * as Stream from "effect/Stream"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
-import { type Address, fromBytes, normalize } from "./Address.ts"
+import { type Address, fromBytes, normalize, SUI_FRAMEWORK } from "./Address.ts"
 import { blake2b256 } from "./Hash.ts"
 import type { SuiObject } from "./Objects.ts"
 import type { RpcError } from "./RpcError.ts"
@@ -108,6 +108,21 @@ export const deriveId = (parent: string, nameType: string | TypeTag.TypeTag, nam
   }
   return fromBytes(blake2b256(input))
 }
+
+/**
+ * The id of an object created with `0x2::derived_object::claim(parent, key)`:
+ * the dynamic field id of `DerivedObjectKey<K>(key)` under `parent`, as
+ * `@mysten/sui`'s `deriveObjectID`. `keyBcs` is the key's BCS bytes (the
+ * wrapper adds none). Throws on a malformed key type, like `deriveId`.
+ */
+export const deriveObjectId = (parent: string, keyType: string | TypeTag.TypeTag, keyBcs: Uint8Array): Address =>
+  deriveId(parent, {
+    _tag: "struct",
+    address: SUI_FRAMEWORK,
+    module: "derived_object",
+    name: "DerivedObjectKey",
+    typeParams: [typeof keyType === "string" ? TypeTag.parse(keyType) : keyType]
+  }, keyBcs)
 
 /** The name type a dynamic object field is stored under: `0x2::dynamic_object_field::Wrapper<T>`. */
 export const objectFieldNameType = (nameType: string): string =>

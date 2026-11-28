@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import type { Address } from "./Address.ts"
+import * as Hash from "./Hash.ts"
 import * as Ptb from "./Ptb.ts"
 import * as Resolve from "./Resolve.ts"
 import { isTransactionSigner, type Signer, SigningError, signTransaction, type TransactionSigner } from "./Signer.ts"
@@ -161,19 +162,77 @@ export const build = <A, E1, R1, E2 = never, R2 = never>(
 /** The BCS bytes of transaction data. */
 export const serialize = T.encode
 
-/** The transaction reached the chain and Move aborted. Gas was charged. */
+/** The transaction digest of resolved data (what the chain and `Effects.digest` call it), as `@mysten/sui`'s `getDigest`. */
+export const digest = (data: T.TransactionData): Effect.Effect<string, Resolve.InvalidTransaction> =>
+  Effect.map(Resolve.encode(data), Hash.transactionDigest)
+
+/** The transaction reached the chain and failed (a Move abort: `abort`). Gas was charged. */
 export class ExecutionFailed extends /* @__PURE__ */ Schema.TaggedError<ExecutionFailed>()("ExecutionFailed", {
   digest: Schema.String,
-  description: Schema.String,
-  command: Schema.optionalKey(Schema.Number),
-  abortCode: Schema.optionalKey(Schema.BigInt),
-  /** The aborting module, `0x…::module` (and `::function` when known). */
-  location: Schema.optionalKey(Schema.String)
+  ...Resolve.FailureFields
 }) {
   override get message(): string {
-    return `transaction ${this.digest} failed: ${this.description}${this.command === undefined ? "" : ` in command ${this.command}`}${this.abortCode === undefined ? "" : `, abort code ${this.abortCode}`}${this.location === undefined ? "" : ` at ${this.location}`}`
+    return `transaction ${this.digest} failed: ${Resolve.describeFailure(this)}`
   }
 }
+
+/**
+ * `Tx.simulate`: the transaction would fail (a Move abort: `abort`), found in
+ * the resolving dry run or in the simulation itself.
+ */
+export class SimulationFailed extends /* @__PURE__ */ Schema.TaggedError<SimulationFailed>()("SimulationFailed", Resolve.FailureFields) {
+  override get message(): string {
+    return `simulation failed: ${Resolve.describeFailure(this)}`
+  }
+}
+
+/**
+ * Build and resolve a recipe as `build` does, then simulate the result (with
+ * the node's checks unless `checks: false`): a dry run in one call, answering
+ * the resolved data, effects and return values. An execution failure, whether
+ * resolution's own dry run or the simulation finds it, is `SimulationFailed`
+ * with the Move abort. For a sender without gas, pass
+ * `payment: Resolve.unchecked` (the node mocks the gas coin).
+ */
+export const simulate = <A, E1, R1, E2 = never, R2 = never>(
+  recipe: Effect.Effect<A, E1, R1>,
+  options: ResolveOptions<E2, R2> & { readonly checks?: boolean }
+) =>
+  Effect.gen(function*() {
+    const data = yield* build(recipe, options).pipe(
+      Effect.catchIf((e): e is Resolve.GasEstimationFailed => e instanceof Resolve.GasEstimationFailed, ({ description, command, abort }) =>
+        Effect.fail(
+          new SimulationFailed({ description, ...(command !== undefined && { command }), ...(abort !== undefined && { abort }) })
+        ))
+    )
+    const bytes = yield* Resolve.encode(data)
+    const simulation = yield* Effect.flatMap(
+      Effect.service(Transactions),
+      (t) => t.simulate(bytes, options.checks === undefined ? undefined : { checks: options.checks })
+    )
+    const status = simulation.effects.status
+    if (status._tag === "Failure") return yield* new SimulationFailed(Resolve.failureFields(status))
+    return { data, effects: simulation.effects, returnValues: simulation.returnValues }
+  }).pipe(Effect.withSpan("Tx.simulate"))
+
+/**
+ * A key or transaction signer whose address is neither the transaction's
+ * sender nor its gas owner: the node would refuse its signature. Refused
+ * before anything is signed or sent. To sign for another address through its
+ * alias set, wrap the key in `AddressAlias.signer`.
+ */
+export class SignerMismatch extends /* @__PURE__ */ Schema.TaggedError<SignerMismatch>()("SignerMismatch", {
+  signer: Schema.String,
+  sender: Schema.String,
+  gasOwner: Schema.String
+}) {
+  override get message(): string {
+    return `signer ${this.signer} is neither the sender ${this.sender} nor the gas owner ${this.gasOwner}`
+  }
+}
+
+const mismatch = (signer: Address, sender: Address, gasOwner: Address): SignerMismatch | undefined =>
+  signer === sender || signer === gasOwner ? undefined : new SignerMismatch({ signer, sender, gasOwner })
 
 
 /**
@@ -211,8 +270,14 @@ const checkChange = (
  * `TransactionSigner`s (wallets) sign first, one at a time. One may change the
  * gas terms (its returned bytes win, see `checkChange`), but not after another
  * has signed. Intent-message `Signer`s then sign the final bytes concurrently.
+ * A signer that is neither the sender nor the gas owner is `SignerMismatch`
+ * before anyone signs.
  */
 const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
+  for (const s of signers) {
+    const refused = mismatch(s.address, data.sender, data.gasData.owner)
+    if (refused) return yield* refused
+  }
   let current = data
   let bytes = yield* Resolve.encode(data)
   const signatures: Array<Uint8Array | undefined> = signers.map(() => undefined)
@@ -254,9 +319,11 @@ const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData
 /**
  * Sign and submit; a `Failure` status becomes `ExecutionFailed`.
  *
- * Takes `Signer`s and `TransactionSigner`s (wallets). A wallet may re-pick the
- * gas terms it pays for, never the sender, commands, inputs or gas owner, and
- * nothing a key signer pays for; what is submitted is exactly the bytes it signed.
+ * Takes `Signer`s and `TransactionSigner`s (wallets), each the sender or the
+ * gas owner (else `SignerMismatch`; an alias signs through `AddressAlias.signer`).
+ * A wallet may re-pick the gas terms it pays for, never the sender, commands,
+ * inputs or gas owner, and nothing a key signer pays for; what is submitted is
+ * exactly the bytes it signed.
  */
 export const execute = /* @__PURE__ */ Effect.fn("Tx.execute")(function*(
   data: T.TransactionData,
@@ -282,6 +349,8 @@ export const run = <A, E1, R1, E2 = never, R2 = never>(
   Effect.Error<ReturnType<typeof build<A, E1, R1, E2, R2>>> | Effect.Error<ReturnType<typeof execute>>,
   Effect.Services<ReturnType<typeof build<A, E1, R1, E2, R2>>> | Transactions
 > =>
-  Effect.flatMap(build(recipe, { ...options, sender: options.sender ?? options.signer.address }), (data) =>
-    execute(data, options.signer)
-  ) as any
+  Effect.suspend(() => {
+    const sender = options.sender ?? options.signer.address
+    const refused = mismatch(options.signer.address, sender, options.gasOwner ?? sender)
+    return refused ? Effect.fail(refused) : Effect.flatMap(build(recipe, { ...options, sender }), (data) => execute(data, options.signer))
+  }) as any

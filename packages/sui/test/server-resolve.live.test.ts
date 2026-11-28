@@ -112,6 +112,15 @@ buildSuite("server-side resolution on testnet (build only)", () => {
     expect(result.all.expiration).toEqual(result.expiration)
   })
 
+  test("Tx.simulate: sending the gas coin to the sender's address balance (folding every SUI coin) succeeds", async () => {
+    const { data, effects } = await runOn(TESTNET, () =>
+      Tx.simulate(Effect.gen(function*() {
+        yield* Ptb.sendFunds(Ptb.gas, yield* Ptb.address(FUNDED))
+      }), { sender: FUNDED }))
+    expect(effects.status._tag).toBe("Success")
+    expect(data.gasData.owner).toBe(FUNDED)
+  })
+
   test("an abort in the simulation is GasEstimationFailed; a missing object falls back to ObjectNotFound", async () => {
     const [aborted, missing] = await runOn(TESTNET, () =>
       Effect.all([

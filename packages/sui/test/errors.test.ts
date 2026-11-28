@@ -13,7 +13,7 @@ const ID = "0x" + "ab".repeat(32)
 describe("error messages", () => {
   test("render their fields, optional ones only when present", () => {
     const cases: Array<[Error, string]> = [
-      [new Resolve.GasEstimationFailed({ description: "MoveAbort", command: 1, abortCode: 7n, location: "0x2::m::f" }), "gas estimation failed: MoveAbort in command 1, abort code 7 at 0x2::m::f"],
+      [new Resolve.GasEstimationFailed({ description: "MoveAbort", command: 1, abort: { code: 7n, package: "0x2", module: "m", function: "f" } }), "gas estimation failed: MoveAbort in command 1, abort code 7 at 0x2::m::f"],
       [new Resolve.GasEstimationFailed({ description: "InsufficientGas" }), "gas estimation failed: InsufficientGas"],
       [new Resolve.AllowanceSpenderMismatch({ allowance: ID, spender: null, sender: "0x1" }), `allowance ${ID} spender is none, sender is 0x1`]
     ]

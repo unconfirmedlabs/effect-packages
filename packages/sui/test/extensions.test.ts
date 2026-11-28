@@ -1,13 +1,15 @@
 /**
- * Offline: dynamic field ids (parity with @mysten/sui), event filters and
- * decoding, `Transactions.waitFor`, `CheckpointData.follow`.
+ * Offline: dynamic field and derived object ids (parity with @mysten/sui),
+ * address alias reads, event filters and decoding, `Transactions.waitFor`,
+ * `CheckpointData.follow`.
  */
 import { bcs as mysten } from "@mysten/sui/bcs"
-import { deriveDynamicFieldID } from "@mysten/sui/utils"
+import { deriveDynamicFieldID, deriveObjectID } from "@mysten/sui/utils"
+import { base58 } from "@scure/base"
 import { Bcs } from "@unconfirmed/bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect, Schedule, Stream } from "effect"
-import { Address, CheckpointData, DynamicFields, Events, Transactions, TypeTag } from "../src/index.ts"
+import { Address, AddressAlias, CheckpointData, DynamicFields, Ed25519, Events, Objects, Transactions, TypeTag } from "../src/index.ts"
 
 const A = Address.normalize
 
@@ -42,6 +44,41 @@ describe("DynamicFields.deriveId", () => {
       )
     )
     expect(e._tag).toBe("InvalidDynamicFieldName")
+  })
+})
+
+describe("derived objects and address aliases", () => {
+  // On testnet: 0x5004…'s AddressAliases is 0x0012…, holding 0x5004… and 0xb0e5….
+  const owner = A("0x50044dc5ec176a977766842b2fbb939826c829dd9b322da8668037deb9aabc6e")
+  const alias = A("0xb0e57cfc3f9f5f65f957f40eeb4e320541505ef488706e43fcfbaba7d0173248")
+  const aliasesId = A("0x0012939da3025aa4e81584426e99c70a844a832c3097deabef093092cf177cd4")
+
+  test("deriveObjectId matches deriveObjectID; an alias set's id matches the chain", () => {
+    const key = mysten.u64().serialize(7n).toBytes()
+    expect(DynamicFields.deriveObjectId(A("0x5a1e"), "u64", key)).toBe(deriveObjectID(A("0x5a1e"), "u64", key) as Address.Address)
+    expect(AddressAlias.aliasesId(owner)).toBe(aliasesId)
+  })
+
+  test("AddressAlias.get decodes the set, an address without one is its own alias, checkedSigner refuses a key outside it", async () => {
+    const contents = Bcs.encodeSync(AddressAlias.AddressAliases)({ id: aliasesId, aliases: { contents: [owner, alias] } })
+    const objects = Objects.Objects.of({
+      get: (id) =>
+        id === aliasesId
+          ? Effect.succeed({ objectId: id, version: 2n, digest: base58.encode(new Uint8Array(32)) as any, owner: { _tag: "ConsensusAddressOwner", startVersion: 1n, address: owner }, type: "0x2::address_alias::AddressAliases", contents, previousTransaction: undefined })
+          : Effect.fail(new Objects.ObjectNotFound({ objectId: id })),
+      listOwned: () => Stream.empty
+    })
+    const stranger = await Effect.runPromise(Ed25519.fromSecretKey(new Uint8Array(32).fill(5)))
+    const [set, none, allowed, refused] = await Effect.runPromise(Effect.all([
+      AddressAlias.get(owner),
+      AddressAlias.get(alias),
+      AddressAlias.allows(owner, alias),
+      Effect.flip(AddressAlias.checkedSigner(owner, stranger))
+    ]).pipe(Effect.provideService(Objects.Objects, objects)))
+    expect(set).toEqual({ address: owner, enabled: true, aliases: [owner, alias], objectId: aliasesId })
+    expect(none).toMatchObject({ enabled: false, aliases: [alias] })
+    expect(allowed).toBe(true)
+    expect(refused).toMatchObject({ _tag: "AliasNotAllowed", address: owner, signer: stranger.address })
   })
 })
 

@@ -79,12 +79,7 @@ const isRetryable = (e: RpcError): boolean => e.retryable
 
 const executionFailed = (effects: Effects): ExecutionFailed | undefined =>
   effects.status._tag === "Failure"
-    ? new ExecutionFailed({
-      digest: effects.digest,
-      description: effects.status.description,
-      ...(effects.status.command !== undefined && { command: effects.status.command }),
-      ...(effects.status.abortCode !== undefined && { abortCode: effects.status.abortCode })
-    })
+    ? new ExecutionFailed({ digest: effects.digest, ...Resolve.failureFields(effects.status) })
     : undefined
 
 /** One `Transactions.get`, with "not found" as `None`. */

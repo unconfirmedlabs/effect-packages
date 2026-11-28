@@ -20,6 +20,7 @@ import * as PackagesGrpc from "../src/grpc/PackagesGrpc.ts"
 import * as TransactionsGrpc from "../src/grpc/TransactionsGrpc.ts"
 import {
   Address,
+  AddressAlias,
   Chain,
   Coins,
   Ed25519,
@@ -468,7 +469,9 @@ describe("typed failures in place of defects (CORE-7, CORE-8, CT-21)", () => {
       Ptb.moveCall({ target: "0x2::m::f", typeArguments: ["0x2::sui"] }),
       Ptb.coin({ type: "SUI", amount: 1n }),
       Move.obj("nope"),
-      Move.param("0x2::sui", 1n)
+      Move.param("0x2::sui", 1n),
+      Ptb.receiving({ objectId: "0x1", version: 1n, digest: "0OIl" }),
+      Move.obj({ objectId: "0x1", version: -1n, digest: D(1) })
     ]
     for (const r of bad) expect(failureOf(await recipe(r))).toMatchObject({ _tag: "InvalidPureValue" })
   })
@@ -520,6 +523,14 @@ describe("builders", () => {
     const { draft, value } = await Effect.runPromise(Ptb.build(Effect.all([Ptb.objectArg({ _tag: "ImmOrOwnedObject", ...ref }), Ptb.object("0x78")])))
     expect(draft.inputs).toHaveLength(1)
     expect(value[0]).toEqual(value[1])
+  })
+
+  test("Ptb.memo runs a step once per build, concurrent uses included, and again in the next build", async () => {
+    const register = Ptb.memo("register", Ptb.moveCall({ target: "0x2::m::register" }))
+    const recipe = Effect.all([register, register, register], { concurrency: "unbounded" })
+    const [first, second] = await Effect.runPromise(Effect.all([Ptb.build(recipe), Ptb.build(recipe)]))
+    expect([first.draft.commands.length, second.draft.commands.length]).toEqual([1, 1])
+    expect(first.value).toEqual([first.value[0], first.value[0], first.value[0]])
   })
 
   test("CORE-22: Move.datatype and Move.withGet don't modify the schema they are given", () => {
@@ -584,6 +595,20 @@ describe("transaction signers (SIGN-12)", () => {
     const exit = await execute((d) => ({ ...d, expiration: { _tag: "None" } }))
     expect(failureOf(exit)).toMatchObject({ _tag: "SigningError", reason: "failed" })
     expect(submitted).toHaveLength(0)
+  })
+
+  test("a key that is neither sender nor gas owner is SignerMismatch before signing; as an alias signer it signs", async () => {
+    submitted.length = 0
+    const run = (wrap: (key: Signer.Signer, sender: Address.Address) => Signer.Signer) =>
+      Effect.runPromiseExit(Effect.gen(function*() {
+        const key = yield* Ed25519.fromSecretKey(new Uint8Array(32).fill(4))
+        const sender = A("0xa11a5")
+        return yield* Tx.execute({ ...base(key), sender }, [wrap(key, sender), wallet((d) => d)])
+      }).pipe(Effect.provide(node)))
+    expect(failureOf(await run((key) => key))).toMatchObject({ _tag: "SignerMismatch", signer: expect.any(String), sender: A("0xa11a5") })
+    expect(submitted).toHaveLength(0)
+    expect((await run((key, sender) => AddressAlias.signer(sender, key)))._tag).toBe("Success")
+    expect(submitted).toHaveLength(1)
   })
 
   test("the wallet sponsor may still re-pick the gas terms it pays for", async () => {
