@@ -3,16 +3,13 @@ import { base58 } from "@scure/base"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "@unconfirmed/sui/Address"
 import * as Move from "@unconfirmed/sui/Move"
-import * as Objects from "@unconfirmed/sui/Objects"
-import * as Packages from "@unconfirmed/sui/Packages"
 import * as Ptb from "@unconfirmed/sui/Ptb"
+import * as Testing from "@unconfirmed/sui/Testing"
 import * as T from "@unconfirmed/sui/TransactionData"
 import { describe, expect, test } from "bun:test"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
-import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
-import * as Stream from "effect/Stream"
 import { Approval } from "../src/index.ts"
 import { hex, utf8 } from "./support.ts"
 
@@ -138,22 +135,15 @@ describe("fromRecipe (object inputs resolved)", () => {
   const D = (n: number) => base58.encode(new Uint8Array(32).fill(n)) as T.ObjectDigest
   const OWNED = Address.normalize("0x0a")
   const SHARED = Address.normalize("0x0b")
-  const objects: Record<string, Objects.SuiObject> = {
-    [OWNED]: { objectId: OWNED, version: 7n, digest: D(7), owner: { _tag: "AddressOwner", address: Address.normalize("0x1") }, type: `${PKG}::private_data::PrivateData`, contents: new Uint8Array(), previousTransaction: undefined },
-    [SHARED]: { objectId: SHARED, version: 9n, digest: D(9), owner: { _tag: "Shared", initialSharedVersion: 3n }, type: `${PKG}::whitelist::Whitelist`, contents: new Uint8Array(), previousTransaction: undefined },
-    [Address.CLOCK]: { objectId: Address.CLOCK, version: 100n, digest: D(1), owner: { _tag: "Shared", initialSharedVersion: 1n }, type: "0x2::clock::Clock", contents: new Uint8Array(), previousTransaction: undefined }
-  }
-  const layer = Layer.mergeAll(
-    Layer.succeed(Objects.Objects, {
-      get: (id) => {
-        const o = objects[id]
-        return o ? Effect.succeed(o) : Effect.fail(new Objects.ObjectNotFound({ objectId: id }))
-      },
-      listOwned: () => Stream.empty
-    }),
-    Layer.succeed(Packages.Packages, {
-      getFunction: () =>
-        Effect.succeed({
+  const layer = Testing.layer({
+    objects: [
+      { objectId: OWNED, version: 7n, digest: D(7), owner: { _tag: "AddressOwner", address: Address.normalize("0x1") }, type: `${PKG}::private_data::PrivateData` },
+      { objectId: SHARED, version: 9n, owner: { _tag: "Shared", initialSharedVersion: 3n }, type: `${PKG}::whitelist::Whitelist` }
+    ],
+    packages: [{
+      packageId: PKG,
+      functions: {
+        "account_based::seal_approve": {
           isEntry: true,
           parameters: [
             { reference: "Value", typeName: undefined },
@@ -161,10 +151,10 @@ describe("fromRecipe (object inputs resolved)", () => {
             { reference: "Immutable", typeName: "y" },
             { reference: "Immutable", typeName: "z" }
           ]
-        }),
-      getModules: () => Effect.die("unused")
-    })
-  )
+        }
+      }
+    }]
+  })
 
   test("an owned, a shared and the Clock input", async () => {
     const recipe = Effect.gen(function*() {

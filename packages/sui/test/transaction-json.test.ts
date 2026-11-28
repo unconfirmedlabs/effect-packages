@@ -8,10 +8,9 @@
 import { Inputs, Transaction } from "@mysten/sui/transactions"
 import { base58 } from "@scure/base"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Option, Stream } from "effect"
+import { Effect, Option } from "effect"
 import {
   Address,
-  Coins,
   Objects,
   Packages,
   Ptb,
@@ -20,6 +19,7 @@ import {
   TransactionJson,
   TypeTag
 } from "../src/index.ts"
+import * as Testing from "../src/Testing.ts"
 import { toB64 } from "./support.ts"
 
 const A = Address.normalize
@@ -66,49 +66,20 @@ const fixture: Fixture = {
 
 const obj = (id: string) => fixture.objects.find((o) => A(o.id) === A(id))!
 
-const ourLayer = Layer.mergeAll(
-  Layer.succeed(Objects.Objects, {
-    get: (id) => {
-      const o = obj(id)
-      return Effect.succeed({
-        objectId: A(o.id),
-        version: o.version,
-        digest: D(Number(o.version)),
-        owner: o.owner,
-        type: "0x99::game::Thing",
-        contents: new Uint8Array(),
-        previousTransaction: undefined
-      })
-    },
-    listOwned: () => Stream.empty
-  }),
-  Layer.succeed(Packages.Packages, {
-    getFunction: (t) =>
-      Effect.succeed({
-        isEntry: false,
-        parameters: (fixture.functions[`${t.module}::${t.function}`] ?? []).map((p) => ({
-          reference: p.reference,
-          typeName: p.typeName ?? (p.reference === "Value" ? undefined : "0x99::game::Thing")
-        }))
-      }),
-    getModules: () => Effect.die("unused")
-  }),
-  Layer.succeed(Coins.Coins, {
-    getBalance: (_owner, coinType = TypeTag.SUI) => {
-      const t = TypeTag.normalizeString(coinType)
-      const ab = fixture.balances[t] ?? 0n
-      const cb = (fixture.coins[t] ?? []).reduce((s, c) => s + c.balance, 0n)
-      return Effect.succeed({ coinType: t, total: ab + cb, addressBalance: ab, coinBalance: cb })
-    },
-    listBalances: () => Stream.die("unused"),
-    list: (_owner, coinType = TypeTag.SUI) =>
-      Stream.fromIterable((fixture.coins[TypeTag.normalizeString(coinType)] ?? []).map((c) => ({
-        ref: { objectId: A(c.id), version: c.version, digest: D(Number(c.version)) },
-        coinType: TypeTag.normalizeString(coinType),
-        balance: c.balance
-      })))
-  })
-)
+const ourLayer = Testing.layer({
+  objects: fixture.objects.map((o) => ({ objectId: o.id, version: o.version, digest: D(Number(o.version)), owner: o.owner, type: `${PKG}::game::Thing` })),
+  packages: [{
+    packageId: PKG,
+    functions: Object.fromEntries(Object.entries(fixture.functions).map(([name, params]) => [name, {
+      isEntry: false,
+      parameters: params.map((p) => ({ reference: p.reference, typeName: p.typeName ?? (p.reference === "Value" ? undefined : `${PKG}::game::Thing`) }))
+    }]))
+  }],
+  addressBalances: Object.entries(fixture.balances).map(([coinType, amount]) => ({ owner: sender, coinType, amount })),
+  coins: Object.entries(fixture.coins).flatMap(([coinType, coins]) =>
+    coins.map((c) => ({ owner: sender, coinType, balance: c.balance, objectId: c.id, version: c.version, digest: D(Number(c.version)) }))
+  )
+})
 
 const mystenClient = {
   core: {
@@ -157,7 +128,7 @@ const mystenClient = {
   }
 }
 
-const run = <A, E>(effect: Effect.Effect<A, E, Objects.Objects | Packages.Packages | Coins.Coins>) =>
+const run = <A, E>(effect: Effect.Effect<A, E, Testing.Services>) =>
   Effect.runPromise(Effect.provide(effect, ourLayer) as Effect.Effect<A, E>)
 
 /** Our side: decode-free resolve of an `Unresolved` (no gas steps; gas is fixed in the fixtures). */

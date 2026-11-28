@@ -7,7 +7,7 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | Package | What | Extra deps |
 |---|---|---|
 | `@unconfirmed/bcs` | BCS declared as Effect Schemas | `@scure/base` |
-| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`) | `@noble/hashes`, `@noble/curves` (ed25519 only), `@scure/base` |
+| `@unconfirmed/sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`). `Testing`: all of them in memory, for tests | `@noble/hashes`, `@noble/curves` (ed25519 only), `@scure/base` |
 | `@unconfirmed/sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
 | `@unconfirmed/sui-graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
 | `@unconfirmed/sui-lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / any KeyValueStore, plus IndexedDB and OPFS stores), sender lock (in-process or Web Locks) | — |
@@ -529,6 +529,35 @@ counter.calls                                  // the module's call builders by 
 - **Results.** A call returning one value gives the command's `Result`, as `Ptb.moveCall` and `@mysten/sui`'s result used directly do; one returning several gives a `NestedResult` each.
 - **Tree-shaking.** Every top-level definition is a `/* @__PURE__ */` call over a thunk, so an unused one disappears under every bundler: one generated call adds ~2 KB min / 0.8 KB gzip over a hand-written `Ptb.moveCall`, most of it the ref and step forms of object parameters. Mysten's generated module adds ~5.5 / 1.8; both of ours are rows in the bundle report.
 - Tests check byte parity with `@mysten/codegen`'s generated types and call builders (`packages/sui-codegen/test/parity.test.ts`) and publish the fixture to devnet (`live.test.ts`).
+
+## Testing your code
+
+`@unconfirmed/sui/Testing` is an in-memory node: every capability service over state a test seeds, for code that reads the chain or runs transactions. It is outside the barrel, so programs that don't import it don't ship it.
+
+```ts
+import * as Testing from "@unconfirmed/sui/Testing"
+
+const layer = Testing.layer({
+  objects: [{ objectId: counterId, type: `${pkg}::counter::Counter`, contents: Bcs.encodeSync(Counter)({ id: counterId, value: 1n }) }],
+  packages: [{ packageId: pkg, functions: { "counter::bump": { isEntry: true, parameters: [{ reference: "Mutable", typeName: `${pkg}::counter::Counter` }] } } }],
+  // Transactions aren't run: the responder says what one did (default: success, no gas, nothing changed)
+  respond: ({ mode }) => (mode === "execute" ? { events: [{ type: `${pkg}::counter::Bumped`, contents: Bcs.encodeSync(Bumped)({ value: 2n }) }] } : {})
+})
+
+const program = Effect.gen(function*() {
+  const node = yield* Testing.Node                                          // the handle: seed and inspect mid-test
+  yield* node.setAddressBalance({ owner: signer.address, amount: 1_000_000_000n })  // gas, or node.putCoin
+  const effects = yield* Tx.run(bump, { signer, include: ["events"] })     // resolves against the node, then executes
+  const landed = yield* Transactions.waitFor(effects.digest)               // in checkpoint 1, at the node's clock
+  const reads = (yield* node.requests).filter((r) => r.method === "Objects.get")   // one entry per batch
+  return { effects, landed, reads }
+})
+```
+
+- **Seeding.** `Testing.layer(seed)` or, mid-test, the `Testing.Node` handle: `putObject` (any `SuiObject` too: ids and types are normalized; shared, version 1 and a derived digest by default), `putDynamicField` (a field or an object field, at the id `DynamicFields.deriveId` gives), `putCoin`, `setAddressBalance`, `putPackage` (modules for `getModules`, signatures for `getFunction`), `putTransaction` (a transaction that landed elsewhere, with its events), `setClock` (the `0x6` object and checkpoint timestamps), `setChain`, `respond`. `Testing.make(seed)` gives the node as a `Context`, to share one across runs.
+- **Reads behave as the transports do.** `Objects.get` is batched (up to 50, a scheduler yield apart, so it also batches under `TestClock`), and `DynamicFields.get` reads through the same batches. `node.requests` logs every call with its arguments; an `Objects.get` entry is one batch.
+- **Transactions are scripted, not executed.** `simulate` (each `Resolve.budget` dry run too) and `execute` ask the responder for the outcome: status, gas, changed objects, events, balance changes, return values. State changes only when the responder calls the node. `Transactions.resolve` is left out, so `Tx.run` resolves client-side: object inputs and their Move signatures must be seeded, and the sender funded. Each executed transaction lands in a checkpoint of its own, which `Transactions.get` / `waitFor`, `Events`, `Checkpoints` and `CheckpointData` (also `subscribe`) see.
+- **What it can't answer fails typed:** an unseeded Move function is `RpcError` `NOT_FOUND`, a `StreamHead` event filter `UNIMPLEMENTED`. Signatures are not checked.
 
 ## Importing
 

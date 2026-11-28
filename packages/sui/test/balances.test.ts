@@ -11,9 +11,8 @@ const { createCoinReservationRef } = (await import(reservationModule)) as {
 import { base58 } from "@scure/base"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
-import * as Layer from "effect/Layer"
-import * as Stream from "effect/Stream"
-import { Address, Chain, CoinReservation, Coins, Objects, Ptb, Resolve, TransactionData as T, TypeTag } from "../src/index.ts"
+import { Address, CoinReservation, Ptb, Resolve, TransactionData as T, TypeTag } from "../src/index.ts"
+import * as Testing from "../src/Testing.ts"
 import { toB64 } from "./support.ts"
 
 const A = Address.normalize
@@ -31,22 +30,14 @@ interface Fixture {
 
 const coinRef = (c: { id: string; version: bigint }) => ({ objectId: A(c.id), version: c.version, digest: D(Number(c.version)) })
 
-/** A scripted `Coins` (ours) and the equivalent @mysten client. */
-const coinsLayer = (f: Fixture) =>
-  Layer.succeed(Coins.Coins, {
-    getBalance: (_owner, coinType = TypeTag.SUI) => {
-      const t = TypeTag.normalizeString(coinType)
-      const ab = f.balances[t] ?? 0n
-      const cb = (f.coins[t] ?? []).reduce((s, c) => s + c.balance, 0n)
-      return Effect.succeed({ coinType: t, total: ab + cb, addressBalance: ab, coinBalance: cb })
-    },
-    listBalances: () => Stream.die("unused"),
-    list: (_owner, coinType = TypeTag.SUI) =>
-      Stream.fromIterable((f.coins[TypeTag.normalizeString(coinType)] ?? []).map((c) => ({
-        ref: coinRef(c),
-        coinType: TypeTag.normalizeString(coinType),
-        balance: c.balance
-      })))
+/** `sender` holding the fixture on an in-memory node (ours), and the equivalent @mysten client. */
+const node = (f: Fixture) =>
+  Testing.layer({
+    chain: { chainId: CHAIN, epoch: 812n },
+    addressBalances: Object.entries(f.balances).map(([coinType, amount]) => ({ owner: sender, coinType, amount })),
+    coins: Object.entries(f.coins).flatMap(([coinType, coins]) =>
+      coins.map((c) => ({ owner: sender, coinType, balance: c.balance, ...coinRef(c) }))
+    )
   })
 
 const mystenClient = (f: Fixture) => ({
@@ -79,7 +70,7 @@ const ours = (f: Fixture, recipe: Effect.Effect<unknown, unknown, Ptb.PtbBuilder
       const plan = yield* Resolve.balances({ sender, draft })
       const data = yield* Resolve.finish({ ...plan, gasPrice: 1000n, gasBudget: 10_000_000n, gasPayment: [gasRef] })
       return T.encode(data)
-    }).pipe(Effect.provide(coinsLayer(f))) as Effect.Effect<Uint8Array>
+    }).pipe(Effect.provide(node(f))) as Effect.Effect<Uint8Array>
   )
 
 /** Build the same thing with @mysten/sui. */
@@ -237,9 +228,7 @@ describe("coin / balance intents match tx.coin / tx.balance", () => {
         return yield* Resolve.balances({ sender, draft })
       }).pipe(
         Effect.flip,
-        Effect.provide(coinsLayer({ balances: { [TOKEN]: 10n }, coins: { [TOKEN]: [{ id: "0xc1", version: 3n, balance: 20n }] } })),
-        // Only allowance intents read objects.
-        Effect.provideService(Objects.Objects, { get: (objectId) => Effect.fail(new Objects.ObjectNotFound({ objectId })), listOwned: () => Stream.empty })
+        Effect.provide(node({ balances: { [TOKEN]: 10n }, coins: { [TOKEN]: [{ id: "0xc1", version: 3n, balance: 20n }] } }))
       )
     )
     expect(exit._tag === "Success" && exit.value._tag).toBe("InsufficientBalance")
@@ -269,10 +258,6 @@ describe("coin reservation refs", () => {
 })
 
 describe("gas payment strategies", () => {
-  const chain = Layer.succeed(Chain.Chain, {
-    info: Effect.succeed({ chainId: CHAIN, chain: "test", epoch: 812n, checkpointHeight: 1n }),
-    referenceGasPrice: Effect.succeed(1000n)
-  })
   const run = <E, R>(
     f: Fixture,
     recipe: Effect.Effect<unknown, never, Ptb.PtbBuilder>,
@@ -283,7 +268,7 @@ describe("gas payment strategies", () => {
       Effect.gen(function*() {
         const { draft } = yield* Effect.orDie(Ptb.build(recipe))
         return yield* strategy({ sender, draft, gasBudget: budget })
-      }).pipe(Effect.provide(Layer.mergeAll(coinsLayer(f), chain))) as Effect.Effect<Resolve.Plan, E>
+      }).pipe(Effect.provide(node(f))) as Effect.Effect<Resolve.Plan, E>
     )
   const noGasCoin = Effect.orDie(Effect.flatMap(Ptb.address(recipient), (to) => Ptb.transferObjects([], to)))
   const usesGas = Effect.orDie(Effect.gen(function*() {

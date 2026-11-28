@@ -21,10 +21,10 @@ import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "@unconfirmed/sui/Address"
-import * as Coins from "@unconfirmed/sui/Coins"
 import * as Objects from "@unconfirmed/sui/Objects"
 import * as Ptb from "@unconfirmed/sui/Ptb"
 import * as Resolve from "@unconfirmed/sui/Resolve"
+import * as Testing from "@unconfirmed/sui/Testing"
 import * as TransactionData from "@unconfirmed/sui/TransactionData"
 import type * as T from "@unconfirmed/sui/TransactionData"
 import type * as Transactions from "@unconfirmed/sui/Transactions"
@@ -275,15 +275,9 @@ const mystenAuthPayload = async (bytes: Uint8Array, nonce: Uint8Array) => {
 }
 
 const D = "11111111111111111111111111111111" as T.ObjectDigest
-const coinsLayer = Layer.succeed(Coins.Coins, {
-  getBalance: (_owner, coinType = TypeTag.SUI) =>
-    Effect.succeed({ coinType: TypeTag.normalizeString(coinType), total: 10n ** 12n, addressBalance: 10n ** 12n, coinBalance: 0n }),
-  listBalances: () => Stream.empty,
-  list: () => Stream.empty
-})
-const noObjects = Layer.succeed(Objects.Objects, {
-  get: (id) => Effect.fail(new Objects.ObjectNotFound({ objectId: id })),
-  listOwned: () => Stream.empty
+/** The intents' owner holds SUI and WAL in its address balance; there are no objects. */
+const chainLayer = Testing.layer({
+  addressBalances: [{ owner: OWNER, amount: 10n ** 12n }, { owner: OWNER, amount: 10n ** 12n, coinType: WAL_TYPE }]
 })
 
 describe("authAndTip", () => {
@@ -301,7 +295,7 @@ describe("authAndTip", () => {
           const { draft } = yield* Ptb.build(registerRecipe)
           const plan = yield* Resolve.balances({ sender: OWNER, draft })
           return yield* Resolve.finish({ ...plan, gasPrice: 1000n, gasBudget: 10_000_000n, gasPayment: [{ objectId: Address.normalize("0x6a5"), version: 1n, digest: D }] })
-        }).pipe(Effect.provide(Layer.mergeAll(relay.layer, systemLayer(), coinsLayer, noObjects)))
+        }).pipe(Effect.provide(Layer.mergeAll(relay.layer, systemLayer(), chainLayer)))
       ))
     )
     // Through the wire form, as the relay reads it (`SenderSignedData` → `ptb.inputs.first()`).

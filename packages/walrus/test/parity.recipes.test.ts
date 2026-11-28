@@ -31,7 +31,7 @@ import * as blob from "../src/generated/walrus/blob.ts"
 import * as Messages from "../src/Messages.ts"
 import * as Recipes from "../src/Recipes.ts"
 import * as System from "../src/System.ts"
-import { loadFixture, objectsLayer, packagesLayer, restoreObject } from "./fixtures.ts"
+import { loadFixture, objectsLayer, restoreObject } from "./fixtures.ts"
 
 const fixture = loadFixture("testnet")
 const OWNER = Address.normalize("0xa11ce")
@@ -69,7 +69,7 @@ beforeAll(async () => {
   ;[state, walType] = await Effect.runPromise(
     Effect.flatMap(Effect.service(System.System), (s) => Effect.zip(s.state, s.walType)).pipe(
       Effect.provide(System.layer.pipe(
-        Layer.provide(Layer.mergeAll(objectsLayer(fixture).layer, packagesLayer(fixture), Config.layer(fixture.config)))
+        Layer.provide(Layer.mergeAll(objectsLayer(fixture).layer, Config.layer(fixture.config)))
       ))
     )
   )

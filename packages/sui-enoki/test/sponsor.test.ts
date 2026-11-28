@@ -4,8 +4,8 @@
 import { Transaction } from "@mysten/sui/transactions"
 import * as TheirZk from "@mysten/sui/zklogin"
 import { Bcs } from "@unconfirmed/bcs"
-import { Address, Coins, Ed25519, Hash, Objects, Packages, Ptb, SignatureScheme, TransactionData as T, Verify } from "@unconfirmed/sui"
-import * as Stream from "effect/Stream"
+import { Address, Ed25519, Hash, Ptb, SignatureScheme, TransactionData as T, Verify } from "@unconfirmed/sui"
+import * as Testing from "@unconfirmed/sui/Testing"
 import * as Nonce from "@unconfirmed/sui-zklogin/Nonce"
 import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
 import { describe, expect, test } from "bun:test"
@@ -28,12 +28,8 @@ const recipe = Effect.gen(function*() {
   yield* Ptb.transferObjects([coin!], yield* Ptb.address(RECIPIENT))
 })
 
-/** Pure inputs only, so `Resolve.inputs` never touches these. */
-const noChain = Layer.mergeAll(
-  Layer.succeed(Objects.Objects, {} as Objects.Objects["Service"]),
-  Layer.succeed(Packages.Packages, {} as Packages.Packages["Service"]),
-  Layer.succeed(Coins.Coins, {} as Coins.Coins["Service"])
-)
+/** Pure inputs only, so `Resolve.inputs` never reads the node. */
+const noChain = Testing.layer()
 
 /** A fake Enoki: sponsors by wrapping the kind in gas data owned by SPONSOR (optionally tampering). */
 const fakeEnoki = (tamper?: (data: T.TransactionData) => T.TransactionData, reportedDigest?: string) =>
@@ -346,19 +342,9 @@ describe("ZkLoginFlow", () => {
 describe("Sponsor with address-balance intents", () => {
   test("Ptb.coin({ useGasCoin: false }) is sourced from the sender's address balance before the kind goes to Enoki", async () => {
     const http = fakeEnoki()
-    const coins = Layer.succeed(Coins.Coins, {
-      getBalance: (_owner, coinType = "0x2::sui::SUI") =>
-        Effect.succeed({ coinType, total: 5_000n, addressBalance: 5_000n, coinBalance: 0n }),
-      listBalances: () => Stream.empty,
-      list: () => Stream.empty
-    })
-    const noObjects = Layer.mergeAll(
-      Layer.succeed(Objects.Objects, {} as Objects.Objects["Service"]),
-      Layer.succeed(Packages.Packages, {} as Packages.Packages["Service"]),
-      coins
-    )
     await Effect.runPromise(Effect.gen(function*() {
       const signer = yield* Ed25519.generate
+      yield* Testing.Node.use((node) => node.setAddressBalance({ owner: signer.address, amount: 5_000n }))
       return yield* Sponsor.run(
         Effect.gen(function*() {
           const coin = yield* Ptb.coin({ amount: 1_000n, useGasCoin: false })
@@ -366,7 +352,7 @@ describe("Sponsor with address-balance intents", () => {
         }),
         { signer, network: "testnet", allowedAddresses: [RECIPIENT] }
       )
-    }).pipe(Effect.provide(Layer.merge(enoki(http), noObjects))))
+    }).pipe(Effect.provide(Layer.merge(enoki(http), Testing.layer()))))
     const sponsorRequest = http.requests.find((r) => r.url.endsWith("/v1/transaction-blocks/sponsor"))!
     const kind = Bcs.decodeSync(T.TransactionKind)(fromB64(JSON.parse(sponsorRequest.body!).transactionBlockKindBytes))
     expect(kind.inputs.some((i) => i._tag === "FundsWithdrawal")).toBe(true)
