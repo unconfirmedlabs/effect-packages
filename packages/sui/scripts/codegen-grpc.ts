@@ -136,21 +136,7 @@ import type * as P from "./proto.ts"
 
 `
 const fileVar = new Map<string, string>()
-set.file.forEach((f: any, i: number) => {
-  const v = `f${i}`
-  fileVar.set(f.name, v)
-  rpc += `const ${v} = /* @__PURE__ */ file(${literal({ name: f.name, package: f.package, syntax: f.syntax, dependency: f.dependency ?? [] })})\n`
-})
-rpc += "\n"
-for (const f of set.file) {
-  for (const m of f.message_type ?? []) {
-    rpc += `const ${chunkName(`${f.package}.${m.name}`)} = /* @__PURE__ */ chunk(${fileVar.get(f.name)}, "message", ${literal(strip(m))})\n`
-  }
-  for (const e of f.enum_type ?? []) {
-    rpc += `const ${chunkName(`${f.package}.${e.name}`)} = /* @__PURE__ */ chunk(${fileVar.get(f.name)}, "enum", ${literal(strip(e))})\n`
-  }
-}
-rpc += "\n"
+set.file.forEach((f: any, i: number) => fileVar.set(f.name, `f${i}`))
 
 const closure = (roots: Array<ProtobufDescriptor.MessageDescriptor>) => {
   const seen = new Set<string>()
@@ -172,15 +158,37 @@ const closure = (roots: Array<ProtobufDescriptor.MessageDescriptor>) => {
 }
 
 let methodCount = 0
+let handles = ""
+// Only the chunks (and files) some method reaches: a type no RPC uses, e.g. ErrorReason, would be
+// an unused local and fail consumers compiling with noUnusedLocals.
+const reached = new Set<string>()
+const usedFiles = new Set<any>()
 for (const f of registry.files) {
   for (const s of f.services) {
     for (const m of s.methods) {
       methodCount++
-      const deps = closure([m.input, m.output]).map(chunkName).join(", ")
-      rpc += `/** \`${s.typeName}/${m.name}\` */\nexport const ${s.name}_${m.name} = /* @__PURE__ */ rpc<P.${tsName(m.input)}, P.${tsName(m.output)}, ${m.serverStreaming}>(\n  "${s.typeName}/${m.name}", "${m.input.typeName}", "${m.output.typeName}", ${m.serverStreaming},\n  () => [${deps}]\n)\n`
+      const tops = closure([m.input, m.output]).map(chunkName)
+      tops.forEach((t) => reached.add(t))
+      const deps = tops.join(", ")
+      handles += `/** \`${s.typeName}/${m.name}\` */\nexport const ${s.name}_${m.name} = /* @__PURE__ */ rpc<P.${tsName(m.input)}, P.${tsName(m.output)}, ${m.serverStreaming}>(\n  "${s.typeName}/${m.name}", "${m.input.typeName}", "${m.output.typeName}", ${m.serverStreaming},\n  () => [${deps}]\n)\n`
     }
   }
 }
+let chunks = ""
+for (const f of set.file) {
+  const emit = (kind: "message" | "enum", d: any) => {
+    const name = chunkName(`${f.package}.${d.name}`)
+    if (!reached.has(name)) return
+    chunks += `const ${name} = /* @__PURE__ */ chunk(${fileVar.get(f.name)}, "${kind}", ${literal(strip(d))})\n`
+    if (!usedFiles.has(f)) {
+      usedFiles.add(f)
+      rpc += `const ${fileVar.get(f.name)} = /* @__PURE__ */ file(${literal({ name: f.name, package: f.package, syntax: f.syntax, dependency: f.dependency ?? [] })})\n`
+    }
+  }
+  for (const m of f.message_type ?? []) emit("message", m)
+  for (const e of f.enum_type ?? []) emit("enum", e)
+}
+rpc += `\n${chunks}\n${handles}`
 
 await Bun.write(new URL("../src/grpc/generated/rpc.ts", import.meta.url), rpc)
 console.log(`generated ${all.length} types, ${methodCount} methods`)

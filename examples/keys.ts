@@ -4,8 +4,12 @@
  * packages/test-support checks that they stay identical. Not meant to run.
  */
 import * as Effect from "effect/Effect"
+import * as Result from "effect/Result"
 import * as PrivateKey from "@unconfirmed/sui/PrivateKey"
-import * as Mnemonic from "@unconfirmed/sui-mnemonic"
+import * as Bip32 from "@unconfirmed/sui-mnemonic/Bip32"
+import * as Mnemonic from "@unconfirmed/sui-mnemonic/Mnemonic"
+import * as Passkey from "@unconfirmed/sui-passkey"
+import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
 import * as Ed25519 from "@unconfirmed/sui/Ed25519"
 import * as MlDsa65 from "@unconfirmed/sui-mldsa65"
 import * as MultiSig from "@unconfirmed/sui-multisig"
@@ -15,6 +19,12 @@ import { SignatureSchemes } from "./shared.ts"
 declare const s: string
 declare const json: string
 declare const seed32: Uint8Array
+declare const sk: Uint8Array
+declare const storedPasskeyKey: Uint8Array
+declare const addressSeed: bigint
+declare const iss: string
+declare const message: Uint8Array
+declare const signature: Uint8Array
 
 export const keys = Effect.gen(function*() {
   // #region readme
@@ -35,7 +45,7 @@ export const mnemonics = Effect.gen(function*() {
   // #region readme
   const m = yield* Mnemonic.generate()                                        // 12 words; 24 with generate(24)
   const signer = yield* Mnemonic.ed25519Signer(m)                             // m/44'/784'/0'/0'/0'
-  const k1 = yield* Secp256k1.fromSecretKey(yield* Mnemonic.secp256k1SecretKey(m, { account: 1 }))  // m/54'/784'/1'/0/0
+  const k1 = yield* Secp256k1.fromSecretKey(yield* Bip32.secp256k1SecretKey(m, { account: 1 }))     // m/54'/784'/1'/0/0
   const seed = yield* Mnemonic.toSeed(m)                                      // derive many keys without re-running PBKDF2
   const pq = yield* MlDsa65.fromSecretKey(yield* Mnemonic.mldsa65SecretKey(seed, "m/94'/784'/0'/0'/3'"))
   // #endregion
@@ -49,3 +59,13 @@ export const mldsa = (ed: { readonly publicKey: { readonly flag: number; readonl
     const pk = yield* MultiSig.publicKey({ members: [{ publicKey: ed.publicKey, weight: 1 }, { publicKey: signer.publicKey, weight: 1 }], threshold: 1 })
     // #endregion
   })
+
+export const sync = () => {
+  // #region readme
+  const ed = Result.getOrThrow(Ed25519.fromSecretKeyResult(sk))             // also Secp256k1/r1.fromSecretKeyResult
+  const multi = MultiSig.publicKeyResult({ members: [{ publicKey: ed.publicKey, weight: 1 }], threshold: 1 })
+  const zk = Result.map(PublicIdentifier.makeResult(addressSeed, iss), PublicIdentifier.toPublicKey)  // flag 0x05
+  const passkey = Passkey.publicKeyResult(storedPasskeyKey)                 // flag 0x06, from the 33-byte compressed key
+  const ok = Ed25519.verifyRaw(ed.publicKey.bytes, message, signature)      // over the raw message, as Move's ed25519_verify
+  // #endregion
+}

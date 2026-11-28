@@ -6,7 +6,7 @@ import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
 import { Bcs } from "@unconfirmed/bcs"
 import { Ed25519, Hash, SignatureScheme, Signer, Verify } from "@unconfirmed/sui"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import * as Passkey from "../src/index.ts"
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64")
@@ -76,6 +76,14 @@ describe("Passkey parity with @mysten/sui", () => {
     expect((await verifyPersonalMessageSignature(msg, b64(mine.signature), { offline: true })).toSuiAddress()).toBe(ours.address)
     const v = await verifyOurs(Verify.personalMessage(msg, fromB64(ref.signature), { address: ours.address }))
     expect(v.publicKey).toEqual({ flag: Passkey.FLAG, bytes: ours.publicKey.bytes })
+  })
+
+  test("publicKeyResult: the stored 33 bytes are the signer's PublicKey, without a provider; a non-point is InvalidKey", async () => {
+    const { ours } = await setup()
+    expect(Result.getOrThrow(Passkey.publicKeyResult(ours.publicKey.bytes))).toEqual(ours.publicKey)
+    const notAPoint = ours.publicKey.bytes.slice()
+    notAPoint[0] = 0x05
+    expect(Result.isFailure(Passkey.publicKeyResult(notAPoint))).toBe(true)
   })
 
   test("high-S assertions are normalized like @mysten/sui (which verifies low-S only)", async () => {

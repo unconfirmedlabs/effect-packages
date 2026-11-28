@@ -162,7 +162,7 @@ const ADDRESS = /^0x[0-9a-f]{64}$/
 
 /** A 32-byte account address / object id, as normalized `0x` + 64 lowercase hex. */
 export const Address = /* @__PURE__ */ withLayout(
-  /* @__PURE__ */ Schema.String.check(/* @__PURE__ */ Schema.isPattern(ADDRESS)).pipe(/* @__PURE__ */ Schema.brand("SuiAddress")),
+  /* @__PURE__ */ Schema.String.check(/* @__PURE__ */ Schema.isPattern(ADDRESS)).pipe(/* @__PURE__ */ Schema.brand("Address")),
   { _tag: "address" },
   LEAF
 )
@@ -913,23 +913,18 @@ export const encodeSync = <T, E>(schema: Schema.Codec<T, E>) => {
   return (value: T): Uint8Array => Result.getOrThrow(f(value))
 }
 
-/**
- * Parse bytes, rejecting trailing bytes, then decode through the schema. A
- * schema made only of this module's schemas skips the schema pass: the reader
- * already checks what it would.
- */
-export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
+/** Read one value from `r`, then decode it through the schema (`whole`: no trailing bytes). */
+const reader = <T, E>(schema: Schema.Codec<T, E>) => {
   const layout = layoutOf(schema)
   const decodeSchema = Schema.decodeUnknownResult(schema as any)
   let fast: boolean | undefined
   let codec: Codec | undefined
-  return (bytes: Uint8Array): Result.Result<T, BcsDecodeError | Schema.SchemaError> => {
+  return (r: Reader, whole: boolean): Result.Result<T, BcsDecodeError | Schema.SchemaError> => {
     let raw: unknown
-    const r = new Reader(bytes)
     try {
       raw = (codec ??= compile(layout)).read(r)
-      if (r.pos !== bytes.length) {
-        return Result.fail(new BcsDecodeError({ message: `${bytes.length - r.pos} trailing bytes`, offset: r.pos }))
+      if (whole && r.pos !== r.buf.length) {
+        return Result.fail(new BcsDecodeError({ message: `${r.buf.length - r.pos} trailing bytes`, offset: r.pos }))
       }
     } catch (e) {
       if (e instanceof BcsDecodeError) return Result.fail(e)
@@ -937,6 +932,30 @@ export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
     }
     if ((fast ??= trusted(schema)) && !r.suspect) return Result.succeed(raw as T)
     return decodeSchema(raw) as Result.Result<T, Schema.SchemaError>
+  }
+}
+
+/**
+ * Parse bytes, rejecting trailing bytes, then decode through the schema. A
+ * schema made only of this module's schemas skips the schema pass: the reader
+ * already checks what it would.
+ */
+export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
+  const read = reader(schema)
+  return (bytes: Uint8Array): Result.Result<T, BcsDecodeError | Schema.SchemaError> => read(new Reader(bytes), true)
+}
+
+/**
+ * Decode a value from the start of `bytes` and return it with the bytes after
+ * it (a view, not a copy): read the head of a larger value without spelling
+ * out the rest of its layout. `decode` is the same read that also insists
+ * nothing follows.
+ */
+export const decodePrefix = <T, E>(schema: Schema.Codec<T, E>) => {
+  const read = reader(schema)
+  return (bytes: Uint8Array): Result.Result<{ readonly value: T; readonly rest: Uint8Array }, BcsDecodeError | Schema.SchemaError> => {
+    const r = new Reader(bytes)
+    return Result.map(read(r, false), (value) => ({ value, rest: bytes.subarray(r.pos) }))
   }
 }
 

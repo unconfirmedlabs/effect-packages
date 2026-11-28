@@ -9,11 +9,13 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@unconfirmed/bcs": "workspace:*",
-    "@unconfirmed/sui": "workspace:*",
-    "effect": "4.1.6",
     "@scure/base": "^2.3.0",
     "poseidon-lite": "0.3.0"
+  },
+  "peerDependencies": {
+    "@unconfirmed/bcs": "workspace:^",
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/sui": "3.0.1",

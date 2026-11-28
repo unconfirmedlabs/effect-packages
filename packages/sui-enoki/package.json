@@ -8,11 +8,11 @@
     ".": "./src/index.ts",
     "./*": "./src/*.ts"
   },
-  "dependencies": {
-    "@unconfirmed/bcs": "workspace:*",
-    "@unconfirmed/sui": "workspace:*",
-    "effect": "4.1.6",
-    "@unconfirmed/sui-zklogin": "workspace:*"
+  "peerDependencies": {
+    "@unconfirmed/bcs": "workspace:^",
+    "@unconfirmed/sui": "workspace:^",
+    "@unconfirmed/sui-zklogin": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/enoki": "2.0.1",

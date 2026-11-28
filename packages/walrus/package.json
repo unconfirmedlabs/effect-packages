@@ -10,11 +10,13 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.3.0",
-    "@unconfirmed/bcs": "workspace:*",
-    "@unconfirmed/quorum": "workspace:*",
-    "@unconfirmed/sui": "workspace:*",
-    "@unconfirmed/walrus-wasm": "workspace:*",
-    "effect": "4.1.6"
+    "@unconfirmed/walrus-wasm": "workspace:*"
+  },
+  "peerDependencies": {
+    "@unconfirmed/bcs": "workspace:^",
+    "@unconfirmed/quorum": "workspace:^",
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/sui": "3.0.1",

@@ -26,6 +26,18 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 | `@unconfirmed/walrus-wasm` | Our WebAssembly build of `walrus-core` 1.62.0 with SIMD: RS2 encode/decode, direct per-sliver Merkle roots, BLS12-381; byte-identical to `@mysten/walrus-wasm` 0.3.1 and about 5× faster. Built artifacts committed; `bun run build` reproduces them | — |
 | `@unconfirmed/seal` | Seal: threshold identity-based encryption to key servers registered on Sui (independent and committee), session keys (key or wallet signer, one prompt), `seal_approve` approvals, key fetching over `Quorum` with every key verified, decryption. The crypto core (BLS12-381, Shamir, KDF, DEMs, the encrypted object) is pure and usable offline | `@noble/curves`, `@noble/hashes`, `@scure/base` |
 
+### BCS
+
+`@unconfirmed/bcs` declares BCS layouts as Effect Schemas: one declaration is the TypeScript type, the validator and the codec.
+
+```ts nocheck
+const Head = Bcs.struct({ version: Bcs.u8, packageId: Bcs.Address, id: Bcs.byteVector })
+Bcs.decode(Head)(bytes)          // Result<Head, BcsDecodeError | SchemaError>; trailing bytes are an error
+Bcs.decodePrefix(Head)(bytes)    // Result<{ value, rest }>: the head of a larger value, and the bytes after it
+```
+
+`Bcs.Address` (account addresses and object ids) is a `0x` + 64 lowercase hex string, branded `"Address"`.
+
 ### Passkeys
 
 ```ts
@@ -374,16 +386,33 @@ const keys = yield* PrivateKey.decodeKeystore(json)                       // and
 **Mnemonics** live in `@unconfirmed/sui-mnemonic`, so the BIP39 wordlist never reaches the core. Derivation gives secret keys (the package doesn't depend on the scheme packages), plus an Ed25519 `Signer` shortcut:
 
 ```ts
-import * as Mnemonic from "@unconfirmed/sui-mnemonic"
+import * as Mnemonic from "@unconfirmed/sui-mnemonic/Mnemonic"
+import * as Bip32 from "@unconfirmed/sui-mnemonic/Bip32"
 
 const m = yield* Mnemonic.generate()                                        // 12 words; 24 with generate(24)
 const signer = yield* Mnemonic.ed25519Signer(m)                             // m/44'/784'/0'/0'/0'
-const k1 = yield* Secp256k1.fromSecretKey(yield* Mnemonic.secp256k1SecretKey(m, { account: 1 }))  // m/54'/784'/1'/0/0
+const k1 = yield* Secp256k1.fromSecretKey(yield* Bip32.secp256k1SecretKey(m, { account: 1 }))     // m/54'/784'/1'/0/0
 const seed = yield* Mnemonic.toSeed(m)                                      // derive many keys without re-running PBKDF2
 const pq = yield* MlDsa65.fromSecretKey(yield* Mnemonic.mldsa65SecretKey(seed, "m/94'/784'/0'/0'/3'"))
 ```
 
-Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`.
+Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`. Ed25519 and ML-DSA-65 (SLIP-0010) are in `Mnemonic`, which never imports `@scure/bip32`; Secp256k1/r1 (BIP32) are in `Bip32`. The package root re-exports both, so importing it loads BIP32 in an unbundled runtime (bundlers drop it either way).
+
+**Without Effect.** Derivations that can't wait on anything also come as `…Result`: the same checks, returning Effect's `Result` instead of an `Effect`, for code that only derives keys and addresses. The Effect versions stay (`fromSecretKey` is `Effect.fromResult(fromSecretKeyResult(sk))`); a `…Sync` name, as in `Bcs.encodeSync`, throws instead.
+
+```ts
+import * as Result from "effect/Result"
+import * as PublicIdentifier from "@unconfirmed/sui-zklogin/PublicIdentifier"
+import * as Passkey from "@unconfirmed/sui-passkey"
+
+const ed = Result.getOrThrow(Ed25519.fromSecretKeyResult(sk))             // also Secp256k1/r1.fromSecretKeyResult
+const multi = MultiSig.publicKeyResult({ members: [{ publicKey: ed.publicKey, weight: 1 }], threshold: 1 })
+const zk = Result.map(PublicIdentifier.makeResult(addressSeed, iss), PublicIdentifier.toPublicKey)  // flag 0x05
+const passkey = Passkey.publicKeyResult(storedPasskeyKey)                 // flag 0x06, from the 33-byte compressed key
+const ok = Ed25519.verifyRaw(ed.publicKey.bytes, message, signature)      // over the raw message, as Move's ed25519_verify
+```
+
+`verifyRaw` is for signatures over bytes that aren't a Sui intent message (a Nautilus enclave's, say); transactions and personal messages verify through the schemes.
 
 **ML-DSA-65** (`@unconfirmed/sui-mldsa65`, flag `0x07`) is FIPS 204 post-quantum signing: 1952-byte public keys, 3309-byte signatures, over the same `blake2b256(intentMessage)` the other schemes sign. Install it like any scheme, and it works as a multisig member. Devnet executes both kinds of transaction (`packages/sui-mldsa65/test/live.devnet.test.ts`).
 
@@ -451,6 +480,10 @@ import * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"
 
 The barrels (`import { Address } from "@unconfirmed/sui"`) exist for convenience. Only bundlers with deep scope analysis (Rolldown, Rollup, Webpack 5+; Bun in practice) shake them well. esbuild doesn't.
 
+**One copy of Effect.** `effect` is a peer dependency (`^4.1.6`) of every package, and so are the `@unconfirmed/*` packages whose services, schemas and errors cross package boundaries (`bcs`, `sui`, `quorum`, `sui-graphql`, `sui-zklogin`): a second copy would make `Context` services and tagged errors from one copy invisible to the other. The app installs them once.
+
+**Strict consumers.** The packages ship their `.ts` sources, so they compile under the consumer's flags. `bun run typecheck:strict` (in CI) checks every package's `src/` with `noUnusedLocals` and `noUnusedParameters` on top of the base config's `strict`, `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`.
+
 ## Conventions
 
 Every layer uses the same option names for the same thing. New packages should follow them.
@@ -492,10 +525,13 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 95 / 41 | — |
 | zkLogin: `ZkLoginAddress.fromJwt` | 148 / 72 | 148 / 72 | 145 / 72 | — |
 | zkLogin: `ZkLogin.signer` | 139 / 49 | 138 / 49 | 140 / 49 | — |
+| Mnemonic: Ed25519 signer (`Mnemonic`) | 136 / 52 | 138 / 53 | 135 / 50 | — |
+| Mnemonic: Secp256k1 secret key (`Bip32`) | 148 / 56 | 149 / 56 | 146 / 54 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only, our WASM glue included. Programs that read or write from the nodes also fetch one WASM asset, which no bundler counts: ours is 261 KB / 98 KB gzip (SIMD build; the scalar fallback is 248 KB), `@mysten/walrus`'s 349 KB / 182 KB gzip. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
 - **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 86 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (5 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 58 KB, the RPCs of the services Seal doesn't use.
+- **Mnemonics.** The report fails if the Ed25519 program ships `@scure/bip32` under any bundler; BIP32 (Secp256k1/r1 derivation) adds ~12 KB / 4 KB gzip.
 - **With barrel imports in the app,** esbuild grows by 4–84 KB per program (24–60 KB for most; `--named`); before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.
@@ -510,6 +546,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 ```sh
 bun install
 bun run typecheck     # also compiles examples/: every ```ts README block is checked against them (packages/test-support/test/readme.test.ts)
+bun run typecheck:strict  # package src/ only, under the consumer-strict flags (noUnusedLocals, noUnusedParameters)
 bun run test          # offline: parity with @mysten/sui (BCS, built tx bytes, signatures, multisig)
 bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multisig / wallet-standard executions
 bun run codegen       # protoc -> descriptor chunks + types from packages/sui/proto/src (sui-apis)

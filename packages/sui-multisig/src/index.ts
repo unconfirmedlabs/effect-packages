@@ -91,7 +91,6 @@ export class InvalidMultiSig extends Schema.TaggedError<InvalidMultiSig>()("Inva
   }
 }
 
-
 /**
  * Why a member's key bytes can't be what its flag says, or `undefined`. A
  * zkLogin identifier is `len(iss) || iss || seed` with a 1 to 32-byte seed
@@ -107,9 +106,9 @@ const keyProblem = (v: (typeof VARIANTS)[number], bytes: Uint8Array): string | u
   return seed >= 1 && seed <= 32 ? undefined : "zkLogin identifier must be len(iss) || iss || a 1 to 32-byte seed"
 }
 
-/** Validate a member set and threshold. */
-export const publicKey = (input: MultiSigPublicKeyInput): Effect.Effect<MultiSigPublicKey, InvalidMultiSig> => {
-  const fail = (reason: string) => Effect.fail(new InvalidMultiSig({ reason }))
+/** Validate a member set and threshold, synchronously: a `Result` instead of an `Effect`. */
+export const publicKeyResult = (input: MultiSigPublicKeyInput): Result.Result<MultiSigPublicKey, InvalidMultiSig> => {
+  const fail = (reason: string) => Result.fail(new InvalidMultiSig({ reason }))
   const { members, threshold } = input
   if (members.length === 0 || members.length > MAX_MEMBERS) return fail(`1 to ${MAX_MEMBERS} members, got ${members.length}`)
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 0xffff) return fail(`invalid threshold ${threshold}`)
@@ -126,8 +125,12 @@ export const publicKey = (input: MultiSigPublicKeyInput): Effect.Effect<MultiSig
     total += m.weight
   }
   if (threshold > total) return fail(`threshold ${threshold} exceeds total weight ${total}`)
-  return Effect.succeed(input as MultiSigPublicKey)
+  return Result.succeed(input as MultiSigPublicKey)
 }
+
+/** Validate a member set and threshold. */
+export const publicKey = (input: MultiSigPublicKeyInput): Effect.Effect<MultiSigPublicKey, InvalidMultiSig> =>
+  Effect.fromResult(publicKeyResult(input))
 
 const toBcs = (pk: MultiSigPublicKey): typeof MultiSigPublicKeyBcs.Type => ({
   pkMap: pk.members.map((m) => ({ pubKey: { _tag: byFlag.get(m.publicKey.flag)!.name, value: m.publicKey.bytes } as any, weight: m.weight })),
@@ -178,7 +181,7 @@ export const scheme: SignatureScheme.SignatureScheme = {
       const { sigs, bitmap, multisigPk } = parsed.success
       const pk = fromBcs(multisigPk)
       // Validators reject what `publicKey` rejects (threshold 0, zero weights, duplicates, > 10 members).
-      const valid = yield* Effect.result(publicKey(pk))
+      const valid = publicKeyResult(pk)
       if (Result.isFailure(valid)) return yield* invalid(`invalid multisig public key: ${valid.failure.reason}`)
       const signers = indices(bitmap)
       // Stricter than validators on purpose. Sui's `verify_claims` zips signatures with bitmap indices

@@ -14,7 +14,9 @@
     "@unconfirmed/sui-secp256k1": "workspace:*",
     "@unconfirmed/sui-secp256r1": "workspace:*",
     "@unconfirmed/sui-wallet": "workspace:*",
-    "@wallet-standard/base": "^1.1.1",
-    "effect": "4.1.6"
+    "@wallet-standard/base": "^1.1.1"
+  },
+  "peerDependencies": {
+    "effect": "^4.1.6"
   }
 }

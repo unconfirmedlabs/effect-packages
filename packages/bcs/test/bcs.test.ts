@@ -67,6 +67,16 @@ describe("non-canonical and malformed bytes are a typed BcsDecodeError", () => {
   })
 })
 
+test("decodePrefix reads the head of a larger value and returns the rest; decode still refuses it", () => {
+  const Full = Bcs.struct({ version: Bcs.u8, id: Bcs.byteVector, tail: Bcs.vector(Bcs.u64) })
+  const Head = Bcs.struct({ version: Bcs.u8, id: Bcs.byteVector })
+  const bytes = Bcs.encodeSync(Full)({ version: 0, id: new Uint8Array([1, 2]), tail: [5n] })
+  const { value, rest } = Result.getOrThrow(Bcs.decodePrefix(Head)(bytes))
+  expect(value).toEqual({ version: 0, id: new Uint8Array([1, 2]) })
+  expect(Result.getOrThrow(Bcs.decode(Bcs.vector(Bcs.u64))(rest))).toEqual([5n])
+  expect(decodeError(Bcs.decode(Head)(bytes)).message).toBe("9 trailing bytes")
+})
+
 describe("vector lengths are bounded by the input (CORE-4)", () => {
   test("a 5-byte length prefix for vector<u64> fails before allocating", () => {
     const before = process.memoryUsage().rss

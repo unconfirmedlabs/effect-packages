@@ -19,6 +19,9 @@ export const scheme = ecdsa.scheme
 /** A signer over a 32-byte secret key. */
 export const fromSecretKey = ecdsa.fromSecretKey
 
+/** `fromSecretKey`, synchronously: a `Result` instead of an `Effect`. */
+export const fromSecretKeyResult = ecdsa.fromSecretKeyResult
+
 /** A fresh random 32-byte secret key, to keep or export (`PrivateKey.encode({ flag: FLAG, secretKey })`). */
 export const generateSecretKey = ecdsa.generateSecretKey
 

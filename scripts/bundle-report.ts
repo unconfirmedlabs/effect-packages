@@ -212,6 +212,15 @@ const programs: Record<string, string> = {
     ${I("@unconfirmed/sui", "Ed25519")}
     ${I("@unconfirmed/sui-zklogin", "ZkLogin")}
     Effect.runPromise(Effect.flatMap(Ed25519.generate, (ephemeral) => ZkLogin.signer({ ephemeral, inputs: JSON.parse(process.argv[2]), maxEpoch: 10n }))).then(console.log)`,
+  // Ed25519 is SLIP-0010; BIP32 (secp256k1/r1 derivation) must stay out.
+  "mnemonic: Ed25519 signer": `
+    ${E("Effect")}
+    import * as Mnemonic from "@unconfirmed/sui-mnemonic${style === "named" ? "" : "/Mnemonic"}"
+    Effect.runPromise(Mnemonic.ed25519Signer(process.argv[2])).then((s) => console.log(s.address))`,
+  "mnemonic: Secp256k1 secret key (BIP32)": `
+    ${E("Effect")}
+    import * as Bip32 from "@unconfirmed/sui-mnemonic${style === "named" ? "" : "/Bip32"}"
+    Effect.runPromise(Bip32.secp256k1SecretKey(process.argv[2])).then(console.log)`,
   "mysten: verify a signature": `
     import { verifyPersonalMessageSignature } from "@mysten/sui/verify"
     verifyPersonalMessageSignature(new Uint8Array([1]), "AA==", { offline: true }).then(console.log)`,
@@ -279,6 +288,9 @@ const sealForbidden: Record<string, ReadonlyArray<string>> = {
 }
 const violations: Array<string> = []
 
+/** BIP32's master-key HMAC key: present iff @scure/bip32 shipped. */
+const bip32Forbidden = new Set(["mnemonic: Ed25519 signer"])
+
 const bucket = (path: string) => {
   if (/[/\\]effect@|node_modules[/\\]effect[/\\]/.test(path)) return "effect"
   if (/@noble[/\\]curves[/\\](bls12-381|abstract[/\\](bls|tower|hash-to-curve))/.test(path)) return "noble bls12-381"
@@ -334,11 +346,14 @@ for (const [name, source] of Object.entries(programs)) {
     ? [...new Set([bunCode, esCode, rdCode].map(markers))].join(" | ")
     : name.includes("seal")
     ? [...new Set([bunCode, esCode, rdCode].map(sealMarkers))].join(" | ")
+    : name.startsWith("mnemonic")
+    ? [...new Set([bunCode, esCode, rdCode].map((c) => (c.includes("Bitcoin seed") ? "bip32" : "no bip32")))].join(" | ")
     : ""
   for (const [bundler, code] of [["bun", bunCode], ["esbuild", esCode], ["rolldown", rdCode]] as const) {
     for (const marker of sealForbidden[name] ?? []) {
       if (sealMarkers(code).split(" + ").includes(marker)) violations.push(`${name} (${bundler}) contains ${marker}`)
     }
+    if (bip32Forbidden.has(name) && code.includes("Bitcoin seed")) violations.push(`${name} (${bundler}) contains bip32`)
   }
   console.log(`${name.padEnd(44)} ${cell(bunCode)} ${cell(esCode)} ${cell(rdCode)}  ${ships}`)
 
@@ -368,8 +383,8 @@ console.log("\nKB minified / KB minified+gzip, JS only (all chunks)")
   )
 }
 if (violations.length > 0) {
-  console.error(`\nSeal containment checks failed:\n${violations.map((v) => `  ${v}`).join("\n")}`)
+  console.error(`\nContainment checks failed:\n${violations.map((v) => `  ${v}`).join("\n")}`)
   process.exitCode = 1
 } else {
-  console.log("Seal containment checks (seal.md §6.5): passed under all three bundlers")
+  console.log("Containment checks (Seal, seal.md §6.5; Ed25519 mnemonic without BIP32): passed under all three bundlers")
 }
