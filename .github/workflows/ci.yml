@@ -21,5 +21,5 @@ jobs:
       - run: bun run typecheck:strict
       # Offline only: no SUI_LIVE, WALRUS_LIVE or SEAL_LIVE.
       - run: bun test packages/
-      # Fails on a Seal containment violation (seal.md §6.5).
+      # Fails on a containment violation: Seal (seal.md §6.5), or BIP32 in the Ed25519 mnemonic program.
       - run: bun scripts/bundle-report.ts

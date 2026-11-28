@@ -525,10 +525,13 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 | zkLogin: `Nonce.generate` | 97 / 40 | 98 / 41 | 95 / 41 | — |
 | zkLogin: `ZkLoginAddress.fromJwt` | 148 / 72 | 148 / 72 | 145 / 72 | — |
 | zkLogin: `ZkLogin.signer` | 139 / 49 | 138 / 49 | 140 / 49 | — |
+| Mnemonic: Ed25519 signer (`Mnemonic`) | 136 / 52 | 138 / 53 | 135 / 50 | — |
+| Mnemonic: Secp256k1 secret key (`Bip32`) | 148 / 56 | 149 / 56 | 146 / 54 | — |
 
 - **zkLogin.** The nonce and the default address-seed path load only the Poseidon arities the circuit uses (1, 2, 4, 5) from `poseidon-lite` subpaths; `@mysten/sui` imports all sixteen (~590 KB minified). The generic `Poseidon.hash` still loads every arity, and so does a non-default claim length (pass `poseidon: Poseidon.hashUnsafe`).
 - **Walrus.** JS only, our WASM glue included. Programs that read or write from the nodes also fetch one WASM asset, which no bundler counts: ours is 261 KB / 98 KB gzip (SIMD build; the scalar fallback is 248 KB), `@mysten/walrus`'s 349 KB / 182 KB gzip. The report checks each Walrus bundle for the WASM glue and the quorum code: the aggregator-only and pure-core programs contain neither, under all three bundlers and also with barrel imports. `@mysten/*` is `@mysten/sui` 3.0.1 / `@mysten/walrus` 2.0.1.
 - **Seal.** The report checks each Seal bundle for BLS12-381, the quorum code and `HttpClient`. Parsing an encrypted object ships none of them (BCS and `Schema` only). Encrypting with pinned keys ships BLS12-381 (noble, ~80 KB) but neither `HttpClient` nor the quorum, under all three bundlers. The full program, with only the `Objects` and `Packages` gRPC capabilities Seal needs, is 86 KB smaller than `@mysten/seal` 2.0.1 with `@mysten/sui` 3.0.1 (5 KB gzip, Rolldown); providing `SuiGrpc.layer` instead adds about 58 KB, the RPCs of the services Seal doesn't use.
+- **Mnemonics.** The report fails if the Ed25519 program ships `@scure/bip32` under any bundler; BIP32 (Secp256k1/r1 derivation) adds ~12 KB / 4 KB gzip.
 - **With barrel imports in the app,** esbuild grows by 4–84 KB per program (24–60 KB for most; `--named`); before the library itself switched to namespace imports, it grew ~3×.
 - **The Effect runtime dominates** (73–95% of our bundles). Measured with Rolldown:
   - `Effect` + `Layer`: 34 KB min / 12 KB gzip.

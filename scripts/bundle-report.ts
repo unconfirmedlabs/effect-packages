@@ -383,8 +383,8 @@ console.log("\nKB minified / KB minified+gzip, JS only (all chunks)")
   )
 }
 if (violations.length > 0) {
-  console.error(`\nSeal containment checks failed:\n${violations.map((v) => `  ${v}`).join("\n")}`)
+  console.error(`\nContainment checks failed:\n${violations.map((v) => `  ${v}`).join("\n")}`)
   process.exitCode = 1
 } else {
-  console.log("Seal containment checks (seal.md §6.5): passed under all three bundlers")
+  console.log("Containment checks (Seal, seal.md §6.5; Ed25519 mnemonic without BIP32): passed under all three bundlers")
 }
