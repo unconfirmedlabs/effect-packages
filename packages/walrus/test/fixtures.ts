@@ -48,6 +48,7 @@ export const packagesLayer = (fixture: Fixture) =>
         return f === undefined
           ? Effect.fail(new RpcError({ method: "GetFunction", code: "NOT_FOUND", message: `${t.module}::${t.function}` }))
           : Effect.succeed(f)
-      }
+      },
+      getModules: () => Effect.die("unused")
     })
   )

@@ -138,13 +138,14 @@ const world = (w: World) => {
       },
       listOwned: () => Stream.empty
     }),
-    Layer.succeed(Packages.Packages, { getFunction: () => Effect.succeed({ isEntry: false, parameters: [] }) }),
+    Layer.succeed(Packages.Packages, { getFunction: () => Effect.succeed({ isEntry: false, parameters: [] }), getModules: () => Effect.die("unused") }),
     Layer.succeed(Coins.Coins, {
       getBalance: (owner, coinType = TypeTag.SUI) => {
         const t = TypeTag.normalizeString(coinType)
         const ab = w.balances[`${owner}|${t}`] ?? 0n
         return Effect.succeed({ coinType: t, total: ab, addressBalance: ab, coinBalance: 0n })
       },
+      listBalances: () => Stream.empty,
       list: () => Stream.empty
     })
   )

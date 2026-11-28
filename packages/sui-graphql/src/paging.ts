@@ -1,6 +1,6 @@
 /**
  * Reading the rest of a transaction's nested connections (object changes,
- * events) by digest, after the first page came with the effects. Shared by
+ * events, balance changes) by digest, after the first page came with the effects. Shared by
  * the Transactions and CheckpointData layers; each includes these operations
  * in its own group.
  */
@@ -11,6 +11,8 @@ import * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import { RpcError } from "@unconfirmed/sui/RpcError"
 import {
+  BALANCE_CHANGE_FIELDS,
+  BalanceChangeNode,
   call,
   EVENT_CONTENT_FIELDS,
   EventContentNode,
@@ -47,7 +49,25 @@ export const GetTransactionEvents = GraphQL.query("GetTransactionEvents", {
   })
 })
 
-type PageInfo = { readonly hasNextPage: boolean; readonly endCursor: string | null }
+/** The largest page the server allows for `TransactionEffects.balanceChanges`. */
+export const BALANCE_CHANGES_PAGE = 50
+
+export const BalanceChangesPage = Schema.Struct({
+  pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean, endCursor: Schema.NullOr(Schema.String) }),
+  nodes: Schema.Array(BalanceChangeNode)
+})
+export const BALANCE_CHANGES_PAGE_FIELDS = `pageInfo{hasNextPage endCursor} nodes{${BALANCE_CHANGE_FIELDS}}`
+
+export const GetBalanceChanges = GraphQL.query("GetBalanceChanges", {
+  document: "query GetBalanceChanges($digest:String!,$after:String){transactionEffects(digest:$digest){" +
+    `balanceChanges(first:${BALANCE_CHANGES_PAGE},after:$after){${BALANCE_CHANGES_PAGE_FIELDS}}}}`,
+  variables: { digest: Schema.String, after: Schema.String },
+  result: Schema.Struct({
+    transactionEffects: Schema.NullOr(Schema.Struct({ balanceChanges: Schema.NullOr(BalanceChangesPage) }))
+  })
+})
+
+type PageInfo ={ readonly hasNextPage: boolean; readonly endCursor: string | null }
 
 class NotIndexed {
   readonly _tag = "NotIndexed"

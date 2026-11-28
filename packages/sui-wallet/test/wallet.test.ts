@@ -220,8 +220,8 @@ describe("the wallet as a TransactionSigner", () => {
     const rec = recorder()
     const unused = Layer.mergeAll(
       Layer.succeed(Objects.Objects, { get: () => Effect.die("unused"), listOwned: () => Stream.die("unused") }),
-      Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused") }),
-      Layer.succeed(Coins.Coins, { getBalance: () => Effect.die("unused"), list: () => Stream.die("unused") }),
+      Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused"), getModules: () => Effect.die("unused") }),
+      Layer.succeed(Coins.Coins, { getBalance: () => Effect.die("unused"), listBalances: () => Stream.die("unused"), list: () => Stream.die("unused") }),
       Layer.succeed(Chain.Chain, { info: Effect.die("unused"), referenceGasPrice: Effect.die("unused") })
     )
     const fixedGas = { gasPrice: 1000n, gasBudget: 5_000_000n, payment: Resolve.fixed([gasRef]), expiration: { _tag: "None" } } as const

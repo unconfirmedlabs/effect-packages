@@ -2,15 +2,17 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Request from "effect/Request"
 import * as RequestResolver from "effect/RequestResolver"
-import { type FunctionTarget, type MoveFunction, Packages, type Parameter, type Reference } from "../Packages.ts"
-import type { RpcError } from "../RpcError.ts"
+import { type FunctionTarget, type MoveFunction, PackageNotFound, Packages, type Parameter, type Reference } from "../Packages.ts"
+import { RpcError } from "../RpcError.ts"
 import type * as P from "./generated/proto.ts"
-import { convert } from "./convert.ts"
+import { convert, MODULES_PATHS } from "./convert.ts"
 import * as Rpc from "./generated/lean.ts"
 import { successByKey } from "./cache.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 
 class GetFunction extends Request.Class<FunctionTarget, MoveFunction, RpcError> {}
+
+const GET_OBJECT = Rpc.LedgerService_GetObject.path
 
 const REFERENCE: Record<number, Reference> = { 1: "Immutable", 2: "Mutable" }
 
@@ -73,6 +75,23 @@ export const layer: Layer.Layer<Packages, never, GrpcWeb> = /* @__PURE__ */ Laye
         cache(
           `${target.package}::${target.module}::${target.function}`,
           Effect.request(new GetFunction({ package: target.package, module: target.module, function: target.function }), resolver)
+        ),
+      // `GetPackage` lists modules without their contents; `GetObject` has them.
+      getModules: (packageId) =>
+        grpc.unary(Rpc.LedgerService_GetObject, { object_id: packageId, read_mask: { paths: MODULES_PATHS } }).pipe(
+          Effect.catchIf((e) => e.code === "NOT_FOUND", () => Effect.fail(new PackageNotFound({ packageId }))),
+          Effect.flatMap((r) => {
+            const modules = r.object?.package?.modules
+            if (modules === undefined) {
+              return Effect.fail(new RpcError({ method: GET_OBJECT, code: "INVALID_ARGUMENT", message: `${packageId} is not a package` }))
+            }
+            return convert(GET_OBJECT, () =>
+              new Map(modules.map((m) => {
+                if (m.name === undefined || m.contents === undefined) throw new Error("module without name or contents")
+                return [m.name, m.contents] as const
+              })))
+          }),
+          Effect.withSpan("Packages.getModules", { attributes: { packageId } })
         )
     })
   })

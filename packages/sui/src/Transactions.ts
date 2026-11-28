@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect"
 import * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import type { Address } from "./Address.ts"
+import type { TransactionEvent } from "./Events.ts"
 import type { Owner } from "./Objects.ts"
 import type { UnresolvedObject } from "./Ptb.ts"
 import type { RpcError } from "./RpcError.ts"
@@ -62,11 +63,38 @@ export interface ChangedObject {
   readonly inputOwner: Owner | undefined
 }
 
+/** A change in an owner's balance of one coin type, coins and address balance together. */
+export interface BalanceChange {
+  readonly address: Address
+  /** The coin type, e.g. `0x…2::sui::SUI`. */
+  readonly coinType: string
+  /** Signed: negative when the balance went down. */
+  readonly amount: bigint
+}
+
 export interface Effects {
   readonly digest: string
   readonly status: Status
   readonly gasUsed: GasUsed
   readonly changedObjects: ReadonlyArray<ChangedObject>
+  /**
+   * The checkpoint the transaction is in, and that checkpoint's timestamp.
+   * Set by `get`. `execute` answers before the transaction is checkpointed,
+   * so they are absent there (read it again with `waitFor` / `get`).
+   */
+  readonly checkpoint?: bigint
+  readonly timestampMs?: bigint
+  /** Its events in emission order. Present (maybe empty) only when asked for with `include: ["events"]`. */
+  readonly events?: ReadonlyArray<TransactionEvent>
+  /** Present (maybe empty) only when asked for with `include: ["balanceChanges"]`. */
+  readonly balanceChanges?: ReadonlyArray<BalanceChange>
+}
+
+/** Parts of `Effects` that make a larger response, read only on request. */
+export type Include = "events" | "balanceChanges"
+
+export interface IncludeOptions {
+  readonly include?: ReadonlyArray<Include>
 }
 
 export interface Simulation {
@@ -125,9 +153,11 @@ export class Transactions extends /* @__PURE__ */ Context.Service<Transactions, 
   /** Submit signed bytes. A Move abort is a successful submission with a `Failure` status. */
   readonly execute: (
     txBytes: Uint8Array,
-    signatures: ReadonlyArray<Uint8Array>
+    signatures: ReadonlyArray<Uint8Array>,
+    options?: IncludeOptions
   ) => Effect.Effect<Effects, RpcError | ExecutedEffectsIncomplete>
-  readonly get: (digest: string) => Effect.Effect<Effects, TransactionNotFound | RpcError>
+  /** A transaction's effects, with its checkpoint and timestamp. */
+  readonly get: (digest: string, options?: IncludeOptions) => Effect.Effect<Effects, TransactionNotFound | RpcError>
   /**
    * Complete an unresolved transaction on the node in one simulation, with
    * checks and gas selection on: object versions, shared-object mutability,
@@ -148,7 +178,7 @@ export class TransactionWaitTimeout extends /* @__PURE__ */ Schema.TaggedError<T
   }
 }
 
-export interface WaitForOptions {
+export interface WaitForOptions extends IncludeOptions {
   /** Overall bound. Default 60 seconds. */
   readonly timeout?: Duration.Input
   /**
@@ -170,7 +200,7 @@ export const waitFor = (
 ): Effect.Effect<Effects, TransactionWaitTimeout | TransactionNotFound | RpcError, Transactions> => {
   const timeout = options?.timeout ?? "60 seconds"
   return Effect.flatMap(Effect.service(Transactions), (t) =>
-    t.get(digest).pipe(
+    t.get(digest, options).pipe(
       Effect.retry({ while: (e) => e._tag === "TransactionNotFound", schedule: options?.retry ?? Schedule.spaced("500 millis") }),
       Effect.timeoutOrElse({
         duration: timeout,

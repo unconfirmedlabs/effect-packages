@@ -19,7 +19,15 @@
  * services. The full handles (`generated/rpc.ts`, exported as `SuiGrpc.Rpc`)
  * are unaffected.
  */
-import { CHECKPOINT_PATHS, EFFECTS_PATHS, EVENT_PATHS, OBJECT_MASK } from "../src/grpc/convert.ts"
+import {
+  CHECKPOINT_PATHS,
+  EFFECTS_PATHS,
+  EVENT_PATHS,
+  INCLUDE_PATHS,
+  LANDED_PATHS,
+  MODULES_PATHS,
+  OBJECT_MASK
+} from "../src/grpc/convert.ts"
 import { RESOLVE_PATHS } from "../src/grpc/transaction.ts"
 
 export interface LeanMethod {
@@ -37,6 +45,9 @@ const CHECKPOINT_IDS = ["sequence_number", "digest"]
 const DYNAMIC_FIELD = ["kind", "parent", "field_id", "name", "value", "value_type", "child_id"]
 
 const union = (...lists: Array<ReadonlyArray<string>>) => [...new Set(lists.flat())]
+
+/** `Transactions` `include` (events, balance changes). */
+const INCLUDED = Object.values(INCLUDE_PATHS).flat()
 
 export const LEAN: Record<string, LeanMethod> = {
   LedgerService_GetServiceInfo: {},
@@ -65,10 +76,15 @@ export const LEAN: Record<string, LeanMethod> = {
   },
   TransactionExecutionService_ExecuteTransaction: {
     root: "transaction",
-    mask: EFFECTS_PATHS,
+    // `execute` doesn't ask for LANDED_PATHS (the node answers before the
+    // checkpoint); allowing them lets it share `get`'s descriptors.
+    mask: union(EFFECTS_PATHS, LANDED_PATHS, INCLUDED),
     request: ["transaction.bcs", "signatures.bcs", "read_mask"]
   },
-  LedgerService_GetTransaction: { root: "transaction", mask: EFFECTS_PATHS },
+  LedgerService_GetTransaction: { root: "transaction", mask: union(EFFECTS_PATHS, LANDED_PATHS, INCLUDED) },
+  /** `Packages.getModules`. */
+  LedgerService_GetObject: { root: "object", mask: MODULES_PATHS, request: ["object_id", "read_mask"] },
+  StateService_ListBalances: {},
   LedgerService_GetCheckpoint: { root: "checkpoint", mask: CHECKPOINT_PATHS },
   LedgerService_ListCheckpoints: { root: "checkpoint", mask: union(CHECKPOINT_PATHS, CHECKPOINT_IDS) },
   SubscriptionService_SubscribeCheckpoints: { root: "checkpoint", mask: union(CHECKPOINT_PATHS, CHECKPOINT_IDS) },

@@ -216,6 +216,21 @@ SuiGrpc.layer({ url })                                  // all nine, adding Chec
 
 Prefer `layerCore` or an explicit composition: a program ships the RPCs of the layers it provides, and `SuiGrpc.layer` adds about 28 KB of checkpoint, event and dynamic-field code that a transaction never calls.
 
+Effects carry status, gas and changed objects; a transaction's events and balance changes come on request (`include`), so the default read stays small. gRPC and GraphQL implement all of these:
+
+```ts
+const effects = yield* Tx.run(recipe, { signer, include: ["events", "balanceChanges"] })  // also Tx.execute, Transactions.execute / get
+const sales = yield* Effect.forEach(effects.events ?? [], Events.decode(RecordSold))
+const landed = yield* Transactions.waitFor(effects.digest)               // get also sets checkpoint and timestampMs
+
+const coins = yield* Coins.Coins
+const balances = yield* Stream.runCollect(coins.listBalances(owner))  // every coin type, address-balance-only ones too
+const everyCoin = coins.list(owner)                                   // every Coin<T>; coins.list(owner, type) for one T
+const modules = yield* (yield* Packages.Packages).getModules(packageId)  // name -> module bytes, read from the object
+```
+
+`execute` answers before the transaction is in a checkpoint, so only `get` (and `waitFor`) set `checkpoint` and `timestampMs`. Events from a transaction are `Events.TransactionEvent`s: an `Event` without the checkpoint position, which `Effects` carries.
+
 **2. Signature schemes are plugins.** The core dispatches on the flag byte but knows only the schemes you install:
 
 ```ts
@@ -539,6 +554,7 @@ Every layer uses the same option names for the same thing. New packages should f
 - **Retries: `retry?: Schedule.Schedule<unknown, E>`.** This is the schedule for another attempt. Which errors are retried is the operation's own decision (e.g. `StorageNode.retryable`). A generic combinator can't know which errors to retry, so it also takes `retryWhile?: (error: E) => boolean` (`Quorum`). A retry of one particular step gets a prefix (`CheckpointData.follow`'s `gapRetry`). The lifecycle's re-send of signed bytes is a policy (`SubmitConfig.resubmit`), not a per-call option.
 - **Headers: `headers?: Readonly<Record<string, string>>`.** These are sent with every request by each layer that has one configured endpoint (the layers above, plus `SuiGraphQL`). The layer's own headers (an API key, the content type) take precedence. Layers that fan out to many servers (storage nodes, Seal key servers) have no `headers` option, since a credential would reach every server. Seal sets `apiKeyName` / `apiKey` for each server instead.
 - **Tracer propagation: `tracerPropagation?: boolean`, default `false` everywhere.** Spans are recorded either way. The `traceparent` / `b3` headers are sent only on request, because browsers preflight them and providers with a strict CORS allow-list refuse them.
+- **Optional response parts: `include?: ReadonlyArray<…>`.** A read whose answer can be much larger than the common path needs reads the rest only on request (`Transactions.get` / `execute`, `Tx.execute` / `run`: `["events", "balanceChanges"]`). What was asked for is always present, empty when there is none.
 - **Chain integers keep their width.** A u64 on chain (Sui epochs including `maxEpoch`, object versions, MIST amounts) is a `bigint` in the API, even where a wire format carries a JSON number. Smaller integers, such as Walrus epochs (u32), are `number`.
 
 ## What ships (`bun scripts/bundle-report.ts`)

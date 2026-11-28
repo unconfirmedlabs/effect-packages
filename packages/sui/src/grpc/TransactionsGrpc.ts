@@ -2,10 +2,12 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { transactionDigest } from "../Hash.ts"
 import { ExecutedEffectsIncomplete, TransactionNotFound, Transactions } from "../Transactions.ts"
-import { convert, EFFECTS_PATHS, effects } from "./convert.ts"
+import { convert, EFFECTS_PATHS, effects, LANDED_PATHS, landed, maskWith } from "./convert.ts"
 import * as Rpc from "./generated/lean.ts"
 import { GrpcWeb } from "./GrpcWeb.ts"
 import { needsGasSelection, RESOLVE_PATHS, toProto } from "./transaction.ts"
+
+const GET_PATHS = [...EFFECTS_PATHS, ...LANDED_PATHS]
 
 const prefixed = (prefix: string) => EFFECTS_PATHS.map((p) => (p === "digest" ? `${prefix}digest` : `${prefix}${p}`))
 
@@ -35,18 +37,18 @@ export const layer: Layer.Layer<Transactions, never, GrpcWeb> = /* @__PURE__ */ 
             ),
             Effect.withSpan("Transactions.simulate")
           ),
-      execute: (txBytes, signatures) =>
+      execute: (txBytes, signatures, options) =>
         grpc
           .unary(Rpc.TransactionExecutionService_ExecuteTransaction, {
             transaction: { bcs: { value: txBytes } },
             signatures: signatures.map((s) => ({ bcs: { value: s } })),
-            read_mask: { paths: EFFECTS_PATHS }
+            read_mask: { paths: maskWith(EFFECTS_PATHS, options?.include) }
           })
           .pipe(
             // The node accepted the transaction: a response we can't read is
             // "executed, reconcile by digest", not a Move failure or a transport error.
             Effect.flatMap((r) =>
-              convert(executePath, () => effects(r.transaction)).pipe(
+              convert(executePath, () => effects(r.transaction, undefined, options?.include)).pipe(
                 Effect.mapError((e) => new ExecutedEffectsIncomplete({ digest: transactionDigest(txBytes), message: e.message }))
               )
             ),
@@ -70,9 +72,14 @@ export const layer: Layer.Layer<Transactions, never, GrpcWeb> = /* @__PURE__ */ 
             ),
             Effect.withSpan("Transactions.resolve")
           ),
-      get: (digest) =>
-        grpc.unary(Rpc.LedgerService_GetTransaction, { digest, read_mask: { paths: EFFECTS_PATHS } }).pipe(
-          Effect.flatMap((r) => convert(Rpc.LedgerService_GetTransaction.path, () => effects(r.transaction))),
+      get: (digest, options) =>
+        grpc.unary(Rpc.LedgerService_GetTransaction, { digest, read_mask: { paths: maskWith(GET_PATHS, options?.include) } }).pipe(
+          Effect.flatMap((r) =>
+            convert(Rpc.LedgerService_GetTransaction.path, () => ({
+              ...effects(r.transaction, undefined, options?.include),
+              ...landed(r.transaction)
+            }))
+          ),
           Effect.catchIf((e) => e.code === "NOT_FOUND", () => Effect.fail(new TransactionNotFound({ digest }))),
           Effect.withSpan("Transactions.get", { attributes: { digest } })
         )

@@ -5,7 +5,13 @@
  */
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import type * as Schema from "effect/Schema"
+import * as Stream from "effect/Stream"
 import type { KeyValueStore } from "effect/persistence/KeyValueStore"
+import * as Coins from "@unconfirmed/sui/Coins"
+import * as Events from "@unconfirmed/sui/Events"
+import * as Packages from "@unconfirmed/sui/Packages"
+import * as Transactions from "@unconfirmed/sui/Transactions"
 import type { Transaction } from "@mysten/sui/transactions"
 import * as SuiGrpc from "@unconfirmed/sui/grpc"
 import * as TransactionJson from "@unconfirmed/sui/TransactionJson"
@@ -38,6 +44,9 @@ declare const sender: Address
 declare const data: TransactionData.TransactionData
 declare const mystenTx: Transaction
 declare const myKeyValueStore: Layer.Layer<KeyValueStore>
+declare const owner: Address
+declare const packageId: Address
+declare const RecordSold: Schema.Codec<{ readonly price: bigint }, unknown>
 
 export const layers = () => {
   // #region readme
@@ -65,6 +74,21 @@ export const transactions = Effect.gen(function*() {
   // or by hand: Ptb.build -> Resolve.inputs -> gasPrice -> budget -> <your step> -> finish
   // #endregion
 })
+
+export const reads = (recipe: typeof aRecipe) =>
+  Effect.gen(function*() {
+    // #region readme
+    const effects = yield* Tx.run(recipe, { signer, include: ["events", "balanceChanges"] })  // also Tx.execute, Transactions.execute / get
+    const sales = yield* Effect.forEach(effects.events ?? [], Events.decode(RecordSold))
+    const landed = yield* Transactions.waitFor(effects.digest)               // get also sets checkpoint and timestampMs
+
+    const coins = yield* Coins.Coins
+    const balances = yield* Stream.runCollect(coins.listBalances(owner))  // every coin type, address-balance-only ones too
+    const everyCoin = coins.list(owner)                                   // every Coin<T>; coins.list(owner, type) for one T
+    const modules = yield* (yield* Packages.Packages).getModules(packageId)  // name -> module bytes, read from the object
+    // #endregion
+    return { sales, landed, balances, everyCoin, modules }
+  })
 
 export const balances = (recipe: typeof aRecipe) =>
   Effect.gen(function*() {

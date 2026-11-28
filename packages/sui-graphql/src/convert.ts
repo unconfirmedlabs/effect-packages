@@ -303,20 +303,44 @@ export const EventNode = Schema.Struct({
 })
 export type EventNode = typeof EventNode.Type
 
-/** An event from its contents and its position. A system transaction's events have no sender over GraphQL: `0x0`, as over gRPC. */
-export const event = (
-  e: EventContentNode,
-  at: { readonly checkpoint: bigint; readonly transactionDigest: string; readonly transactionIndex: bigint }
-): Events.Event => ({
+/** An event of the transaction `transactionDigest`. A system transaction's events have no sender over GraphQL: `0x0`, as over gRPC. */
+export const transactionEvent = (e: EventContentNode, transactionDigest: string): Events.TransactionEvent => ({
   type: e.contents.type.repr,
   sender: Address.normalize(e.sender?.address ?? "0x0"),
   packageId: Address.normalize(e.transactionModule?.package?.address ?? "0x0"),
   module: e.transactionModule?.name ?? "",
   contents: e.contents.bcs,
-  transactionDigest: at.transactionDigest,
-  checkpoint: at.checkpoint,
-  transactionIndex: at.transactionIndex,
+  transactionDigest,
   eventIndex: e.sequenceNumber
+})
+
+/** An event from its contents and its position. */
+export const event = (
+  e: EventContentNode,
+  at: { readonly checkpoint: bigint; readonly transactionDigest: string; readonly transactionIndex: bigint }
+): Events.Event => ({
+  ...transactionEvent(e, at.transactionDigest),
+  checkpoint: at.checkpoint,
+  transactionIndex: at.transactionIndex
+})
+
+// -----------------------------------------------------------------------------
+// Balance changes
+// -----------------------------------------------------------------------------
+
+/** Selection on `BalanceChange`. */
+export const BALANCE_CHANGE_FIELDS = "owner{address} coinType{repr} amount"
+
+export const BalanceChangeNode = Schema.Struct({
+  owner: SuiAddress,
+  coinType: Schema.Struct({ repr: Schema.String }),
+  amount: U64
+})
+
+export const balanceChange = (b: typeof BalanceChangeNode.Type): Transactions.BalanceChange => ({
+  address: Address.normalize(b.owner.address),
+  coinType: b.coinType.repr,
+  amount: b.amount
 })
 
 /** Sui's event cursors end with `checkpoint: u64 LE, transaction index: u64 LE, event index: u32 LE`. */

@@ -16,7 +16,7 @@ import * as Ptb from "./Ptb.ts"
 import * as Resolve from "./Resolve.ts"
 import { isTransactionSigner, type Signer, SigningError, signTransaction, type TransactionSigner } from "./Signer.ts"
 import * as T from "./TransactionData.ts"
-import { type Effects, Transactions } from "./Transactions.ts"
+import { type Effects, type IncludeOptions, Transactions } from "./Transactions.ts"
 import * as Bytes from "@unconfirmed/bcs/Bytes"
 
 export interface ResolveOptions<E = never, R = never> {
@@ -327,10 +327,11 @@ const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData
  */
 export const execute = /* @__PURE__ */ Effect.fn("Tx.execute")(function*(
   data: T.TransactionData,
-  signers: Signer | TransactionSigner | ReadonlyArray<Signer | TransactionSigner>
+  signers: Signer | TransactionSigner | ReadonlyArray<Signer | TransactionSigner>,
+  options?: IncludeOptions
 ) {
   const { bytes, signatures } = yield* sign(data, Array.isArray(signers) ? signers : [signers as Signer | TransactionSigner])
-  const effects = yield* Effect.flatMap(Effect.service(Transactions), (t) => t.execute(bytes, signatures))
+  const effects = yield* Effect.flatMap(Effect.service(Transactions), (t) => t.execute(bytes, signatures, options))
   if (effects.status._tag === "Failure") {
     return yield* new ExecutionFailed({
       digest: effects.digest,
@@ -340,10 +341,16 @@ export const execute = /* @__PURE__ */ Effect.fn("Tx.execute")(function*(
   return effects
 })
 
-/** Build, resolve, sign with `signer` (a `Signer` or a wallet's `TransactionSigner`; also the sender unless given), execute. */
+/**
+ * Build, resolve, sign with `signer` (a `Signer` or a wallet's `TransactionSigner`; also the sender unless given), execute.
+ * `include` (`["events", "balanceChanges"]`) adds those to the effects.
+ */
 export const run = <A, E1, R1, E2 = never, R2 = never>(
   recipe: Effect.Effect<A, E1, R1>,
-  options: Omit<ResolveOptions<E2, R2>, "sender"> & { readonly signer: Signer | TransactionSigner; readonly sender?: Address }
+  options: Omit<ResolveOptions<E2, R2>, "sender"> & IncludeOptions & {
+    readonly signer: Signer | TransactionSigner
+    readonly sender?: Address
+  }
 ): Effect.Effect<
   Effects,
   Effect.Error<ReturnType<typeof build<A, E1, R1, E2, R2>>> | Effect.Error<ReturnType<typeof execute>>,
@@ -352,5 +359,8 @@ export const run = <A, E1, R1, E2 = never, R2 = never>(
   Effect.suspend(() => {
     const sender = options.sender ?? options.signer.address
     const refused = mismatch(options.signer.address, sender, options.gasOwner ?? sender)
-    return refused ? Effect.fail(refused) : Effect.flatMap(build(recipe, { ...options, sender }), (data) => execute(data, options.signer))
+    return refused
+      ? Effect.fail(refused)
+      : Effect.flatMap(build(recipe, { ...options, sender }), (data) =>
+        execute(data, options.signer, options.include && { include: options.include }))
   }) as any

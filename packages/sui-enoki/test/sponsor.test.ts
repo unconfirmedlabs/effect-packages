@@ -349,6 +349,7 @@ describe("Sponsor with address-balance intents", () => {
     const coins = Layer.succeed(Coins.Coins, {
       getBalance: (_owner, coinType = "0x2::sui::SUI") =>
         Effect.succeed({ coinType, total: 5_000n, addressBalance: 5_000n, coinBalance: 0n }),
+      listBalances: () => Stream.empty,
       list: () => Stream.empty
     })
     const noObjects = Layer.mergeAll(

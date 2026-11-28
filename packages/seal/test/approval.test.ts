@@ -161,7 +161,8 @@ describe("fromRecipe (object inputs resolved)", () => {
             { reference: "Immutable", typeName: "y" },
             { reference: "Immutable", typeName: "z" }
           ]
-        })
+        }),
+      getModules: () => Effect.die("unused")
     })
   )
 

@@ -278,6 +278,7 @@ const D = "11111111111111111111111111111111" as T.ObjectDigest
 const coinsLayer = Layer.succeed(Coins.Coins, {
   getBalance: (_owner, coinType = TypeTag.SUI) =>
     Effect.succeed({ coinType: TypeTag.normalizeString(coinType), total: 10n ** 12n, addressBalance: 10n ** 12n, coinBalance: 0n }),
+  listBalances: () => Stream.empty,
   list: () => Stream.empty
 })
 const noObjects = Layer.succeed(Objects.Objects, {

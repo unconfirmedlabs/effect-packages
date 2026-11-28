@@ -29,6 +29,13 @@ export interface Event {
   readonly eventIndex: number
 }
 
+/**
+ * An event as its transaction reports it (`Transactions.get` / `execute` with
+ * `include: ["events"]`): an `Event` without the ledger position, which a
+ * transaction read by digest doesn't carry. Its checkpoint is on `Effects`.
+ */
+export type TransactionEvent = Omit<Event, "checkpoint" | "transactionIndex">
+
 export class EventDecodeError extends /* @__PURE__ */ Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
   transactionDigest: Schema.String,
   eventIndex: Schema.Number,
@@ -43,7 +50,7 @@ export class EventDecodeError extends /* @__PURE__ */ Schema.TaggedError<EventDe
 /** Decode an event's contents with a BCS schema. */
 export const decode = <T, E>(schema: Schema.Codec<T, E>) => {
   const run = Bcs.decode(schema)
-  return (e: Event): Effect.Effect<T, EventDecodeError> =>
+  return (e: TransactionEvent): Effect.Effect<T, EventDecodeError> =>
     Result.match(run(e.contents), {
       onSuccess: Effect.succeed,
       onFailure: (x) =>
