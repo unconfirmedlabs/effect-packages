@@ -19,45 +19,70 @@ import * as M from "./Model.ts"
 import * as Render from "./Render.ts"
 import * as Summary from "./Summary.ts"
 
-/** Run `sui move summary` in a Move package. */
-export const summarize = (path: string): Effect.Effect<void, M.CodegenError> =>
+/** Run `sui move summary` in a Move package, for `environment` (`--build-env`) when given. */
+export const summarize = (path: string, environment?: string): Effect.Effect<void, M.CodegenError> =>
   Effect.suspend(() => {
-    const r = spawnSync("sui", ["move", "summary"], { cwd: path, encoding: "utf-8" })
+    const args = ["move", "summary", ...(environment === undefined ? [] : ["--build-env", environment])]
+    const r = spawnSync("sui", args, { cwd: path, encoding: "utf-8" })
     return r.status === 0
       ? Effect.void
-      : Effect.fail(new M.CodegenError({ message: `sui move summary failed in ${path}: ${r.error ?? r.stderr}` }))
+      : Effect.fail(
+        new M.CodegenError({ message: `sui ${args.join(" ")} failed in ${path}: ${r.error ?? (r.stderr.trim() || r.stdout.trim())}` })
+      )
   })
 
 /** Whether a local entry runs `sui move summary` first. */
 const summarizes = (p: Config.LocalPackage, path: string) => p.summarize ?? existsSync(join(path, "Move.toml"))
 
-const loadWith = (
-  p: Config.PackageConfig,
-  dir: string,
-  runSummary: boolean
-): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> => {
-  if (Config.isOnChain(p)) {
-    const url = p.url ?? Config.FULLNODES[p.network ?? "mainnet"]
-    return FromGrpc.load(p.id, { name: p.name }).pipe(Effect.provide(GrpcWeb.layer({ url })))
-  }
-  const path = resolve(dir, p.path)
-  return Effect.andThen(
-    runSummary && summarizes(p, path) ? summarize(path) : Effect.void,
-    Summary.load(path, {
-      package: p.package,
-      name: p.name,
-      packageId: p.packageId,
-      originalId: p.originalId,
-      typeOrigins: p.typeOrigins
-    })
-  )
+/** A local directory's environment and its publish record. */
+interface Environment {
+  readonly name: string | undefined
+  readonly record: Summary.PublishRecord | undefined
 }
 
+/**
+ * The environment to generate a directory for: the configured one, else the
+ * only `Published.toml` record's. Several records and none chosen fail: the
+ * ids would be whichever environment the CLI happens to resolve.
+ */
+const environmentOf = (
+  path: string,
+  configured: string | undefined
+): Effect.Effect<Environment, M.CodegenError | M.AmbiguousEnvironment> =>
+  Effect.flatMap(Summary.publishRecords(path), (records) => {
+    if (configured === undefined && records.length > 1) {
+      return Effect.fail(new M.AmbiguousEnvironment({ path, environments: records.map((r) => r.environment) }))
+    }
+    const name = configured ?? records[0]?.environment
+    return Effect.succeed({ name, record: records.find((r) => r.environment === name) })
+  })
+
+const loadLocal = (p: Config.LocalPackage, path: string, env: Environment) =>
+  Summary.load(path, {
+    package: p.package,
+    name: p.name,
+    // The record describes the directory's own package, not framework modules read from its summaries.
+    packageId: p.packageId ?? (p.package === undefined ? env.record?.publishedAt : undefined),
+    originalId: p.originalId ?? (p.package === undefined ? env.record?.originalId : undefined),
+    typeOrigins: p.typeOrigins
+  })
+
+const loadOnChain = (p: Config.OnChainPackage): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> =>
+  FromGrpc.load(p.id, { name: p.name }).pipe(Effect.provide(GrpcWeb.layer({ url: p.url ?? Config.FULLNODES[p.network ?? "mainnet"] })))
+
 /** Load one configured package. */
-export const loadPackage = (
-  p: Config.PackageConfig,
+export const loadPackage = <P extends Config.PackageConfig>(
+  p: P,
   dir: string = process.cwd()
-): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> => loadWith(p, dir, true)
+): Effect.Effect<M.Model, M.CodegenError | M.AmbiguousEnvironment | RpcError, Config.Requirements<P>> => {
+  if (Config.isOnChain(p)) return loadOnChain(p) as Effect.Effect<M.Model, M.CodegenError | RpcError, Config.Requirements<P>>
+  const path = resolve(dir, p.path)
+  return Effect.gen(function*() {
+    const env = yield* environmentOf(path, p.environment)
+    if (summarizes(p, path)) yield* summarize(path, env.name)
+    return yield* loadLocal(p, path, env)
+  })
+}
 
 const datatypeCount = (p: M.Package) => p.modules.reduce((n, m) => n + m.datatypes.length, 0)
 
@@ -96,21 +121,39 @@ const LOAD_CONCURRENCY = 4
 
 /**
  * Load every configured package and render. `sui move summary` runs once per
- * directory, however many entries read it; entries then load concurrently.
+ * directory, however many entries read it (they share its environment);
+ * entries then load concurrently. An `HttpClient` is needed only for on-chain
+ * packages.
  */
-export const files = (
-  config: Config.Config,
+export const files = <P extends Config.PackageConfig>(
+  config: Config.Config<P>,
   dir: string = process.cwd()
-): Effect.Effect<ReadonlyArray<Render.File>, M.CodegenError | RpcError, HttpClient.HttpClient> =>
+): Effect.Effect<ReadonlyArray<Render.File>, M.CodegenError | M.AmbiguousEnvironment | RpcError, Config.Requirements<P>> =>
   Effect.gen(function*() {
+    const configured = new Map<string, string | undefined>()
     const toSummarize = new Set<string>()
     for (const p of config.packages) {
       if (Config.isOnChain(p)) continue
       const path = resolve(dir, p.path)
+      const have = configured.get(path)
+      if (have !== undefined && p.environment !== undefined && have !== p.environment) {
+        return yield* new M.CodegenError({ message: `${path} is configured for both ${have} and ${p.environment}` })
+      }
+      configured.set(path, have ?? p.environment)
       if (summarizes(p, path)) toSummarize.add(path)
     }
-    for (const path of toSummarize) yield* summarize(path)
-    const models = yield* Effect.forEach(config.packages, (p) => loadWith(p, dir, false), { concurrency: LOAD_CONCURRENCY })
+    const environments = new Map<string, Environment>()
+    for (const [path, name] of configured) environments.set(path, yield* environmentOf(path, name))
+    for (const path of toSummarize) yield* summarize(path, environments.get(path)!.name)
+    const models = yield* Effect.forEach(
+      config.packages,
+      (p): Effect.Effect<M.Model, M.CodegenError | RpcError, HttpClient.HttpClient> => {
+        if (Config.isOnChain(p)) return loadOnChain(p)
+        const path = resolve(dir, p.path)
+        return loadLocal(p, path, environments.get(path)!)
+      },
+      { concurrency: LOAD_CONCURRENCY }
+    )
     const roots: Array<Render.Root> = []
     for (let i = 0; i < models.length; i++) {
       const root = models[i]!.root
@@ -124,7 +167,7 @@ export const files = (
       try: () => Render.render(packages, roots, renderOptions(config)),
       catch: (e) => e instanceof M.CodegenError ? e : new M.CodegenError({ message: String(e) })
     })
-  })
+  }) as Effect.Effect<ReadonlyArray<Render.File>, M.CodegenError | M.AmbiguousEnvironment | RpcError, Config.Requirements<P>>
 
 /** Every file under `dir` that does not start with the generated header. */
 const foreignFiles = async (dir: string): Promise<Array<string>> => {
@@ -177,5 +220,5 @@ export const write = (output: string, rendered: ReadonlyArray<Render.File>): Eff
   })
 
 /** Load, render and write. Relative paths resolve against `dir` (the config file's directory). */
-export const run = (config: Config.Config, dir: string = process.cwd()) =>
+export const run = <P extends Config.PackageConfig>(config: Config.Config<P>, dir: string = process.cwd()) =>
   Effect.flatMap(files(config, dir), (rendered) => write(resolve(dir, config.output), rendered))

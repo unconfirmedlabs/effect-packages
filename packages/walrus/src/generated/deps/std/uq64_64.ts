@@ -4,7 +4,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
 
 export const UQ64_64 = /* @__PURE__ */ Move.datatype(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000001::uq64_64::UQ64_64",
+  /* @__PURE__ */ Move.type("0x0000000000000000000000000000000000000000000000000000000000000001", "uq64_64::UQ64_64"),
   () =>
     Bcs.tuple([Bcs.u128])
 )

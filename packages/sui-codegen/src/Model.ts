@@ -110,6 +110,19 @@ export class CodegenError extends Schema.TaggedError<CodegenError>()("CodegenErr
   message: Schema.String
 }) {}
 
+/**
+ * A local package's `Published.toml` has publish records for several
+ * environments and the config doesn't say which to generate for (`environment`).
+ */
+export class AmbiguousEnvironment extends Schema.TaggedError<AmbiguousEnvironment>()("AmbiguousEnvironment", {
+  path: Schema.String,
+  environments: Schema.Array(Schema.String)
+}) {
+  override get message(): string {
+    return `${this.path}/Published.toml has publish records for ${this.environments.join(", ")}: set \`environment\` to the one to generate for`
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -138,6 +151,16 @@ export const shortAddress = (address: string): string => {
   const h = address.replace(/^0x/, "").replace(/^0+/, "")
   return h.length <= 4 ? `0x${h || "0"}` : address
 }
+
+/** The framework packages, at the same address on every network, by their named address. */
+export const SYSTEM: Readonly<Record<string, string>> = {
+  [normalizeAddress("0x1")]: "std",
+  [normalizeAddress("0x2")]: "sui",
+  [normalizeAddress("0x3")]: "sui_system",
+  [normalizeAddress("0xb")]: "bridge"
+}
+
+export const isSystem = (address: string): boolean => SYSTEM[address] !== undefined
 
 export const primitive = (name: Primitive): Type => ({ _tag: "Primitive", name })
 

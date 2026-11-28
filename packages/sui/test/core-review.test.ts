@@ -524,9 +524,10 @@ describe("builders", () => {
 
   test("CORE-22: Move.datatype and Move.withGet don't modify the schema they are given", () => {
     const shared = Move.Table
-    const typed = Move.datatype(() => "0x2::my::Thing", () => shared)
-    Move.withGet(shared)
-    expect(typed.type()).toBe("0x2::my::Thing")
+    const type = Move.type("0x2", "my::Thing")
+    const typed = Move.datatype(type, () => shared)
+    Move.withGet(type, shared)
+    expect(Effect.runSync(typed.type())).toBe(`${A("0x2")}::my::Thing`)
     expect("type" in shared || "get" in shared).toBe(false)
   })
 

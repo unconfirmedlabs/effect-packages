@@ -4,7 +4,7 @@ import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
 
 export const Element = /* @__PURE__ */ Move.datatype(
-  (T0: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::group_ops::Element<${T0}>`,
+  /* @__PURE__ */ Move.type<[T0: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "group_ops::Element"),
   () =>
     Bcs.struct({
       bytes: Bcs.byteVector

@@ -12,7 +12,7 @@ import * as Move from "@unconfirmed/sui/Move"
  * to use mutable reference even if it's a read-only API.
  */
 export const Versioned = /* @__PURE__ */ Move.object(
-  () => "0x0000000000000000000000000000000000000000000000000000000000000002::versioned::Versioned",
+  /* @__PURE__ */ Move.type("0x0000000000000000000000000000000000000000000000000000000000000002", "versioned::Versioned"),
   () =>
     Bcs.struct({
       id: Move.UID,

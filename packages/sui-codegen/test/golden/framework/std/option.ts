@@ -16,7 +16,7 @@ export { Package }
  * zero or one because Move bytecode does not have ADTs.
  */
 export const Option = /* @__PURE__ */ Move.generic(
-  (Element: string) => `0x0000000000000000000000000000000000000000000000000000000000000001::option::Option<${Element}>`,
+  /* @__PURE__ */ Move.type<[Element: string]>("0x0000000000000000000000000000000000000000000000000000000000000001", "option::Option"),
   <Element extends Schema.Top>(Element: Element) =>
     Bcs.struct({
       vec: Bcs.vector(Element)
@@ -41,7 +41,7 @@ export const borrow = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::borrow", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
 }
 
@@ -62,7 +62,7 @@ export const borrowMut = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::borrow_mut", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
 }
 
@@ -84,7 +84,7 @@ export const borrowWithDefault = (options: {
   const a = options.arguments
   const [t, defaultRef] = Move.isTuple(a) ? a : [a.t, a.defaultRef] as const
   return Move.call(Package, "option::borrow_with_default", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], defaultRef)
   ], 1)
 }
@@ -107,7 +107,7 @@ export const contains = (options: {
   const a = options.arguments
   const [t, eRef] = Move.isTuple(a) ? a : [a.t, a.eRef] as const
   return Move.call(Package, "option::contains", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], eRef)
   ], 1)
 }
@@ -129,7 +129,7 @@ export const destroyNone = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::destroy_none", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 0)
 }
 
@@ -150,7 +150,7 @@ export const destroySome = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::destroy_some", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
 }
 
@@ -171,7 +171,7 @@ export const destroyWithDefault = (options: {
   const a = options.arguments
   const [t, default_] = Move.isTuple(a) ? a : [a.t, a.default] as const
   return Move.call(Package, "option::destroy_with_default", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], default_)
   ], 1)
 }
@@ -193,7 +193,7 @@ export const extract = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::extract", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
 }
 
@@ -215,7 +215,7 @@ export const fill = (options: {
   const a = options.arguments
   const [t, e] = Move.isTuple(a) ? a : [a.t, a.e] as const
   return Move.call(Package, "option::fill", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], e)
   ], 0)
 }
@@ -238,7 +238,7 @@ export const getWithDefault = (options: {
   const a = options.arguments
   const [t, default_] = Move.isTuple(a) ? a : [a.t, a.default] as const
   return Move.call(Package, "option::get_with_default", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], default_)
   ], 1)
 }
@@ -259,7 +259,7 @@ export const isNone = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::is_none", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
 }
 
@@ -279,7 +279,7 @@ export const isSome = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::is_some", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
 }
 
@@ -332,7 +332,7 @@ export const swap = (options: {
   const a = options.arguments
   const [t, e] = Move.isTuple(a) ? a : [a.t, a.e] as const
   return Move.call(Package, "option::swap", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], e)
   ], 1)
 }
@@ -356,7 +356,7 @@ export const swapOrFill = (options: {
   const a = options.arguments
   const [t, e] = Move.isTuple(a) ? a : [a.t, a.e] as const
   return Move.call(Package, "option::swap_or_fill", options.typeArguments, [
-    Move.obj(t),
+    Move.arg(t),
     Move.param(options.typeArguments[0], e)
   ], 1)
 }
@@ -378,6 +378,27 @@ export const toVec = (options: {
   const a = options.arguments
   const [t] = Move.isTuple(a) ? a : [a.t] as const
   return Move.call(Package, "option::to_vec", options.typeArguments, [
-    Move.obj(t)
+    Move.arg(t)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  borrow,
+  borrowMut,
+  borrowWithDefault,
+  contains,
+  destroyNone,
+  destroySome,
+  destroyWithDefault,
+  extract,
+  fill,
+  getWithDefault,
+  isNone,
+  isSome,
+  none,
+  some,
+  swap,
+  swapOrFill,
+  toVec
 }

@@ -27,10 +27,14 @@ suite("testnet", () => {
     expect(clock.timestampMs > 1_700_000_000_000n).toBe(true)
   })
 
-  test("missing objects are ObjectNotFound", async () => {
+  test("missing objects are ObjectNotFound; getAs checks the type it is given", async () => {
     const { layer } = grpcLayer(TESTNET)
     const e = await Effect.runPromise(Objects.getAs(Address.normalize("0xabcdef"), Clock).pipe(Effect.flip, Effect.provide(layer)))
     expect(e._tag).toBe("ObjectNotFound")
+    const clock = await Effect.runPromise(Objects.getAs(Address.CLOCK, Clock, { type: "0x2::clock::Clock" }).pipe(Effect.provide(layer)))
+    expect(clock.id).toBe(Address.CLOCK)
+    const wrong = await Effect.runPromise(Objects.getAs(Address.CLOCK, Clock, { type: "0x2::random::Random" }).pipe(Effect.flip, Effect.provide(layer)))
+    expect(wrong).toMatchObject({ _tag: "ObjectTypeMismatch", actual: `${Address.normalize("0x2")}::clock::Clock` })
   })
 
   test("resolve infers &Clock as an immutable shared input; simulate returns the value", async () => {

@@ -9,7 +9,7 @@ import { defineConfig } from "@unconfirmed/sui-codegen/Config"
 export default defineConfig({
   output: "./src/generated",
   packages: [
-    { path: "./move/counter", packageId: "0x…" },                  // local: runs `sui move summary`
+    { path: "./move/counter", environment: "mainnet" },            // local: `sui move summary --build-env mainnet`
     { id: "0x…", network: "testnet", name: "deepbook" },           // on-chain, over gRPC GetPackage
     { path: "./move/counter", package: "sui", modules: ["coin"] }  // framework modules, same summaries
   ]

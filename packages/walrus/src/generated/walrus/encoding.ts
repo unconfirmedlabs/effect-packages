@@ -17,3 +17,8 @@ export const encodedBlobLength = (options: {
     Move.pure(Bcs.u16, arg2)
   ], 1)
 }
+
+/** The module's call builders, by name. */
+export const calls = {
+  encodedBlobLength
+}

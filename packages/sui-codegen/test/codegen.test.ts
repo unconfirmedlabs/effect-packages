@@ -40,7 +40,7 @@ describe("golden output", () => {
         const imports = readFileSync(join(goldenDir, run, f), "utf-8").split("\n").filter((l) => l.startsWith("import "))
         for (const line of imports) {
           expect(line).toMatch(
-            /^import (type )?(\* as \w+|\{ Package \}) from "(effect\/\w+|@unconfirmed\/bcs\/Bcs|@unconfirmed\/sui\/Move|\.{1,2}\/[\w/$.]+\.ts)"$/
+            /^import (type )?(\* as \w+|\{ (Origins, )?Package \}|\{ Origins \}) from "(effect\/\w+|@unconfirmed\/bcs\/Bcs|@unconfirmed\/sui\/Move|\.{1,2}\/[\w/$.]+\.ts)"$/
           )
         }
       }
@@ -64,7 +64,37 @@ describe("generated API", () => {
     return c
   }
 
-  test("calls go to the Package reference: default, or provided", async () => {
+  const value: fixture.Thing = {
+    id: Address.normalize("0x1"),
+    owner_ref: Address.normalize("0x2"),
+    name: "n",
+    label: "l",
+    tags: [],
+    nums: [7n],
+    maybe: Option.none(),
+    pair: { first: 1, second: 2n },
+    point: [0, 1],
+    status: { _tag: "Scored", value: [1, false] },
+    created_ms: 0n
+  }
+  /** A node holding one object: `contents` under the type `type`. */
+  const objects = (type: string, contents: Uint8Array) =>
+    Layer.succeed(Objects.Objects, {
+      get: (objectId) =>
+        Effect.succeed({
+          objectId,
+          version: 1n,
+          digest: "" as T.ObjectDigest,
+          owner: { _tag: "Immutable" },
+          type,
+          contents,
+          previousTransaction: undefined
+        }),
+      listOwned: () => Stream.empty
+    })
+  const thingBytes = Bcs.encodeSync(fixture.Thing)(value)
+
+  test("calls follow the Package reference; type strings and Thing.get follow Origins", async () => {
     const { draft: d1 } = await draft(fixture.newVault())
     expect(call(d1.commands[0]!).package).toBe(Address.normalize("0x0"))
     const id = Address.normalize("0xabc")
@@ -72,36 +102,37 @@ describe("generated API", () => {
       Ptb.build(fixture.newVault()).pipe(Effect.provide(Layer.succeed(fixture.Package, id)))
     )
     expect(call(d2.commands[0]!).package).toBe(id)
+
+    // Another deployment: its original id, and the defining id of a type an upgrade added.
+    const other = Layer.succeed(fixture.Origins, { originalId: "0xb1", typeOrigins: { "fixture::Marker": "0xb2" } })
+    const types = await Effect.runPromise(Effect.all([fixture.Thing.type(), fixture.Pair.type("u8", "u8", "u64"), fixture.Marker.type()]).pipe(Effect.provide(other)))
+    expect(types).toEqual([`${Address.normalize("0xb1")}::fixture::Thing`, `${Address.normalize("0xb1")}::fixture::Pair<u8, u8, u64>`, `${Address.normalize("0xb2")}::fixture::Marker`])
+    // The node reports the short form; addresses are compared normalized.
+    const read = fixture.Thing.get("0x1").pipe(Effect.provide(objects("0xb1::fixture::Thing", thingBytes)))
+    expect(await Effect.runPromise(read.pipe(Effect.provide(other)))).toEqual(value)
+    expect((await Effect.runPromise(Effect.flip(read)))._tag).toBe("ObjectTypeMismatch")
   })
 
-  test("Thing.get reads and decodes an object", async () => {
-    const value: fixture.Thing = {
-      id: Address.normalize("0x1"),
-      owner_ref: Address.normalize("0x2"),
-      name: "n",
-      label: "l",
-      tags: [],
-      nums: [7n],
-      maybe: Option.none(),
-      pair: { first: 1, second: 2n },
-      point: [0, 1],
-      status: { _tag: "Scored", value: [1, false] },
-      created_ms: 0n
-    }
-    const objects = Layer.succeed(Objects.Objects, {
-      get: (objectId) =>
-        Effect.succeed({
-          objectId,
-          version: 1n,
-          digest: "" as T.ObjectDigest,
-          owner: { _tag: "Immutable" },
-          type: fixture.Thing.type(),
-          contents: Bcs.encodeSync(fixture.Thing)(value),
-          previousTransaction: undefined
-        }),
-      listOwned: () => Stream.empty
+  test("Thing.get checks the type before decoding: an object of another type is refused, though its bytes parse", async () => {
+    const e = await Effect.runPromise(
+      fixture.Marker.type().pipe(
+        Effect.flatMap((marker) => Effect.flip(fixture.Thing.get("0x1").pipe(Effect.provide(objects(marker, thingBytes)))))
+      )
+    )
+    expect(e).toMatchObject({
+      _tag: "ObjectTypeMismatch",
+      objectId: Address.normalize("0x1"),
+      expected: `${Address.normalize("0x0")}::fixture::Thing`,
+      actual: `${Address.normalize("0x0")}::fixture::Marker`
     })
-    expect(await Effect.runPromise(fixture.Thing.get("0x1").pipe(Effect.provide(objects)))).toEqual(value)
+  })
+
+  test("a generic object read without type arguments matches any instantiation; with them, only that one", async () => {
+    const Box = fixture.Box(Bcs.u64)
+    const node = objects("0x0::fixture::Box<u64>", Bcs.encodeSync(Box)({ id: Address.normalize("0x1"), value: 5n }))
+    expect(await Effect.runPromise(Box.get("0x1").pipe(Effect.provide(node)))).toEqual({ id: Address.normalize("0x1"), value: 5n })
+    expect((await Effect.runPromise(Box.get("0x1", "u64").pipe(Effect.provide(node)))).value).toBe(5n)
+    expect((await Effect.runPromise(Effect.flip(Box.get("0x1", "u8").pipe(Effect.provide(node)))))._tag).toBe("ObjectTypeMismatch")
   })
 })
 
@@ -127,8 +158,9 @@ describe("inputs", () => {
     }
     const out = Object.fromEntries(Render.render([pkg], [{ address: original }]).map((f) => [f.path, f.contents]))
     expect(out["upgraded/$package.ts"]).toContain(`defaultValue: () => "${v3}"`)
-    expect(out["upgraded/m.ts"]).toContain(`() => "${original}::m::Old"`)
-    expect(out["upgraded/m.ts"]).toContain(`() => "${v2}::m::New"`)
+    expect(out["upgraded/$package.ts"]).toContain(`originalId: "${original}"`)
+    expect(out["upgraded/$package.ts"]).toContain(`"m::New": "${v2}"`)
+    expect(out["upgraded/$package.ts"]).not.toContain(`"m::Old"`)
   })
 
   test("a generic parameter is pure when its type argument is, else an object id", async () => {
@@ -138,8 +170,8 @@ describe("inputs", () => {
     expect(await input("0x1::string::String", "hi")).toEqual(pure(Bcs.encodeSync(Bcs.string)("hi")))
     expect(await input("0x1::option::Option<u64>", 5n)).toEqual(pure(Bcs.encodeSync(Bcs.option(Bcs.u64))(Option.some(5n))))
     expect(await input("vector<u256>", [1n])).toEqual(pure(Bcs.encodeSync(Bcs.vector(Bcs.u256))([1n])))
-    expect(await input(fixture.Thing.type(), "0x99")).toEqual({ _tag: "UnresolvedObject", objectId: Address.normalize("0x99") })
-    const notAnId = await Effect.runPromiseExit(Ptb.build(fixture.boxed({ arguments: [7 as never], typeArguments: [fixture.Thing.type()] })))
+    expect(await input(Effect.runSync(fixture.Thing.type()), "0x99")).toEqual({ _tag: "UnresolvedObject", objectId: Address.normalize("0x99") })
+    const notAnId = await Effect.runPromiseExit(Ptb.build(fixture.boxed({ arguments: [7 as never], typeArguments: [Effect.runSync(fixture.Thing.type())] })))
     expect(notAnId._tag === "Failure" && String(notAnId.cause)).toContain("expected an object id")
   })
 

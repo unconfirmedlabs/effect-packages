@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::auth` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Authenticated = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::auth::Authenticated",
+  /* @__PURE__ */ Move.type(Origins, "auth::Authenticated"),
   () =>
     Bcs.enum({
       Sender: Bcs.Address,
@@ -17,7 +17,7 @@ export const Authenticated = /* @__PURE__ */ Move.datatype(
 export type Authenticated = typeof Authenticated.Type
 
 export const Authorized = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::auth::Authorized",
+  /* @__PURE__ */ Move.type(Origins, "auth::Authorized"),
   () =>
     Bcs.enum({
       Address: Bcs.Address,
@@ -60,4 +60,12 @@ export const authorizedObject = (options: {
   return Move.call(Package, "auth::authorized_object", [], [
     Move.pure(Move.address, arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  authenticateSender,
+  authenticateWithObject,
+  authorizedAddress,
+  authorizedObject
 }

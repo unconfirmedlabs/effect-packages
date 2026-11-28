@@ -2,13 +2,13 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::init` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
-import * as package_1 from "../deps/0x2/package.ts"
+import { Origins, Package } from "./$package.ts"
+import * as package_1 from "../deps/sui/package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const INIT = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::init::INIT",
+  /* @__PURE__ */ Move.type(Origins, "init::INIT"),
   () =>
     Bcs.struct({
       dummy_field: Bcs.bool
@@ -17,7 +17,7 @@ export const INIT = /* @__PURE__ */ Move.datatype(
 export type INIT = typeof INIT.Type
 
 export const InitCap = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::init::InitCap",
+  /* @__PURE__ */ Move.type(Origins, "init::InitCap"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -62,4 +62,11 @@ export const migrateV2 = (options: {
     Move.obj(arg0),
     Move.obj(arg1)
   ], 0)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  initializeWalrus,
+  migrate,
+  migrateV2
 }

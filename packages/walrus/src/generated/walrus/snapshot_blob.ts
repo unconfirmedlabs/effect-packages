@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::snapshot_blob` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const SnapshotBlob = /* @__PURE__ */ Move.datatype(
-  () => "0x7d3b2086808a62bbc44d18c6b1d407973d77dd26946735873092c2f5650b4611::snapshot_blob::SnapshotBlob",
+  /* @__PURE__ */ Move.type(Origins, "snapshot_blob::SnapshotBlob"),
   () =>
     Bcs.struct({
       epoch: Bcs.u32,
@@ -15,7 +18,7 @@ export const SnapshotBlob = /* @__PURE__ */ Move.datatype(
 export type SnapshotBlob = typeof SnapshotBlob.Type
 
 export const SnapshotBlobCertificationState = /* @__PURE__ */ Move.datatype(
-  () => "0x7d3b2086808a62bbc44d18c6b1d407973d77dd26946735873092c2f5650b4611::snapshot_blob::SnapshotBlobCertificationState",
+  /* @__PURE__ */ Move.type(Origins, "snapshot_blob::SnapshotBlobCertificationState"),
   () =>
     Bcs.struct({
       certified: Bcs.vector(SnapshotBlob),

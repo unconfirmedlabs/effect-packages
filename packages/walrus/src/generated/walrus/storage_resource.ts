@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_resource` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Storage = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_resource::Storage",
+  /* @__PURE__ */ Move.type(Origins, "storage_resource::Storage"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -111,4 +111,17 @@ export const startEpoch = (options: {
   return Move.call(Package, "storage_resource::start_epoch", [], [
     Move.obj(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  destroy,
+  endEpoch,
+  fuse,
+  fuseAmount,
+  fusePeriods,
+  size,
+  splitByEpoch,
+  splitBySize,
+  startEpoch
 }

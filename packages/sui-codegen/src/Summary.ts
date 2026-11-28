@@ -230,6 +230,39 @@ const moveTomlName = (toml: string): string | undefined => {
 
 const isHexAddress = (s: string) => /^0x[0-9a-f]{1,64}$/i.test(s)
 
+/** One `[published.<environment>]` record of a `Published.toml`. */
+export interface PublishRecord {
+  readonly environment: string
+  /** The latest version's id: calls go to it. */
+  readonly publishedAt: string
+  /** The first version's id: types refer to the package by it. */
+  readonly originalId: string
+}
+
+/** The `[published.<environment>]` records of a `Published.toml`, without a TOML parser. */
+export const parsePublished = (toml: string): ReadonlyArray<PublishRecord> => {
+  const out: Array<PublishRecord> = []
+  const header = /^[ \t]*\[[ \t]*published[ \t]*\.[ \t]*(?:"([^"]+)"|([\w-]+))[ \t]*\][ \t]*$/gm
+  for (const m of toml.matchAll(header)) {
+    const rest = toml.slice(m.index + m[0].length)
+    const section = rest.slice(0, /^[ \t]*\[/m.exec(rest)?.index)
+    const value = (key: string) => new RegExp(`^[ \\t]*"?${key}"?[ \\t]*=[ \\t]*"([^"]+)"`, "m").exec(section)?.[1]
+    const publishedAt = value("published-at")
+    if (publishedAt !== undefined) {
+      out.push({ environment: m[1] ?? m[2]!, publishedAt, originalId: value("original-id") ?? publishedAt })
+    }
+  }
+  return out
+}
+
+/** A Move package's publish records (`<path>/Published.toml`), none without one. */
+export const publishRecords = (path: string): Effect.Effect<ReadonlyArray<PublishRecord>, M.CodegenError> =>
+  Effect.suspend(() => {
+    const file = join(path, "Published.toml")
+    if (!existsSync(file)) return Effect.succeed([])
+    return Effect.map(tryPromise(() => readFile(file, "utf-8"), `reading ${file}`), parsePublished)
+  })
+
 /**
  * Load a summary directory: either a Move package (`<path>/package_summaries`)
  * or the summary directory itself. Directories that are neither named in

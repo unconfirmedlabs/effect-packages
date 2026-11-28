@@ -156,7 +156,8 @@ export const load = (
       return {
         address: original,
         storageId: M.normalizeAddress(p.storage_id!),
-        name: isRoot && options.name !== undefined ? options.name : M.shortAddress(original),
+        // Dependencies are named by address (bytecode carries no package names), framework ones as in summaries.
+        name: isRoot ? options.name ?? M.shortAddress(original) : M.SYSTEM[original] ?? M.shortAddress(original),
         modules: [...(p.modules ?? [])].sort((a, b) => a.name!.localeCompare(b.name!)).map((m): M.Module => ({
           name: m.name!,
           doc: undefined,

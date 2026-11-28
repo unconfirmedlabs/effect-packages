@@ -128,12 +128,12 @@ describe("struct schemas encode like @mysten/codegen's", () => {
       .toBe(hex(theirCoin.Coin.serialize({ id: ID1, balance: { value: "5" } }).toBytes()))
     expect(hex(Bcs.encodeSync(coin.TreasuryCap)({ id: ID1, total_supply: { value: 5n } })))
       .toBe(hex(theirCoin.TreasuryCap.serialize({ id: ID1, total_supply: { value: "5" } }).toBytes()))
-    expect(coin.Coin.type(sui)).toBe(`${A("0x2")}::coin::Coin<${sui}>`)
+    expect(Effect.runSync(coin.Coin.type(sui))).toBe(`${A("0x2")}::coin::Coin<${sui}>`)
   })
 
   test("type strings use the defining package and every type argument", () => {
-    expect(fixture.Thing.type()).toBe(`${A("0x0")}::fixture::Thing`)
-    expect(fixture.Pair.type("0x2::sui::SUI", "u8", "u64")).toBe(`${A("0x0")}::fixture::Pair<0x2::sui::SUI, u8, u64>`)
+    expect(Effect.runSync(fixture.Thing.type())).toBe(`${A("0x0")}::fixture::Thing`)
+    expect(Effect.runSync(fixture.Pair.type("0x2::sui::SUI", "u8", "u64"))).toBe(`${A("0x0")}::fixture::Pair<0x2::sui::SUI, u8, u64>`)
   })
 })
 
@@ -252,7 +252,7 @@ const build = async (f: (tx: Transaction) => void) => {
 
 describe("call builders build the same transaction as @mysten/codegen's", () => {
   test("pure values, options, vectors, generics, results, auto-filled Clock/Random/DenyList/SuiSystemState", async () => {
-    const marker = fixture.Marker.type()
+    const marker = Effect.runSync(fixture.Marker.type())
     const mine = await ours(Effect.gen(function*() {
       const [created] = yield* fixture.newThing({
         arguments: { name: "n", label: "l", tags: ["t", "u"], nums: [1n, 2n], maybe: 3n }
@@ -286,10 +286,11 @@ describe("call builders build the same transaction as @mysten/codegen's", () => 
       const [boxed] = yield* fixture.boxed({ arguments: [5n], typeArguments: ["u64"] })
       yield* coin.denyListV2ContainsCurrentEpoch({ arguments: ["0x2"], typeArguments: ["0x2::sui::SUI"] })
       yield* Ptb.transferObjects([created, boxed], yield* Ptb.address(sender))
-      expect([count, hasMaybe].map((r) => r._tag)).toEqual(["NestedResult", "NestedResult"])
+      // One return value is the command's `Result` (as Mysten's result used directly), several are `NestedResult`s.
+      expect([created, count, hasMaybe].map((r) => r._tag)).toEqual(["Result", "NestedResult", "NestedResult"])
     }))
     const reference = await build((tx) => {
-      const [created] = tx.add(theirs.newThing({
+      const created = tx.add(theirs.newThing({
         arguments: { name: "n", label: "l", tags: ["t", "u"], nums: [1n, 2n], maybe: 3n }
       }))
       tx.add(theirs.rename({ arguments: [created, "renamed"] }))
@@ -311,16 +312,16 @@ describe("call builders build the same transaction as @mysten/codegen's", () => 
           maybeName: "x"
         }
       }))
-      const [pair] = tx.add(theirs.makePair({ arguments: [7, 9n], typeArguments: [marker, "u8", "u64"] }))
+      const pair = tx.add(theirs.makePair({ arguments: [7, 9n], typeArguments: [marker, "u8", "u64"] }))
       tx.add(theirs.setPair({ arguments: { thing: created, pair } }))
       tx.add(theirs.stats({ arguments: [created] }))
       tx.add(theirs.create({ arguments: { name: "e" } }))
       tx.add(theirs.roll({ arguments: { thing: THING } }))
       tx.add(theirs.touchSystem({ arguments: [1] }))
       tx.add(theirs.deposit({ arguments: { vault: VAULT, coin: COIN } }))
-      const [boxed] = tx.add(theirs.boxed({ arguments: [5n], typeArguments: ["u64"] }))
+      const boxed = tx.add(theirs.boxed({ arguments: [5n], typeArguments: ["u64"] }))
       tx.add(theirCoin.denyListV2ContainsCurrentEpoch({ arguments: ["0x2"], typeArguments: ["0x2::sui::SUI"] }))
-      tx.transferObjects([created!, boxed!], tx.pure.address(sender))
+      tx.transferObjects([created, boxed], tx.pure.address(sender))
     })
     expect(hex(mine)).toBe(hex(reference))
   })

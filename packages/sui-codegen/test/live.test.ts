@@ -81,7 +81,7 @@ suite("devnet", () => {
         )
 
         // 2. Point the generated bindings at it.
-        const deployment = Layer.succeed(fixture.Package, pkg)
+        const deployment = Layer.mergeAll(Layer.succeed(fixture.Package, pkg), Layer.succeed(fixture.Origins, { originalId: pkg }))
 
         // 3. Call generated functions.
         const created = yield* Tx.run(
@@ -108,13 +108,16 @@ suite("devnet", () => {
         const vaultId = created.changedObjects.find((o) => o.operation === "Created" && o.type === `${pkg}::fixture::Vault`)!.objectId
 
         const before = yield* fixture.Thing.get(thingId).pipe(
+          Effect.provide(deployment),
           Effect.retry({ while: (e) => e._tag === "ObjectNotFound", schedule: Schedule.spaced("500 millis"), times: 20 })
         )
         const vault = yield* fixture.Vault.get(vaultId).pipe(
+          Effect.provide(deployment),
           Effect.retry({ while: (e) => e._tag === "ObjectNotFound", schedule: Schedule.spaced("500 millis"), times: 20 })
         )
 
-        const marker = `${pkg}::fixture::Marker`
+        const marker = yield* fixture.Marker.type().pipe(Effect.provide(deployment))
+        expect(marker).toBe(`${pkg}::fixture::Marker`)
         const updated = yield* Tx.run(
           Effect.gen(function*() {
             yield* fixture.pause({ arguments: [thingId, "maintenance", 99n] })
@@ -126,6 +129,7 @@ suite("devnet", () => {
         ).pipe(Effect.provide(deployment))
         // Reads can trail execution by a moment: wait for the new version.
         const after = yield* fixture.Thing.get(thingId).pipe(
+          Effect.provide(deployment),
           Effect.repeat({ until: (t) => t.status._tag === "Paused", schedule: Schedule.spaced("500 millis"), times: 20 })
         )
 
@@ -164,8 +168,8 @@ suite("devnet", () => {
     // Same output from gRPC as from the (unpublished) summaries given the published id, apart from
     // what bytecode lacks: `packageId` reaches type strings, so the types match the chain's.
     const local = await Effect.runPromise(Summary.load(fixtureDir, { packageId: pkg }))
-    const localThing = Render.render(local.packages, [{ address: local.root }]).find((f) => f.path === "fixture/fixture.ts")!
-    expect(localThing.contents).toContain(`"${pkg}::fixture::Thing"`)
+    const localPackage = Render.render(local.packages, [{ address: local.root }]).find((f) => f.path === "fixture/$package.ts")!
+    expect(localPackage.contents).toContain(`originalId: "${pkg}"`)
     expect(result.created.changedObjects.some((o) => o.type === `${pkg}::fixture::Thing`)).toBe(true)
     const fromSummaries = Render.render(bytecodeView(local.packages), [{ address: local.root }], { docs: false })
     const fromGrpc = Render.render(result.onChain.packages, [{ address: result.onChain.root }], { docs: false })

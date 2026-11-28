@@ -5,7 +5,6 @@ import * as Context from "effect/Context"
  * The id that calls to `std` go to. Defaults to the id these bindings were
  * generated from; point them at another deployment with
  * `Layer.succeed(Package, id)` or `Effect.provideService(Package, id)`.
- * Type strings keep using each type's defining package.
  */
 export const Package = /* @__PURE__ */ Context.Reference<string>("@unconfirmed/sui-codegen/std/0x0000000000000000000000000000000000000000000000000000000000000001", {
   defaultValue: () => "0x0000000000000000000000000000000000000000000000000000000000000001"

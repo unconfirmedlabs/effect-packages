@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::pool_exchange_rate` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const PoolExchangeRate = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::pool_exchange_rate::PoolExchangeRate",
+  /* @__PURE__ */ Move.type(Origins, "pool_exchange_rate::PoolExchangeRate"),
   () =>
     Bcs.enum({
       Flat: null,

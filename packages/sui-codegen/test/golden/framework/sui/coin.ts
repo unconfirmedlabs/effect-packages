@@ -15,7 +15,7 @@ export { Package }
 
 /** A coin of type `T` worth `value`. Transferable and storable */
 export const Coin = /* @__PURE__ */ Move.object(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::Coin<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::Coin"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -29,7 +29,7 @@ export type Coin = typeof Coin.Type
  * unique instance of CoinMetadata<T> that stores the metadata for this coin type.
  */
 export const CoinMetadata = /* @__PURE__ */ Move.object(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::CoinMetadata<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::CoinMetadata"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -53,7 +53,7 @@ export const CoinMetadata = /* @__PURE__ */ Move.object(
 export type CoinMetadata = typeof CoinMetadata.Type
 
 export const CurrencyCreated = /* @__PURE__ */ Move.datatype(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::CurrencyCreated<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::CurrencyCreated"),
   () =>
     Bcs.struct({
       decimals: Bcs.u8
@@ -66,7 +66,7 @@ export type CurrencyCreated = typeof CurrencyCreated.Type
  * interacting with the coin as an input to a transaction.
  */
 export const DenyCap = /* @__PURE__ */ Move.object(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::DenyCap<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::DenyCap"),
   () =>
     Bcs.struct({
       id: Move.UID
@@ -82,7 +82,7 @@ export type DenyCap = typeof DenyCap.Type
  * all addresses were added to the deny list.
  */
 export const DenyCapV2 = /* @__PURE__ */ Move.object(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::DenyCapV2<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::DenyCapV2"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -96,7 +96,7 @@ export type DenyCapV2 = typeof DenyCapV2.Type
  * This object is always immutable.
  */
 export const RegulatedCoinMetadata = /* @__PURE__ */ Move.object(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::RegulatedCoinMetadata<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::RegulatedCoinMetadata"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -113,7 +113,7 @@ export type RegulatedCoinMetadata = typeof RegulatedCoinMetadata.Type
  * coins of type `T`. Transferable
  */
 export const TreasuryCap = /* @__PURE__ */ Move.object(
-  (T: string) => `0x0000000000000000000000000000000000000000000000000000000000000002::coin::TreasuryCap<${T}>`,
+  /* @__PURE__ */ Move.type<[T: string]>("0x0000000000000000000000000000000000000000000000000000000000000002", "coin::TreasuryCap"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -213,7 +213,7 @@ export const createCurrency = (options: {
     Move.pure(Bcs.byteVector, symbol),
     Move.pure(Bcs.byteVector, name),
     Move.pure(Bcs.byteVector, description),
-    Move.obj(iconUrl)
+    Move.arg(iconUrl)
   ], 2)
 }
 
@@ -245,7 +245,7 @@ export const createRegulatedCurrency = (options: {
     Move.pure(Bcs.byteVector, symbol),
     Move.pure(Bcs.byteVector, name),
     Move.pure(Bcs.byteVector, description),
-    Move.obj(iconUrl)
+    Move.arg(iconUrl)
   ], 3)
 }
 
@@ -283,7 +283,7 @@ export const createRegulatedCurrencyV2 = (options: {
     Move.pure(Bcs.byteVector, symbol),
     Move.pure(Bcs.byteVector, name),
     Move.pure(Bcs.byteVector, description),
-    Move.obj(iconUrl),
+    Move.arg(iconUrl),
     Move.pure(Bcs.bool, allowGlobalPause)
   ], 3)
 }
@@ -610,7 +610,7 @@ export const fromBalance = (options: {
   const a = options.arguments
   const [balance] = Move.isTuple(a) ? a : [a.balance] as const
   return Move.call(Package, "coin::from_balance", options.typeArguments, [
-    Move.obj(balance)
+    Move.arg(balance)
   ], 1)
 }
 
@@ -852,7 +852,7 @@ export const put = (options: {
   const a = options.arguments
   const [balance, coin] = Move.isTuple(a) ? a : [a.balance, a.coin] as const
   return Move.call(Package, "coin::put", options.typeArguments, [
-    Move.obj(balance),
+    Move.arg(balance),
     Move.obj(coin)
   ], 0)
 }
@@ -874,7 +874,7 @@ export const redeemFunds = (options: {
   const a = options.arguments
   const [withdrawal] = Move.isTuple(a) ? a : [a.withdrawal] as const
   return Move.call(Package, "coin::redeem_funds", options.typeArguments, [
-    Move.obj(withdrawal)
+    Move.arg(withdrawal)
   ], 1)
 }
 
@@ -997,7 +997,7 @@ export const take = (options: {
   const a = options.arguments
   const [balance, value] = Move.isTuple(a) ? a : [a.balance, a.value] as const
   return Move.call(Package, "coin::take", options.typeArguments, [
-    Move.obj(balance),
+    Move.arg(balance),
     Move.pure(Bcs.u64, value)
   ], 1)
 }
@@ -1171,4 +1171,55 @@ export const zero = (options: {
   readonly typeArguments: readonly [T: string]
 }) => {
   return Move.call(Package, "coin::zero", options.typeArguments, [], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  balance,
+  balanceMut,
+  burn,
+  createCurrency,
+  createRegulatedCurrency,
+  createRegulatedCurrencyV2,
+  denyListAdd,
+  denyListContains,
+  denyListRemove,
+  denyListV2Add,
+  denyListV2ContainsCurrentEpoch,
+  denyListV2ContainsNextEpoch,
+  denyListV2DisableGlobalPause,
+  denyListV2EnableGlobalPause,
+  denyListV2IsGlobalPauseEnabledCurrentEpoch,
+  denyListV2IsGlobalPauseEnabledNextEpoch,
+  denyListV2Remove,
+  destroyZero,
+  divideIntoN,
+  fromBalance,
+  getDecimals,
+  getDescription,
+  getIconUrl,
+  getName,
+  getSymbol,
+  intoBalance,
+  join,
+  migrateRegulatedCurrencyToV2,
+  mint,
+  mintAndTransfer,
+  mintBalance,
+  put,
+  redeemFunds,
+  sendFunds,
+  split,
+  supply,
+  supplyImmut,
+  supplyMut,
+  take,
+  totalSupply,
+  treasuryIntoSupply,
+  updateDescription,
+  updateIconUrl,
+  updateName,
+  updateSymbol,
+  value,
+  zero
 }

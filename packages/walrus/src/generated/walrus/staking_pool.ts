@@ -2,12 +2,15 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_pool` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
 import * as auth from "./auth.ts"
 import * as pending_values from "./pending_values.ts"
 import * as storage_node from "./storage_node.ts"
 
+export { Origins }
+
 export const NewEpochCommissionBlockedForCollection = /* @__PURE__ */ Move.datatype(
-  () => "0x849e95d2718938d66c37fb91df76d72f78526c1864c339bac415ce8ecda2d8cc::staking_pool::NewEpochCommissionBlockedForCollection",
+  /* @__PURE__ */ Move.type(Origins, "staking_pool::NewEpochCommissionBlockedForCollection"),
   () =>
     Bcs.struct({
       dummy_field: Bcs.bool
@@ -16,7 +19,7 @@ export const NewEpochCommissionBlockedForCollection = /* @__PURE__ */ Move.datat
 export type NewEpochCommissionBlockedForCollection = typeof NewEpochCommissionBlockedForCollection.Type
 
 export const PoolState = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_pool::PoolState",
+  /* @__PURE__ */ Move.type(Origins, "staking_pool::PoolState"),
   () =>
     Bcs.enum({
       Active: null,
@@ -27,7 +30,7 @@ export const PoolState = /* @__PURE__ */ Move.datatype(
 export type PoolState = typeof PoolState.Type
 
 export const VotingParams = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_pool::VotingParams",
+  /* @__PURE__ */ Move.type(Origins, "staking_pool::VotingParams"),
   () =>
     Bcs.struct({
       storage_price: Bcs.u64,
@@ -38,7 +41,7 @@ export const VotingParams = /* @__PURE__ */ Move.datatype(
 export type VotingParams = typeof VotingParams.Type
 
 export const StakingPool = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_pool::StakingPool",
+  /* @__PURE__ */ Move.type(Origins, "staking_pool::StakingPool"),
   () =>
     Bcs.struct({
       id: Move.UID,

@@ -2,12 +2,15 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_inner` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
 import * as committee from "./committee.ts"
 import * as epoch_parameters from "./epoch_parameters.ts"
 import * as extended_field from "./extended_field.ts"
 
+export { Origins }
+
 export const EpochState = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_inner::EpochState",
+  /* @__PURE__ */ Move.type(Origins, "staking_inner::EpochState"),
   () =>
     Bcs.enum({
       EpochChangeSync: Bcs.u16,
@@ -18,7 +21,7 @@ export const EpochState = /* @__PURE__ */ Move.datatype(
 export type EpochState = typeof EpochState.Type
 
 export const StakingInnerV1 = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staking_inner::StakingInnerV1",
+  /* @__PURE__ */ Move.type(Origins, "staking_inner::StakingInnerV1"),
   () =>
     Bcs.struct({
       n_shards: Bcs.u16,

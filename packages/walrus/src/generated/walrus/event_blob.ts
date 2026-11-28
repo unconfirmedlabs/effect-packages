@@ -2,9 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::event_blob` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
+import { Origins } from "./$package.ts"
+
+export { Origins }
 
 export const EventBlob = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::event_blob::EventBlob",
+  /* @__PURE__ */ Move.type(Origins, "event_blob::EventBlob"),
   () =>
     Bcs.struct({
       blob_id: Bcs.u256,
@@ -14,7 +17,7 @@ export const EventBlob = /* @__PURE__ */ Move.datatype(
 export type EventBlob = typeof EventBlob.Type
 
 export const EventBlobAttestation = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::event_blob::EventBlobAttestation",
+  /* @__PURE__ */ Move.type(Origins, "event_blob::EventBlobAttestation"),
   () =>
     Bcs.struct({
       checkpoint_sequence_num: Bcs.u64,
@@ -24,7 +27,7 @@ export const EventBlobAttestation = /* @__PURE__ */ Move.datatype(
 export type EventBlobAttestation = typeof EventBlobAttestation.Type
 
 export const EventBlobCertificationState = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::event_blob::EventBlobCertificationState",
+  /* @__PURE__ */ Move.type(Origins, "event_blob::EventBlobCertificationState"),
   () =>
     Bcs.struct({
       latest_certified_blob: Bcs.option(EventBlob),

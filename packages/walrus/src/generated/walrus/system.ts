@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::system` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const SnapshotStateKey = /* @__PURE__ */ Move.datatype(
-  () => "0x7d3b2086808a62bbc44d18c6b1d407973d77dd26946735873092c2f5650b4611::system::SnapshotStateKey",
+  /* @__PURE__ */ Move.type(Origins, "system::SnapshotStateKey"),
   () =>
     Bcs.struct({
       dummy_field: Bcs.bool
@@ -16,7 +16,7 @@ export const SnapshotStateKey = /* @__PURE__ */ Move.datatype(
 export type SnapshotStateKey = typeof SnapshotStateKey.Type
 
 export const System = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::system::System",
+  /* @__PURE__ */ Move.type(Origins, "system::System"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -34,7 +34,7 @@ export const addPerEpochSubsidies = (options: {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "system::add_per_epoch_subsidies", [], [
     Move.obj(arg0),
-    Move.obj(arg1)
+    Move.arg(arg1)
   ], 0)
 }
 
@@ -444,4 +444,41 @@ export const version = (options: {
   return Move.call(Package, "system::version", [], [
     Move.obj(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  addPerEpochSubsidies,
+  addSubsidy,
+  burnExpiredPooledBlob,
+  certifyBlob,
+  certifyEventBlob,
+  certifyPooledBlob,
+  certifySnapshotBlob,
+  createStoragePool,
+  createStoragePoolWithStorage,
+  decreaseStoragePoolCapacityBySize,
+  decreaseStoragePoolUnusedCapacityByPercent,
+  deleteBlob,
+  deleteDenyListedBlob,
+  deletePooledBlob,
+  epoch,
+  extendBlob,
+  extendBlobWithResource,
+  extendStoragePool,
+  futureAccounting,
+  increaseStoragePoolCapacity,
+  increaseStoragePoolCapacityWithStorage,
+  invalidateBlobId,
+  nShards,
+  registerBlob,
+  registerDenyListUpdate,
+  registerPooledBlob,
+  reserveSpace,
+  reserveSpaceForEpochs,
+  totalCapacitySize,
+  updateDenyList,
+  updateProtocolVersion,
+  usedCapacitySize,
+  version
 }

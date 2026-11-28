@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staked_wal` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const StakedWalState = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staked_wal::StakedWalState",
+  /* @__PURE__ */ Move.type(Origins, "staked_wal::StakedWalState"),
   () =>
     Bcs.enum({
       Staked: null,
@@ -19,7 +19,7 @@ export const StakedWalState = /* @__PURE__ */ Move.datatype(
 export type StakedWalState = typeof StakedWalState.Type
 
 export const StakedWal = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::staked_wal::StakedWal",
+  /* @__PURE__ */ Move.type(Origins, "staked_wal::StakedWal"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -111,4 +111,16 @@ export const withdrawEpoch = (options: {
   return Move.call(Package, "staked_wal::withdraw_epoch", [], [
     Move.obj(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  activationEpoch,
+  isStaked,
+  isWithdrawing,
+  join,
+  nodeId,
+  split,
+  value,
+  withdrawEpoch
 }

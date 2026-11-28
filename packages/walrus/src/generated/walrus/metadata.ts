@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::metadata` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Metadata = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::metadata::Metadata",
+  /* @__PURE__ */ Move.type(Origins, "metadata::Metadata"),
   () =>
     Bcs.struct({
       metadata: Move.VecMap(Bcs.string, Bcs.string)
@@ -21,7 +21,7 @@ export const insertOrUpdate = (options: {
 }) => {
   const [arg0, arg1, arg2] = options.arguments
   return Move.call(Package, "metadata::insert_or_update", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.string, arg1),
     Move.pure(Bcs.string, arg2)
   ], 0)
@@ -39,7 +39,7 @@ export const remove = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "metadata::remove", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.string, arg1)
   ], 2)
 }
@@ -50,7 +50,15 @@ export const removeIfExists = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "metadata::remove_if_exists", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.string, arg1)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  insertOrUpdate,
+  new: new_,
+  remove,
+  removeIfExists
 }

@@ -2,13 +2,13 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::blob` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 import * as storage_resource from "./storage_resource.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Blob = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::blob::Blob",
+  /* @__PURE__ */ Move.type(Origins, "blob::Blob"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -24,7 +24,7 @@ export const Blob = /* @__PURE__ */ Move.object(
 export type Blob = typeof Blob.Type
 
 export const BlobIdDerivation = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::blob::BlobIdDerivation",
+  /* @__PURE__ */ Move.type(Origins, "blob::BlobIdDerivation"),
   () =>
     Bcs.struct({
       encoding_type: Bcs.u8,
@@ -41,7 +41,7 @@ export const addMetadata = (options: {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "blob::add_metadata", [], [
     Move.obj(arg0),
-    Move.obj(arg1)
+    Move.arg(arg1)
   ], 0)
 }
 
@@ -52,7 +52,7 @@ export const addOrReplaceMetadata = (options: {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "blob::add_or_replace_metadata", [], [
     Move.obj(arg0),
-    Move.obj(arg1)
+    Move.arg(arg1)
   ], 1)
 }
 
@@ -221,4 +221,26 @@ export const takeMetadata = (options: {
   return Move.call(Package, "blob::take_metadata", [], [
     Move.obj(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  addMetadata,
+  addOrReplaceMetadata,
+  blobId,
+  burn,
+  certifiedEpoch,
+  deriveBlobId,
+  encodedSize,
+  encodingType,
+  endEpoch,
+  insertOrUpdateMetadataPair,
+  isDeletable,
+  objectId,
+  registeredEpoch,
+  removeMetadataPair,
+  removeMetadataPairIfExists,
+  size,
+  storage,
+  takeMetadata
 }

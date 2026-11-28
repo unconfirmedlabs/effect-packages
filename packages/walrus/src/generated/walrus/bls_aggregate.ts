@@ -2,10 +2,13 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::bls_aggregate` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import * as group_ops from "../deps/0x2/group_ops.ts"
+import { Origins } from "./$package.ts"
+import * as group_ops from "../deps/sui/group_ops.ts"
+
+export { Origins }
 
 export const BlsCommitteeMember = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::bls_aggregate::BlsCommitteeMember",
+  /* @__PURE__ */ Move.type(Origins, "bls_aggregate::BlsCommitteeMember"),
   () =>
     Bcs.struct({
       public_key: group_ops.Element,
@@ -16,7 +19,7 @@ export const BlsCommitteeMember = /* @__PURE__ */ Move.datatype(
 export type BlsCommitteeMember = typeof BlsCommitteeMember.Type
 
 export const BlsCommittee = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::bls_aggregate::BlsCommittee",
+  /* @__PURE__ */ Move.type(Origins, "bls_aggregate::BlsCommittee"),
   () =>
     Bcs.struct({
       members: Bcs.vector(BlsCommitteeMember),
@@ -28,7 +31,7 @@ export const BlsCommittee = /* @__PURE__ */ Move.datatype(
 export type BlsCommittee = typeof BlsCommittee.Type
 
 export const RequiredWeight = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::bls_aggregate::RequiredWeight",
+  /* @__PURE__ */ Move.type(Origins, "bls_aggregate::RequiredWeight"),
   () =>
     Bcs.enum({
       Quorum: null,

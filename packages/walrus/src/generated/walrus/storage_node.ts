@@ -2,15 +2,15 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_node` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
-import * as group_ops from "../deps/0x2/group_ops.ts"
+import { Origins, Package } from "./$package.ts"
+import * as group_ops from "../deps/sui/group_ops.ts"
 import * as event_blob from "./event_blob.ts"
 import * as extended_field from "./extended_field.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const StorageNodeCap = /* @__PURE__ */ Move.object(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_node::StorageNodeCap",
+  /* @__PURE__ */ Move.type(Origins, "storage_node::StorageNodeCap"),
   () =>
     Bcs.struct({
       id: Move.UID,
@@ -25,7 +25,7 @@ export const StorageNodeCap = /* @__PURE__ */ Move.object(
 export type StorageNodeCap = typeof StorageNodeCap.Type
 
 export const StorageNodeInfo = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::storage_node::StorageNodeInfo",
+  /* @__PURE__ */ Move.type(Origins, "storage_node::StorageNodeInfo"),
   () =>
     Bcs.struct({
       name: Bcs.string,
@@ -65,7 +65,7 @@ export const id = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "storage_node::id", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -97,4 +97,14 @@ export const nodeId = (options: {
   return Move.call(Package, "storage_node::node_id", [], [
     Move.obj(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  denyListRoot,
+  denyListSequence,
+  id,
+  lastEpochSyncDone,
+  lastEventBlobAttestation,
+  nodeId
 }

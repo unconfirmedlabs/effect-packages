@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::committee` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const Committee = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::committee::Committee",
+  /* @__PURE__ */ Move.type(Origins, "committee::Committee"),
   () =>
     Bcs.tuple([Move.VecMap(Move.ID, Bcs.vector(Bcs.u16))])
 )
@@ -19,7 +19,7 @@ export const inner = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "committee::inner", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -29,7 +29,7 @@ export const shards = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "committee::shards", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Move.address, arg1)
   ], 1)
 }
@@ -40,7 +40,7 @@ export const size = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "committee::size", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -50,6 +50,14 @@ export const toInner = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "committee::to_inner", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  inner,
+  shards,
+  size,
+  toInner
 }

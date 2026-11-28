@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::extended_field` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const ExtendedField = /* @__PURE__ */ Move.object(
-  (T0: string) => `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::extended_field::ExtendedField<${T0}>`,
+  /* @__PURE__ */ Move.type<[T0: string]>(Origins, "extended_field::ExtendedField"),
   () =>
     Bcs.struct({
       id: Move.UID
@@ -16,7 +16,7 @@ export const ExtendedField = /* @__PURE__ */ Move.object(
 export type ExtendedField = typeof ExtendedField.Type
 
 export const Key = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::extended_field::Key",
+  /* @__PURE__ */ Move.type(Origins, "extended_field::Key"),
   () =>
     Bcs.struct({
       dummy_field: Bcs.bool
@@ -79,4 +79,13 @@ export const swap = (options: {
     Move.obj(arg0),
     Move.param(options.typeArguments[0], arg1)
   ], 1)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  borrow,
+  borrowMut,
+  destroy,
+  new: new_,
+  swap
 }

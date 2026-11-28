@@ -2,12 +2,12 @@
 /** `0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::node_metadata` */
 import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Move from "@unconfirmed/sui/Move"
-import { Package } from "./$package.ts"
+import { Origins, Package } from "./$package.ts"
 
-export { Package }
+export { Origins, Package }
 
 export const NodeMetadata = /* @__PURE__ */ Move.datatype(
-  () => "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::node_metadata::NodeMetadata",
+  /* @__PURE__ */ Move.type(Origins, "node_metadata::NodeMetadata"),
   () =>
     Bcs.struct({
       image_url: Bcs.string,
@@ -24,7 +24,7 @@ export const description = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "node_metadata::description", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -34,7 +34,7 @@ export const extraFields = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "node_metadata::extra_fields", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -44,7 +44,7 @@ export const imageUrl = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "node_metadata::image_url", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -67,7 +67,7 @@ export const projectUrl = (options: {
 }) => {
   const [arg0] = options.arguments
   return Move.call(Package, "node_metadata::project_url", [], [
-    Move.obj(arg0)
+    Move.arg(arg0)
   ], 1)
 }
 
@@ -77,7 +77,7 @@ export const setDescription = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "node_metadata::set_description", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.string, arg1)
   ], 0)
 }
@@ -88,8 +88,8 @@ export const setExtraFields = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "node_metadata::set_extra_fields", [], [
-    Move.obj(arg0),
-    Move.obj(arg1)
+    Move.arg(arg0),
+    Move.arg(arg1)
   ], 0)
 }
 
@@ -99,7 +99,7 @@ export const setImageUrl = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "node_metadata::set_image_url", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.string, arg1)
   ], 0)
 }
@@ -110,7 +110,20 @@ export const setProjectUrl = (options: {
 }) => {
   const [arg0, arg1] = options.arguments
   return Move.call(Package, "node_metadata::set_project_url", [], [
-    Move.obj(arg0),
+    Move.arg(arg0),
     Move.pure(Bcs.string, arg1)
   ], 0)
+}
+
+/** The module's call builders, by name. */
+export const calls = {
+  description,
+  extraFields,
+  imageUrl,
+  new: new_,
+  projectUrl,
+  setDescription,
+  setExtraFields,
+  setImageUrl,
+  setProjectUrl
 }
