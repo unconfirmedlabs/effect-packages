@@ -114,6 +114,33 @@ describe("local packages", () => {
     expect(model.packages.map((p) => p.address)).toContain(M.unpublished("other"))
   })
 
+  test("a dependency the summaries label by address is named by its Move.toml, found through the build's source maps (#14)", async () => {
+    // `sui move summary` labels a package reached only through another dependency by its address.
+    const dir = join(scratch, "by-address")
+    const address = Address.normalize("0xc4")
+    rmSync(dir, { recursive: true, force: true })
+    cpSync(summaries, join(dir, "pkg/package_summaries"), { recursive: true })
+    cpSync(join(fixtureDir, "Move.toml"), join(dir, "pkg/Move.toml"))
+    mkdirSync(join(dir, "pkg/package_summaries", address))
+    writeFileSync(
+      join(dir, "pkg/package_summaries", address, "bps.json"),
+      JSON.stringify({ id: { address, name: "bps" }, functions: {}, structs: {}, enums: {} })
+    )
+    mkdirSync(join(dir, "bps/sources"), { recursive: true })
+    writeFileSync(join(dir, "bps/Move.toml"), `[package]\nname = "bps"\nedition = "2024"\n`)
+    const maps = join(dir, "pkg/build/fixture/debug_info/dependencies/bps")
+    mkdirSync(maps, { recursive: true })
+    writeFileSync(join(maps, "bps.json"), JSON.stringify({ from_file_path: join(dir, "bps/sources/bps.move"), module_name: [address.slice(2), "bps"] }))
+
+    const model = await Effect.runPromise(Summary.load(join(dir, "pkg")))
+    expect(model.packages.find((p) => p.address === address)?.name).toBe("bps")
+
+    rmSync(join(dir, "pkg/build"), { recursive: true })
+    const f = failure(await Effect.runPromiseExit(Summary.load(join(dir, "pkg"))))
+    expect(f.typed).toBe(true)
+    expect(f.json).toContain(`cannot name dependency ${address}`)
+  })
+
   test("summary directories not in the address mapping are ignored; bad input is a CodegenError (CT-21)", async () => {
     const dir = relabelled(join(scratch, "stray"), "fixture")
     mkdirSync(join(dir, ".cache"))

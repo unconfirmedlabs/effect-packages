@@ -4,6 +4,10 @@
 import { describe, expect, test } from "bun:test"
 import { Cause, DateTime, Deferred, Effect, Fiber, Layer, Option, Schedule } from "effect"
 import { TestClock } from "effect/testing"
+import * as Address from "@unconfirmed/sui/Address"
+import * as AddressAlias from "@unconfirmed/sui/AddressAlias"
+import * as Ed25519 from "@unconfirmed/sui/Ed25519"
+import * as Ptb from "@unconfirmed/sui/Ptb"
 import { RpcError } from "@unconfirmed/sui/RpcError"
 import * as Journal from "../src/Journal.ts"
 import { JournalEntry } from "../src/JournalEntry.ts"
@@ -627,5 +631,30 @@ describe("review fixes: submit, resubmit, reconcileAll", () => {
     expect(DateTime.toEpochMillis(entry.at)).toBe(1_000)
     expect(entry.lastError).toBe("RpcError UNAVAILABLE")
     expect(entry.attempts).toBe(3)
+  })
+})
+
+describe("run", () => {
+  test("a signer that is neither sender nor gas owner is Tx.SignerMismatch before any network call; as an alias signer it runs", async () => {
+    const world = makeWorld()
+    const account = Address.normalize("0xa11ce")
+    const recipe = Effect.gen(function*() {
+      const coin = yield* Ptb.coin({ amount: 1n, useGasCoin: false })
+      yield* Ptb.transferObjects([coin], yield* Ptb.address(account))
+    })
+    const { refused, calls, unresolved, effects } = await Effect.runPromise(
+      Effect.gen(function*() {
+        const key = yield* Ed25519.generate
+        const refused = yield* Effect.flip(Lifecycle.run(recipe, { signer: key, sender: account }))
+        const calls = world.infoCalls + world.executeCalls + world.getCalls
+        const { entries: unresolved } = yield* Effect.flatMap(Effect.service(Journal.Journal), (j) => j.listUnresolved)
+        const effects = yield* Lifecycle.run(recipe, { signer: AddressAlias.signer(account, key), sender: account })
+        return { refused, calls, unresolved, effects }
+      }).pipe(Effect.provide(Layer.mergeAll(layer(world), Journal.layerMemory, fast)))
+    )
+    expect(refused).toMatchObject({ _tag: "SignerMismatch", sender: account, gasOwner: account })
+    expect(calls).toBe(0)
+    expect(unresolved).toEqual([])
+    expect(world.sent).toEqual([effects.digest])
   })
 })

@@ -12,7 +12,7 @@ import { ObjectNotFound, Objects, type SuiObject } from "@unconfirmed/sui/Object
 import { Packages } from "@unconfirmed/sui/Packages"
 import { RpcError } from "@unconfirmed/sui/RpcError"
 import type * as T from "@unconfirmed/sui/TransactionData"
-import { type Effects, TransactionNotFound, Transactions } from "@unconfirmed/sui/Transactions"
+import { type Effects, type IncludeOptions, TransactionNotFound, Transactions } from "@unconfirmed/sui/Transactions"
 import { Effect, Layer, Option, Stream } from "effect"
 import * as Evidence from "../src/Evidence.ts"
 import * as Lifecycle from "../src/Lifecycle.ts"
@@ -81,6 +81,8 @@ export interface World {
   evidenceEpoch: bigint | undefined
   objectsInFlight: number
   objectsMaxInFlight: number
+  /** `Chain.info` calls. */
+  infoCalls: number
 }
 
 export const makeWorld = (overrides: Partial<World> = {}): World => ({
@@ -103,7 +105,15 @@ export const makeWorld = (overrides: Partial<World> = {}): World => ({
   evidenceEpoch: undefined,
   objectsInFlight: 0,
   objectsMaxInFlight: 0,
+  infoCalls: 0,
   ...overrides
+})
+
+/** The effects with what `include` asked for: no events or balance changes in this world, but present. */
+const included = (effects: Effects, options?: IncludeOptions): Effects => ({
+  ...effects,
+  ...(options?.include?.includes("events") && { events: [] }),
+  ...(options?.include?.includes("balanceChanges") && { balanceChanges: [] })
 })
 
 export const effectsOf = (digest: string, abort: boolean, changedObjects: Effects["changedObjects"] = []): Effects => ({
@@ -150,7 +160,7 @@ export const layer = (world: World) =>
           if (world.inFlight > 0) world.builtDuringExecute = true
           return { effects: effectsOf(Hash.transactionDigest(bytes), false), returnValues: [] }
         }),
-      execute: (bytes) =>
+      execute: (bytes, _signatures, options) =>
         Effect.suspend(() => {
           world.executeCalls++
           world.inFlight++
@@ -163,7 +173,7 @@ export const layer = (world: World) =>
           const behaviour = world.script.shift() ?? "land"
           switch (behaviour) {
             case "land":
-              return Effect.succeed(land(world, digest))
+              return Effect.succeed(included(land(world, digest), options))
             case "abort":
               return Effect.succeed(land(world, digest, true))
             case "failBefore":
@@ -200,7 +210,7 @@ export const layer = (world: World) =>
         })),
           Effect.ensuring(Effect.sync(() => void world.inFlight--))
         ),
-      get: (digest) =>
+      get: (digest, options) =>
         Effect.andThen(world.onGet(digest), () => {
           world.getCalls++
           const found = world.landed.get(digest)
@@ -208,7 +218,7 @@ export const layer = (world: World) =>
             world.hideFor--
             return Effect.fail(new TransactionNotFound({ digest }))
           }
-          return found ? Effect.succeed(found) : Effect.fail(new TransactionNotFound({ digest }))
+          return found ? Effect.succeed(included(found, options)) : Effect.fail(new TransactionNotFound({ digest }))
         })
     }),
     Layer.succeed(Objects, {
@@ -227,7 +237,7 @@ export const layer = (world: World) =>
       listOwned: () => Stream.empty
     }),
     Layer.succeed(Chain, {
-      info: Effect.sync(() => ({
+      info: Effect.sync(() => (world.infoCalls++, {
         chainId: world.chainId as T.ObjectDigest,
         chain: "stub",
         epoch: world.epoch,

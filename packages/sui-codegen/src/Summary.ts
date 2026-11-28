@@ -9,7 +9,7 @@
 import * as Effect from "effect/Effect"
 import { existsSync } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import * as M from "./Model.ts"
 
 // -----------------------------------------------------------------------------
@@ -230,6 +230,59 @@ const moveTomlName = (toml: string): string | undefined => {
 
 const isHexAddress = (s: string) => /^0x[0-9a-f]{1,64}$/i.test(s)
 
+/** The parts of a Move source map (`build/<root>/debug_info/.../<module>.json`) used here. */
+interface SSourceMap {
+  readonly from_file_path?: string
+  readonly module_name?: readonly [string, string]
+}
+
+/**
+ * The name of a dependency the summaries label by its address, as
+ * `sui move summary` does for a package the root reaches only through another
+ * dependency: the `[package] name` of the dependency's own `Move.toml`. The
+ * build's source maps (`build/<root>/debug_info/dependencies/<dep>/<module>.json`,
+ * written by the same run) give each module's address and source file; the
+ * manifest is the nearest `Move.toml` above that file. Fails rather than name
+ * the package by its address, which differs per network.
+ */
+const dependencyName = (
+  packageDir: string,
+  address: string,
+  modules: ReadonlyArray<string>
+): Effect.Effect<string, M.CodegenError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const build = join(packageDir, "build")
+      const deps = existsSync(build)
+        ? (await readdir(build)).map((b) => join(build, b, "debug_info", "dependencies")).filter((d) => existsSync(d))
+        : []
+      let source: string | undefined
+      search: for (const d of deps) {
+        for (const dep of await readdir(d)) {
+          for (const module of modules) {
+            const file = join(d, dep, `${module}.json`)
+            if (!existsSync(file)) continue
+            const map = JSON.parse(await readFile(file, "utf-8")) as SSourceMap
+            if (map.module_name !== undefined && map.from_file_path !== undefined && M.normalizeAddress(map.module_name[0]) === address) {
+              source = resolve(packageDir, map.from_file_path)
+              break search
+            }
+          }
+        }
+      }
+      for (let at = source && dirname(source); at !== undefined; at = dirname(at) === at ? undefined : dirname(at)) {
+        if (!existsSync(join(at, "Move.toml"))) continue
+        const name = moveTomlName(await readFile(join(at, "Move.toml"), "utf-8"))
+        if (name !== undefined) return name
+      }
+      throw new M.CodegenError({
+        message: `cannot name dependency ${address}: the summaries label it by address, and no source map under ${build} ` +
+          "leads to its Move.toml (rerun `sui move summary`)"
+      })
+    },
+    catch: (e) => e instanceof M.CodegenError ? e : new M.CodegenError({ message: `naming dependency ${address}: ${String(e)}` })
+  })
+
 /** One `[published.<environment>]` record of a `Published.toml`. */
 export interface PublishRecord {
   readonly environment: string
@@ -314,6 +367,19 @@ export const load = (path: string, options: SummaryOptions = {}): Effect.Effect<
       sources.set(label, modules)
     }
 
+    // A source package's dependencies have names. Summaries of bytecode (an
+    // on-chain root) have none, and those packages keep their addresses.
+    const packageDir = dir === path ? dirname(path) : path
+    const fromSource = metadata.root_package_id === undefined && existsSync(join(packageDir, "Move.toml"))
+    const names = new Map<string, string>()
+    for (const label of labels) {
+      if (!isHexAddress(label) || label === root) continue
+      const address = yield* trySync(() => M.normalizeAddress(label), "reading summaries")
+      const name = M.SYSTEM[address] ??
+        (fromSource && address !== M.ZERO ? yield* dependencyName(packageDir, address, sources.get(label)!.map(([m]) => m)) : undefined)
+      if (name !== undefined) names.set(label, name)
+    }
+
     return yield* trySync((): M.Model => {
       const rootPublished = published(root)
       const given = options.originalId ?? options.packageId
@@ -361,7 +427,7 @@ export const load = (path: string, options: SummaryOptions = {}): Effect.Effect<
             : isRoot && metadata.root_package_id !== undefined
             ? M.normalizeAddress(metadata.root_package_id)
             : rendered,
-          name: isRoot && options.name !== undefined ? options.name : isHexAddress(label) ? M.shortAddress(address) : label,
+          name: isRoot && options.name !== undefined ? options.name : names.get(label) ?? (isHexAddress(label) ? M.shortAddress(address) : label),
           modules
         })
       }

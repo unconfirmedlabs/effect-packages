@@ -231,7 +231,8 @@ export class SignerMismatch extends /* @__PURE__ */ Schema.TaggedError<SignerMis
   }
 }
 
-const mismatch = (signer: Address, sender: Address, gasOwner: Address): SignerMismatch | undefined =>
+/** `SignerMismatch` when `signer` is neither `sender` nor `gasOwner`, else `undefined`. */
+export const signerMismatch = (signer: Address, sender: Address, gasOwner: Address): SignerMismatch | undefined =>
   signer === sender || signer === gasOwner ? undefined : new SignerMismatch({ signer, sender, gasOwner })
 
 
@@ -275,7 +276,7 @@ const checkChange = (
  */
 const sign = /* @__PURE__ */ Effect.fnUntraced(function*(data: T.TransactionData, signers: ReadonlyArray<Signer | TransactionSigner>) {
   for (const s of signers) {
-    const refused = mismatch(s.address, data.sender, data.gasData.owner)
+    const refused = signerMismatch(s.address, data.sender, data.gasData.owner)
     if (refused) return yield* refused
   }
   let current = data
@@ -358,7 +359,7 @@ export const run = <A, E1, R1, E2 = never, R2 = never>(
 > =>
   Effect.suspend(() => {
     const sender = options.sender ?? options.signer.address
-    const refused = mismatch(options.signer.address, sender, options.gasOwner ?? sender)
+    const refused = signerMismatch(options.signer.address, sender, options.gasOwner ?? sender)
     return refused
       ? Effect.fail(refused)
       : Effect.flatMap(build(recipe, { ...options, sender }), (data) =>

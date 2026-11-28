@@ -6,27 +6,37 @@
  * `Unknown` means the answer never arrived; the bytes are kept for later.
  * `Executed`, `Failed` and `NotApplied` are terminal. `NotApplied` is its own
  * terminal case so a proven-dead submission does not stay unresolved forever.
+ *
+ * `Signed`, `Unknown` and `Executed` keep the `include` the submission asked
+ * for, so a reconcile after a crash returns the same parts of the effects.
  */
+import type { Include } from "@unconfirmed/sui/Transactions"
 import * as DateTime from "effect/DateTime"
 import * as Schema from "effect/Schema"
 import { NotAppliedEvidence } from "./Outcome.ts"
 import { SignedTransaction } from "./SignedTransaction.ts"
 
+/** `Transactions.Include`: the optional parts of the effects to read. Absent from entries written before it existed. */
+const include = Schema.optionalKey(Schema.Array(Schema.Literals(["events", "balanceChanges"] satisfies ReadonlyArray<Include>)))
+
 export const JournalEntry = Schema.TaggedUnion({
   Signed: {
     digest: Schema.String,
     signed: SignedTransaction,
+    include,
     at: Schema.DateTimeUtcFromMillis
   },
   Unknown: {
     digest: Schema.String,
     signed: SignedTransaction,
+    include,
     lastError: Schema.String,
     attempts: Schema.Int,
     at: Schema.DateTimeUtcFromMillis
   },
   Executed: {
     digest: Schema.String,
+    include,
     at: Schema.DateTimeUtcFromMillis
   },
   Failed: {
@@ -46,6 +56,10 @@ export type Unresolved = Extract<JournalEntry, { readonly _tag: "Signed" | "Unkn
 
 /** `Signed` and `Unknown` still need an answer from the network. */
 export const isUnresolved: (entry: JournalEntry) => entry is Unresolved = JournalEntry.isAnyOf(["Signed", "Unknown"])
+
+/** The `include` an entry recorded, if any. */
+export const includeOf = (entry: JournalEntry): ReadonlyArray<Include> | undefined =>
+  entry._tag === "Signed" || entry._tag === "Unknown" || entry._tag === "Executed" ? entry.include : undefined
 
 export const millisOf = (entry: JournalEntry): number => DateTime.toEpochMillis(entry.at)
 
