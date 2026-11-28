@@ -187,7 +187,7 @@ export const lifecycle = (recipe: typeof aRecipe) =>
       JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
     )
     yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
-    const effects = yield* Lifecycle.run(recipe, { signer })
+    const effects = yield* Lifecycle.run(recipe, { signer, include: ["events"] })   // include survives a crash (journalled)
     // #endregion
   })
 

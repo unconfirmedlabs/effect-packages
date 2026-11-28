@@ -88,7 +88,7 @@ for (const { name, layer: kv } of stores) {
       expect(keys.filter((k) => k.startsWith("j/settled:"))).toEqual(["j/settled:Settled2"])
     })
 
-    test("signed + journalled, crash before the submit result; reconcileAll recovers", async () => {
+    test("signed + journalled, crash before the submit result; reconcileAll recovers, with the include asked for", async () => {
       const world = makeWorld({ script: ["hangAfter"] })
       const store = kv()
       const { before, recovered, after, entry } = await Effect.runPromise(
@@ -96,7 +96,7 @@ for (const { name, layer: kv } of stores) {
           const signed = yield* signedTx()
           // Process 1: submits, the execute lands but the answer never comes; the process dies.
           const fiber = yield* Effect.forkChild(
-            Lifecycle.submit(signed).pipe(Effect.provide(JournalKeyValueStore.layer()))
+            Lifecycle.submit(signed, { include: ["events"] }).pipe(Effect.provide(JournalKeyValueStore.layer()))
           )
           yield* Effect.yieldNow
           yield* Effect.sleep(10)
@@ -112,10 +112,10 @@ for (const { name, layer: kv } of stores) {
           }).pipe(Effect.provide(JournalKeyValueStore.layer()))
         }).pipe(Effect.provide(Layer.mergeAll(layer(world), fast)), Effect.provide(store))
       )
-      expect(before.map((e) => e._tag)).toEqual(["Signed"])
-      expect(recovered.map((r) => r._tag)).toEqual(["Executed"])
+      expect(before.map((e) => [e._tag, e.include])).toEqual([["Signed", ["events"]]])
+      expect(recovered.map((r) => r._tag === "Executed" && r.effects.events)).toEqual([[]])
       expect(after).toEqual([])
-      expect(Option.getOrThrow(entry)._tag).toBe("Executed")
+      expect(Option.getOrThrow(entry)).toMatchObject({ _tag: "Executed", include: ["events"] })
       expect(world.landed.size).toBe(1)
     })
   })

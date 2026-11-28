@@ -30,7 +30,7 @@ import * as Resolve from "@unconfirmed/sui/Resolve"
 import { RpcError } from "@unconfirmed/sui/RpcError"
 import * as Signer from "@unconfirmed/sui/Signer"
 import * as T from "@unconfirmed/sui/TransactionData"
-import { type Effects, Transactions } from "@unconfirmed/sui/Transactions"
+import { type Effects, type Include, type IncludeOptions, Transactions } from "@unconfirmed/sui/Transactions"
 import * as Tx from "@unconfirmed/sui/Tx"
 import * as Clock from "effect/Clock"
 import * as DateTime from "effect/DateTime"
@@ -41,7 +41,7 @@ import * as Result from "effect/Result"
 import { Evidence } from "./Evidence.ts"
 import { Journal } from "./Journal.ts"
 import { SenderLock } from "./SenderLock.ts"
-import { isUnresolved, JournalEntry } from "./JournalEntry.ts"
+import { includeOf, isUnresolved, JournalEntry } from "./JournalEntry.ts"
 import {
   DigestMismatch,
   ExecutionFailed,
@@ -60,6 +60,11 @@ type SignedTransaction = Signed.SignedTransaction
 export type Services = Transactions | Objects | Chain
 
 type Settled = ExecutionFailed | NotApplied | SubmissionUnknown
+
+/** The optional parts of the effects a submission asked for (`Transactions.IncludeOptions`). */
+type Includes = ReadonlyArray<Include> | undefined
+
+const withInclude = (include: Includes): IncludeOptions | undefined => include && { include }
 
 // -----------------------------------------------------------------------------
 // Small helpers
@@ -83,8 +88,8 @@ const executionFailed = (effects: Effects): ExecutionFailed | undefined =>
     : undefined
 
 /** One `Transactions.get`, with "not found" as `None`. */
-const lookupOnce = (digest: string): Effect.Effect<Option.Option<Effects>, RpcError, Transactions> =>
-  Effect.flatMap(Effect.service(Transactions), (t) => t.get(digest)).pipe(
+const lookupOnce = (digest: string, include?: Includes): Effect.Effect<Option.Option<Effects>, RpcError, Transactions> =>
+  Effect.flatMap(Effect.service(Transactions), (t) => t.get(digest, withInclude(include))).pipe(
     Effect.map(Option.some),
     Effect.catchTag("TransactionNotFound", () => Effect.succeedNone)
   )
@@ -93,16 +98,16 @@ const lookupOnce = (digest: string): Effect.Effect<Option.Option<Effects>, RpcEr
  * Ask for `digest` every `interval` until it is served or `timeout` passes.
  * `None` means every lookup missed; a transport failure that lasted to the
  * deadline (or was not retryable) is returned as the failure, because it is
- * not a miss.
+ * not a miss. `include` adds those parts to the effects.
  */
 export const awaitTransaction = Effect.fnUntraced(function*(
   digest: string,
-  options: { readonly timeout: Duration.Input; readonly interval: Duration.Input }
+  options: { readonly timeout: Duration.Input; readonly interval: Duration.Input } & IncludeOptions
 ): Effect.fn.Return<Option.Option<Effects>, RpcError, Transactions> {
   const interval = Duration.toMillis(options.interval)
   const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(options.timeout)
   while (true) {
-    const result = yield* Effect.result(lookupOnce(digest))
+    const result = yield* Effect.result(lookupOnce(digest, options.include))
     if (result._tag === "Success" && Option.isSome(result.success)) return result.success
     if (result._tag === "Failure" && !isRetryable(result.failure)) return yield* result.failure
     if ((yield* Clock.currentTimeMillis) + interval > deadline) {
@@ -117,9 +122,10 @@ export const awaitTransaction = Effect.fnUntraced(function*(
 // -----------------------------------------------------------------------------
 
 const entry = {
-  signed: (signed: SignedTransaction) =>
-    Effect.map(DateTime.now, (at) => JournalEntry.cases.Signed.make({ digest: signed.digest, signed, at })),
-  executed: (digest: string) => Effect.map(DateTime.now, (at) => JournalEntry.cases.Executed.make({ digest, at })),
+  signed: (signed: SignedTransaction, include: Includes) =>
+    Effect.map(DateTime.now, (at) => JournalEntry.cases.Signed.make({ digest: signed.digest, signed, ...withInclude(include), at })),
+  executed: (digest: string, include: Includes) =>
+    Effect.map(DateTime.now, (at) => JournalEntry.cases.Executed.make({ digest, ...withInclude(include), at })),
   failed: (error: ExecutionFailed) =>
     Effect.map(
       DateTime.now,
@@ -131,9 +137,16 @@ const entry = {
       (at) => JournalEntry.cases.NotApplied.make({ digest: error.digest, evidence: error.evidence, at })
     ),
   /** `firstAt`: when the bytes were first journalled, kept across rewrites. */
-  unknown: (signed: SignedTransaction, lastError: string, attempts: number, firstAt?: DateTime.Utc) =>
+  unknown: (signed: SignedTransaction, include: Includes, lastError: string, attempts: number, firstAt?: DateTime.Utc) =>
     Effect.map(DateTime.now, (now) =>
-      JournalEntry.cases.Unknown.make({ digest: signed.digest, signed, lastError, attempts, at: firstAt ?? now }))
+      JournalEntry.cases.Unknown.make({
+        digest: signed.digest,
+        signed,
+        ...withInclude(include),
+        lastError,
+        attempts,
+        at: firstAt ?? now
+      }))
 }
 
 /** Write an entry after the network answered: a failure is logged, never returned. */
@@ -146,10 +159,11 @@ const journalSettled = (e: JournalEntry): Effect.Effect<void> =>
 
 const terminalEntry = (
   result: Result.Result<Effects, Settled>,
-  digest: string
+  digest: string,
+  include: Includes
 ): Option.Option<Effect.Effect<JournalEntry>> =>
   result._tag === "Success"
-    ? Option.some(entry.executed(digest))
+    ? Option.some(entry.executed(digest, include))
     : result.failure._tag === "ExecutionFailed"
     ? Option.some(entry.failed(result.failure))
     : result.failure._tag === "NotApplied"
@@ -280,7 +294,8 @@ const OPEN_ELSEWHERE = "the Evidence backend has not yet reached the end of its 
 const recover = Effect.fnUntraced(function*(
   config: SubmitConfigService,
   digest: string,
-  signed: SignedTransaction | undefined
+  signed: SignedTransaction | undefined,
+  include: Includes
 ): Effect.fn.Return<Effects, Settled | RpcError, Services> {
   const unknown = (reason: string) => new SubmissionUnknown({ digest, ...(signed && { signed }), reason })
   const settle = (effects: Effects): Effect.Effect<Effects, Settled> => {
@@ -299,7 +314,7 @@ const recover = Effect.fnUntraced(function*(
     }
   }
 
-  const first = yield* awaitTransaction(digest, { timeout: config.lookupTimeout, interval: config.lookupInterval })
+  const first = yield* awaitTransaction(digest, { timeout: config.lookupTimeout, interval: config.lookupInterval, ...withInclude(include) })
   if (Option.isSome(first)) return yield* settle(first.value)
   if (signed === undefined) return yield* unknown("the node does not know this digest and the signed bytes are not available")
 
@@ -311,11 +326,11 @@ const recover = Effect.fnUntraced(function*(
   // Why a closed window settled nothing, when it did not.
   let why: string | undefined
   const round = Effect.fnUntraced(function*() {
-    const missed = yield* lookupOnce(digest)
+    const missed = yield* lookupOnce(digest, include)
     if (Option.isSome(missed)) return { _tag: "Settled" as const, effects: missed.value }
     const seen = yield* observeRound(digest, signed)
     if (seen._tag === "Found") {
-      const again = yield* lookupOnce(digest)
+      const again = yield* lookupOnce(digest, include)
       if (Option.isSome(again)) return { _tag: "Settled" as const, effects: again.value }
     }
     return seen
@@ -339,7 +354,7 @@ const recover = Effect.fnUntraced(function*(
   // Positive evidence vetoes "expired", so the objects are read first.
   const evidence = yield* inputEvidence(digest, signed)
   if (evidence._tag === "AppliedByUs") {
-    const again = yield* lookupOnce(digest)
+    const again = yield* lookupOnce(digest, include)
     if (Option.isSome(again)) return yield* settle(again.value)
     return yield* unknown(
       `object ${evidence.objectId} names this transaction as its last mutation, so it applied, but the node does not serve it` +
@@ -374,8 +389,8 @@ const recover = Effect.fnUntraced(function*(
   }
 })
 
-const reconcileUnjournaled = (digest: string, signed: SignedTransaction | undefined) =>
-  Effect.flatMap(Effect.service(SubmitConfig), (config) => recover(config, digest, signed)).pipe(
+const reconcileUnjournaled = (digest: string, signed: SignedTransaction | undefined, include: Includes) =>
+  Effect.flatMap(Effect.service(SubmitConfig), (config) => recover(config, digest, signed, include)).pipe(
     Effect.catchTag(
       "RpcError",
       (error) => Effect.fail(new SubmissionUnknown({ digest, ...(signed && { signed }), reason: describe(error) }))
@@ -388,6 +403,12 @@ const heldEntry = (digest: string): Effect.Effect<Option.Option<JournalEntry>> =
     Effect.catchTag("JournalError", (error) =>
       Effect.as(Effect.logError("the journal could not be read; the outcome stands", error), Option.none()))
   )
+
+/** The `include` asked for, else the one the journal recorded for the digest. */
+const includeFor = (digest: string, given: Includes): Effect.Effect<Includes> =>
+  given !== undefined
+    ? Effect.succeed(given)
+    : Effect.map(heldEntry(digest), (held) => Option.isSome(held) ? includeOf(held.value) : undefined)
 
 /**
  * A settled journal entry wins over a weaker conclusion. The chain finding the
@@ -467,17 +488,21 @@ const inputOf = (input: ReconcileInput): Effect.Effect<{ digest: string; signed:
  * entry); without them it can never be proven absent. A settled journal entry is never
  * contradicted by a weaker answer; a terminal answer settles an unresolved one.
  * Signed bytes whose digest does not match fail with `DigestMismatch`.
+ * `include` adds those parts to the effects; without it, the `include` the
+ * journal recorded for the submission is used.
  */
 export const reconcile = Effect.fn("Lifecycle.reconcile")(function*(
-  input: ReconcileInput
+  input: ReconcileInput,
+  options?: IncludeOptions
 ): Effect.fn.Return<Effects, Settled | DigestMismatch, Services> {
   const { digest, signed } = yield* inputOf(input)
+  const include = yield* includeFor(digest, options?.include)
   const result = yield* Effect.uninterruptibleMask((restore) =>
-    Effect.flatMap(restore(Effect.result(reconcileUnjournaled(digest, signed))), (raw) =>
+    Effect.flatMap(restore(Effect.result(reconcileUnjournaled(digest, signed, include))), (raw) =>
       Effect.gen(function*() {
         const held = yield* heldEntry(digest)
         const result = honourJournal(held, digest, signed, raw)
-        const make = terminalEntry(result, digest)
+        const make = terminalEntry(result, digest, include)
         if (Option.isSome(make) && Option.isSome(held) && isUnresolved(held.value)) {
           yield* journalSettled(yield* make.value)
         }
@@ -492,15 +517,16 @@ const settle = Effect.fnUntraced(function*(
   signed: SignedTransaction,
   attempts: number,
   lastError: string | undefined,
-  rechecks: number
+  rechecks: number,
+  include: Includes
 ): Effect.fn.Return<Result.Result<Effects, Settled>, never, Services> {
   const config = yield* SubmitConfig
   const answer = Effect.gen(function*() {
-    let result = yield* Effect.result(reconcileUnjournaled(signed.digest, signed))
+    let result = yield* Effect.result(reconcileUnjournaled(signed.digest, signed, include))
     for (let round = 0; round < rechecks; round++) {
       if (result._tag !== "Failure" || result.failure._tag !== "SubmissionUnknown") break
       yield* Effect.sleep(config.reconcileRecheck)
-      result = yield* Effect.result(reconcileUnjournaled(signed.digest, signed))
+      result = yield* Effect.result(reconcileUnjournaled(signed.digest, signed, include))
     }
     return result
   })
@@ -509,7 +535,7 @@ const settle = Effect.fnUntraced(function*(
       Effect.gen(function*() {
         const held = yield* heldEntry(signed.digest)
         const result = honourJournal(held, signed.digest, signed, raw)
-        const make = terminalEntry(result, signed.digest)
+        const make = terminalEntry(result, signed.digest, include)
         if (Option.isSome(make)) {
           yield* journalSettled(yield* make.value)
         } else {
@@ -520,6 +546,7 @@ const settle = Effect.fnUntraced(function*(
             held,
             yield* entry.unknown(
               signed,
+              include,
               lastError ?? (previous?._tag === "Unknown"
                 ? previous.lastError
                 : result._tag === "Failure" ? describe(result.failure) : "unknown"),
@@ -561,6 +588,8 @@ interface SendHow {
   readonly held?: Option.Option<JournalEntry> | undefined
   /** Write `Signed` even over a settled entry (re-sending a `refused` one on request). */
   readonly overwriteSettled?: boolean
+  /** The parts of the effects to read back, journalled with the bytes. */
+  readonly include?: Includes
 }
 
 /**
@@ -578,7 +607,7 @@ const journalBeforeSend = (
     // The caller usually just read the entry; read it here only when it did not.
     const held = how.held ?? (yield* journal.get(signed.digest))
     if (Option.isSome(held) && !isUnresolved(held.value) && !how.overwriteSettled) return
-    yield* journal.put(yield* entry.signed(signed))
+    yield* journal.put(yield* entry.signed(signed, how.include))
   }).pipe(
     Effect.catchTag("JournalError", (error): Effect.Effect<never, JournalError | SubmissionUnknown> =>
       resent
@@ -617,7 +646,7 @@ const send = Effect.fnUntraced(function*(
   let attempts = 0
   const once = Effect.suspend(() => {
     attempts += 1
-    return transactions.execute(signed.bytes, signed.signatures).pipe(
+    return transactions.execute(signed.bytes, signed.signatures, withInclude(how.include)).pipe(
       Effect.timeoutOrElse({
         duration: config.executeTimeout,
         orElse: () =>
@@ -647,7 +676,7 @@ const send = Effect.fnUntraced(function*(
       Effect.tap((answered) => {
         if (answered._tag !== "Success" || answered.success.digest !== signed.digest) return Effect.void
         const failed = executionFailed(answered.success)
-        return Effect.flatMap(failed ? entry.failed(failed) : entry.executed(signed.digest), journalSettled)
+        return Effect.flatMap(failed ? entry.failed(failed) : entry.executed(signed.digest, how.include), journalSettled)
       })
     )
   )
@@ -655,7 +684,7 @@ const send = Effect.fnUntraced(function*(
   if (result._tag === "Success") {
     const effects = result.success
     if (effects.digest !== signed.digest) {
-      return yield* reconcileSigned(signed, `the node answered for transaction ${effects.digest}`, attempts, 0)
+      return yield* reconcileSigned(signed, `the node answered for transaction ${effects.digest}`, attempts, 0, how.include)
     }
     const failed = executionFailed(effects)
     if (failed) return yield* failed
@@ -664,11 +693,11 @@ const send = Effect.fnUntraced(function*(
   }
   const failure = result.failure
   // Accepted, but the answer can't be read as effects: it may have executed.
-  if (failure._tag === "ExecutedEffectsIncomplete") return yield* reconcileSigned(signed, failure.message, attempts, 0)
+  if (failure._tag === "ExecutedEffectsIncomplete") return yield* reconcileSigned(signed, failure.message, attempts, 0, how.include)
   // A lock held by another transaction, whatever the code: the bytes reached
   // validators, so it reconciles (with rechecks while the winner becomes readable).
   if (LOCK_CONFLICT.test(failure.message)) {
-    return yield* reconcileSigned(signed, describe(failure), attempts, LOCK_CONFLICT_RECHECKS)
+    return yield* reconcileSigned(signed, describe(failure), attempts, LOCK_CONFLICT_RECHECKS, how.include)
   }
   // Refused outright on the first send of bytes never sent before: nothing executed.
   if (!resent && attempts === 1 && failure.code === "INVALID_ARGUMENT") {
@@ -676,16 +705,17 @@ const send = Effect.fnUntraced(function*(
     yield* Effect.flatMap(entry.notApplied(refused), journalSettled)
     return yield* refused
   }
-  return yield* reconcileSigned(signed, describe(failure), attempts, 0)
+  return yield* reconcileSigned(signed, describe(failure), attempts, 0, how.include)
 })
 
 const reconcileSigned = Effect.fnUntraced(function*(
   signed: SignedTransaction,
   lastSend: string,
   attempts: number,
-  rechecks: number
+  rechecks: number,
+  include: Includes
 ): Effect.fn.Return<Effects, Settled, Services> {
-  const settled = yield* settle(signed, attempts, lastSend, rechecks)
+  const settled = yield* settle(signed, attempts, lastSend, rechecks, include)
   if (settled._tag === "Success") return settled.success
   const failure = settled.failure
   if (failure._tag !== "SubmissionUnknown") return yield* failure
@@ -711,7 +741,7 @@ type SendMode = "fresh" | "submit" | "resend"
 const sendConsultingJournal = Effect.fnUntraced(function*(
   signed: SignedTransaction,
   mode: SendMode,
-  options?: { readonly retryRefused?: boolean }
+  options?: ResubmitOptions
 ): Effect.fn.Return<Effects, SubmitError, Services> {
   const held = yield* Effect.flatMap(Effect.service(Journal), (j) => j.get(signed.digest)).pipe(
     Effect.catchTag("JournalError", (error): Effect.Effect<never, JournalError | SubmissionUnknown> =>
@@ -723,21 +753,23 @@ const sendConsultingJournal = Effect.fnUntraced(function*(
         })
       ))
   )
+  // Asked for now, else what the earlier send of these bytes asked for.
+  const include = options?.include ?? (Option.isSome(held) ? includeOf(held.value) : undefined)
   if (Option.isSome(held)) {
     switch (held.value._tag) {
       case "Executed":
       case "Failed":
-        return yield* reconcile(signed)
+        return yield* reconcile(signed, withInclude(include))
       case "NotApplied":
         if (mode === "resend" && options?.retryRefused === true && held.value.evidence === "refused") {
-          return yield* resend(signed, { held, overwriteSettled: true })
+          return yield* resend(signed, { held, overwriteSettled: true, include })
         }
         return yield* new NotApplied({ digest: signed.digest, evidence: held.value.evidence })
       default:
-        return yield* resend(signed, { held })
+        return yield* resend(signed, { held, include })
     }
   }
-  return yield* (mode === "resend" ? resend(signed, { held }) : send(signed, false, { held }))
+  return yield* (mode === "resend" ? resend(signed, { held, include }) : send(signed, false, { held, include }))
 })
 
 /**
@@ -749,21 +781,26 @@ const sendConsultingJournal = Effect.fnUntraced(function*(
  * not sent (`SubmissionUnknown`). `JournalError` only from the `Signed` write
  * before bytes the journal has never seen (a journal that cannot be read is
  * `SubmissionUnknown`: the bytes may have been sent before); `DigestMismatch`
- * if the digest is not the bytes'.
+ * if the digest is not the bytes'. `include` (`["events", "balanceChanges"]`)
+ * adds those to the effects, and is journalled with the bytes so a later
+ * reconcile (`reconcileAll` after a crash) reads them too.
  */
 export const submit = Effect.fn("Lifecycle.submit")(function*(
-  input: SignedTransaction
+  input: SignedTransaction,
+  options?: IncludeOptions
 ): Effect.fn.Return<Effects, SubmitError, Services> {
   const signed = yield* verified(input)
   yield* Effect.annotateCurrentSpan({ "sui.digest": signed.digest })
-  return yield* sendConsultingJournal(signed, "submit")
+  return yield* sendConsultingJournal(signed, "submit", options)
 })
 
 /** `submit` for bytes signed just now by `run`: a journal read failure before the send is `JournalError`. */
-const submitFresh = (signed: SignedTransaction) =>
-  Effect.flatMap(verified(signed), (s) => sendConsultingJournal(s, "fresh")).pipe(Effect.withSpan("Lifecycle.submit"))
+const submitFresh = (signed: SignedTransaction, include: Includes) =>
+  Effect.flatMap(verified(signed), (s) => sendConsultingJournal(s, "fresh", withInclude(include))).pipe(
+    Effect.withSpan("Lifecycle.submit")
+  )
 
-export interface ResubmitOptions {
+export interface ResubmitOptions extends IncludeOptions {
   /**
    * Re-send bytes the journal records as `NotApplied{refused}`. A refusal
    * means only that this process will not send them again on its own; the
@@ -778,15 +815,16 @@ export interface ResubmitOptions {
  * `NotApplied` (unless `retryRefused` and the evidence is `refused`);
  * reconciles instead (journal winning) when the journal says it executed, the
  * bytes name another chain, or their window has closed. Bytes not given
- * (a `SubmissionUnknown` without them) are taken from the journal. Never
- * raises `JournalError`: the bytes may already be out.
+ * (a `SubmissionUnknown` without them) are taken from the journal, as is
+ * `include` when not given. Never raises `JournalError`: the bytes may
+ * already be out.
  */
 export const resubmit = Effect.fn("Lifecycle.resubmit")(function*(
   input: SignedTransaction | SubmissionUnknown,
   options?: ResubmitOptions
 ): Effect.fn.Return<Effects, Exclude<SubmitError, JournalError>, Services> {
   const { digest, signed } = yield* inputOf(input)
-  if (signed === undefined) return yield* reconcile(digest)
+  if (signed === undefined) return yield* reconcile(digest, withInclude(options?.include))
   return yield* (sendConsultingJournal(signed, "resend", options) as Effect.Effect<
     Effects,
     Exclude<SubmitError, JournalError>,
@@ -803,7 +841,7 @@ const resend = Effect.fnUntraced(function*(
   const otherChain = chain !== undefined && info._tag === "Success" && chain !== info.success.chainId
   const closed = otherChain || (yield* Effect.orElseSucceed(expiryClosed(signed), () => false))
   if (closed) {
-    const settled = yield* settle(signed, 1, undefined, 0)
+    const settled = yield* settle(signed, 1, undefined, 0, how.include)
     return settled._tag === "Success" ? settled.success : yield* settled.failure
   }
   // `resent: true` turns a journal failure into SubmissionUnknown, never JournalError.
@@ -840,11 +878,11 @@ export const reconcileAll = Effect.fn("Lifecycle.reconcileAll")(function*(
       if (computed !== undefined || e.signed.digest !== e.digest) {
         return { _tag: "Corrupt", digest: e.digest, reason: `its bytes have digest ${computed ?? e.signed.digest}, not ${e.digest}` }
       }
-      let result = yield* settle(e.signed, e._tag === "Unknown" ? e.attempts : 1, undefined, 0)
+      let result = yield* settle(e.signed, e._tag === "Unknown" ? e.attempts : 1, undefined, 0, e.include)
       if (
         options?.resubmit === true && result._tag === "Failure" && result.failure._tag === "SubmissionUnknown"
       ) {
-        const sent = yield* Effect.result(resend(e.signed))
+        const sent = yield* Effect.result(resend(e.signed, { include: e.include }))
         result = sent as Result.Result<Effects, Settled>
       }
       return toReconciled(e.digest, result)
@@ -873,23 +911,42 @@ const toReconciled = (digest: string, result: Result.Result<Effects, Settled | D
 
 /**
  * Sign transaction data (or its bytes) with every signer, concurrently.
- * `chain` is recorded for expirations that name none.
+ * `chain` is recorded for expirations that name none. A signer that is
+ * neither the sender nor the gas owner is `Tx.SignerMismatch` before anyone
+ * signs, as in `Tx.execute` (an alias signs through `AddressAlias.signer`);
+ * bytes that do not parse as `TransactionData` are signed unchecked.
  */
 export const sign = Effect.fn("Lifecycle.sign")(function*(
   data: T.TransactionData | Uint8Array,
   signers: Signer.Signer | ReadonlyArray<Signer.Signer>,
   options?: { readonly chain?: string }
-): Effect.fn.Return<SignedTransaction, Signer.SigningError> {
+): Effect.fn.Return<SignedTransaction, Signer.SigningError | Tx.SignerMismatch> {
   const bytes = data instanceof Uint8Array ? data : T.encode(data)
+  const all = Array.isArray(signers) ? signers : [signers as Signer.Signer]
+  const parsed = data instanceof Uint8Array ? Result.getOrUndefined(T.decode(data)) : data
+  if (parsed !== undefined) yield* refuseMismatch(all, parsed.sender, parsed.gasData.owner)
   const signatures = yield* Effect.forEach(
-    Array.isArray(signers) ? signers : [signers as Signer.Signer],
+    all,
     (s) => Effect.map(Signer.signTransaction(s, bytes), (x) => x.signature),
     { concurrency: "unbounded" }
   )
   return Signed.make(bytes, signatures, options)
 })
 
-export interface RunOptions<E = never, R = never> extends Omit<Tx.ResolveOptions<E, R>, "sender"> {
+/** The first signer that is neither `sender` nor `gasOwner`, as `Tx.SignerMismatch`. */
+const refuseMismatch = (
+  signers: ReadonlyArray<Signer.Signer>,
+  sender: Address,
+  gasOwner: Address
+): Effect.Effect<void, Tx.SignerMismatch> => {
+  for (const s of signers) {
+    const refused = Tx.signerMismatch(s.address, sender, gasOwner)
+    if (refused) return Effect.fail(refused)
+  }
+  return Effect.void
+}
+
+export interface RunOptions<E = never, R = never> extends Omit<Tx.ResolveOptions<E, R>, "sender">, IncludeOptions {
   readonly signer: Signer.Signer
   /** Defaults to the signer's address. */
   readonly sender?: Address
@@ -900,7 +957,11 @@ export interface RunOptions<E = never, R = never> extends Omit<Tx.ResolveOptions
 /**
  * Build (core `Tx.build`), sign, journal, submit. Unless given, the expiration
  * is `ValidDuring` this epoch and the next, so the expiry rule can settle the
- * bytes even when they pin nothing.
+ * bytes even when they pin nothing. `include` (`["events", "balanceChanges"]`)
+ * adds those to the effects (see `submit`).
+ *
+ * A signer (or cosigner) that is neither the sender nor the gas owner is
+ * `Tx.SignerMismatch` before any network call, as in `Tx.run`.
  *
  * Holds the `SenderLock` of the sender (and a distinct gas owner) for the
  * build, and through signing and submission when the bytes pin a versioned
@@ -909,10 +970,11 @@ export interface RunOptions<E = never, R = never> extends Omit<Tx.ResolveOptions
  */
 export const run = <A, E1, R1, E2 = never, R2 = never>(recipe: Effect.Effect<A, E1, R1>, options: RunOptions<E2, R2>) =>
   Effect.gen(function*() {
-    const info = yield* Effect.flatMap(Effect.service(Chain), (c) => c.info)
-    const { signer, cosigners, sender: given, ...resolve } = options
+    const { signer, cosigners, sender: given, include, ...resolve } = options
     const sender = given ?? signer.address
     const signers = [signer, ...(cosigners ?? [])]
+    yield* refuseMismatch(signers, sender, resolve.gasOwner ?? sender)
+    const info = yield* Effect.flatMap(Effect.service(Chain), (c) => c.info)
     const lock = yield* SenderLock
     const locked = yield* lock.withLocks([sender, ...(resolve.gasOwner ? [resolve.gasOwner] : [])])(
       Effect.gen(function*() {
@@ -920,9 +982,9 @@ export const run = <A, E1, R1, E2 = never, R2 = never>(recipe: Effect.Effect<A, 
         const data = yield* Tx.build(recipe, { ...resolve, expiration, sender })
         if (!Signed.pinsObjects(data)) return { _tag: "Unpinned" as const, data }
         const signed = yield* sign(data, signers, { chain: info.chainId })
-        return { _tag: "Done" as const, effects: yield* submitFresh(signed) }
+        return { _tag: "Done" as const, effects: yield* submitFresh(signed, include) }
       })
     )
     if (locked._tag === "Done") return locked.effects
-    return yield* submitFresh(yield* sign(locked.data, signers, { chain: info.chainId }))
+    return yield* submitFresh(yield* sign(locked.data, signers, { chain: info.chainId }), include)
   }).pipe(Effect.withSpan("Lifecycle.run"))

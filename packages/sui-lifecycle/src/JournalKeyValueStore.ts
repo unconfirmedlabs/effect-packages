@@ -45,7 +45,13 @@ const ENTRY = "entry:"
 const SETTLED = "settled:"
 const CONCURRENCY = 8
 
-/** The stored schema version. Bump it, and keep reading the older ones, when `JournalEntry` changes shape. */
+/**
+ * The stored schema version. Bump it, and keep reading the older ones, when
+ * `JournalEntry` changes shape. An added optional field (`include`) is no
+ * change of shape: older entries decode without it, and older code reading a
+ * newer entry drops it rather than reporting the entry corrupt, so the signed
+ * bytes are never stranded.
+ */
 export const VERSION = 1
 
 const decodeEntry = Schema.decodeUnknownEffect(JournalEntry)

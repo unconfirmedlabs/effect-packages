@@ -243,7 +243,7 @@ SignatureSchemes.layer(Ed25519.scheme, Secp256k1.scheme, MultiSig.scheme)
 
 **3. Signers are values.** `Signer = { address, publicKey, sign(intentMessage) }`. An in-memory key, a hardware wallet, a KMS and `MultiSig.signer(pk, [a, b])` are all the same type, and anything that takes a `Signer` (`Tx.run`, `Signer.signPersonalMessage`) works with all of them.
 
-`Tx.run` / `Tx.execute` refuse a signer whose address is neither the sender nor the gas owner (`SignerMismatch`) before anything is resolved, signed or sent.
+`Tx.run` / `Tx.execute` refuse a signer whose address is neither the sender nor the gas owner (`SignerMismatch`) before anything is resolved, signed or sent. So do `Lifecycle.run` (before any network call or journal write) and `Lifecycle.sign`, through the same check (`Tx.signerMismatch`).
 
 **Address aliases** (`0x2::address_alias`): an address that enabled aliases accepts signatures from any address in its alias set (up to eight).
 
@@ -382,7 +382,7 @@ const layer = Layer.mergeAll(
   JournalKeyValueStore.layer().pipe(Layer.provide(myKeyValueStore))
 )
 yield* Lifecycle.reconcileAll()               // at startup: settle what a crash left, 8 at a time
-const effects = yield* Lifecycle.run(recipe, { signer })
+const effects = yield* Lifecycle.run(recipe, { signer, include: ["events"] })   // include survives a crash (journalled)
 ```
 
 - Every failure lands on one axis: `applied` (`ExecutionFailed`), `not_applied` (`NotApplied`, `JournalError`) or `unknown` (`SubmissionUnknown`, which carries the signed bytes to `resubmit`). Only `not_applied` is safe to rebuild.
@@ -390,6 +390,7 @@ const effects = yield* Lifecycle.run(recipe, { signer })
 - `NotApplied{refused}` (`INVALID_ARGUMENT` on the first send) means only that this process will not send those bytes again on its own. Some refusals depend on time (an unfunded address balance, for example). `Lifecycle.resubmit(signed, { retryRefused: true })` re-sends them on request. Bytes built for another chain are never sent.
 - **Journal.** The durable journal stores each entry as versioned JSON (`{"v":1,…}`) and still reads entries written before versioning. An entry it cannot read does not fail the listing: it is reported in `listUnresolved().corrupt` and as `{ _tag: "Corrupt" }` from `reconcileAll`. `Journal.remove(digest)` drops any entry, unresolved or corrupt. The in-memory default keeps the latest 10 000 settled entries.
 - `reconcileAll({ concurrency, resubmit })` makes one lookup per entry, without polling, and keeps the time each unknown entry was first sent and its last send error. `reconcile(digest)` uses the signed bytes the journal holds for that digest.
+- **`include`.** `run`, `submit`, `resubmit` and `reconcile` take `include: ["events", "balanceChanges"]`, as `Tx.run` does. It is journalled with the bytes (`Signed`, `Unknown` and `Executed` entries), so `reconcileAll` after a crash, and a later `reconcile` / `resubmit` that doesn't pass it, read the same parts. It is an optional field of the v1 entry: entries written without it still read, and the journal version is unchanged.
 
 **Which layers on which platform.** `JournalKeyValueStore.layer()` runs over any Effect `KeyValueStore`; the sender lock is a separate choice.
 
@@ -554,7 +555,7 @@ Every layer uses the same option names for the same thing. New packages should f
 - **Retries: `retry?: Schedule.Schedule<unknown, E>`.** This is the schedule for another attempt. Which errors are retried is the operation's own decision (e.g. `StorageNode.retryable`). A generic combinator can't know which errors to retry, so it also takes `retryWhile?: (error: E) => boolean` (`Quorum`). A retry of one particular step gets a prefix (`CheckpointData.follow`'s `gapRetry`). The lifecycle's re-send of signed bytes is a policy (`SubmitConfig.resubmit`), not a per-call option.
 - **Headers: `headers?: Readonly<Record<string, string>>`.** These are sent with every request by each layer that has one configured endpoint (the layers above, plus `SuiGraphQL`). The layer's own headers (an API key, the content type) take precedence. Layers that fan out to many servers (storage nodes, Seal key servers) have no `headers` option, since a credential would reach every server. Seal sets `apiKeyName` / `apiKey` for each server instead.
 - **Tracer propagation: `tracerPropagation?: boolean`, default `false` everywhere.** Spans are recorded either way. The `traceparent` / `b3` headers are sent only on request, because browsers preflight them and providers with a strict CORS allow-list refuse them.
-- **Optional response parts: `include?: ReadonlyArray<…>`.** A read whose answer can be much larger than the common path needs reads the rest only on request (`Transactions.get` / `execute`, `Tx.execute` / `run`: `["events", "balanceChanges"]`). What was asked for is always present, empty when there is none.
+- **Optional response parts: `include?: ReadonlyArray<…>`.** A read whose answer can be much larger than the common path needs reads the rest only on request (`Transactions.get` / `execute`, `Tx.execute` / `run`, `Lifecycle.run` / `submit` / `resubmit` / `reconcile`: `["events", "balanceChanges"]`). What was asked for is always present, empty when there is none.
 - **Chain integers keep their width.** A u64 on chain (Sui epochs including `maxEpoch`, object versions, MIST amounts) is a `bigint` in the API, even where a wire format carries a JSON number. Smaller integers, such as Walrus epochs (u32), are `number`.
 
 ## What ships (`bun scripts/bundle-report.ts`)
