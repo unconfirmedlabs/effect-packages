@@ -1,8 +1,10 @@
-# `@unconfirmed/walrus` — design
+# `@unconfirmed/effect-walrus` — design
+
+> **Package names changed on 2026-11-28.** The 17 packages became six; the README's [migration table](../../README.md#migrating-from-the-old-package-names) maps every old import. Import specifiers and paths here use the new names. Where this document plans dependencies between separate packages, read them as modules of `@unconfirmed/effect-sui` (signers, zkLogin, wallet, GraphQL, lifecycle) or as part of `@unconfirmed/effect-walrus` (the WASM, now its `wasm/` directory and `./wasm` export).
 
 Status: design, 2026-11-27. Implementers: read this file, `docs/design/quorum.md`, `EXPLORATION.md` §5, and the README sections "How it composes" and "Move codegen".
 
-A ground-up Walrus client on `@unconfirmed/sui`: read and write blobs against storage nodes with `@unconfirmed/quorum`, erasure coding through `@unconfirmed/walrus-wasm` (our SIMD build of `walrus-core`, §1.7a; `@mysten/walrus-wasm` until then), Move bindings from `@unconfirmed/sui-codegen`. Upload relay, quilts and aggregator/publisher HTTP are included as separate modules.
+A ground-up Walrus client on `@unconfirmed/effect-sui`: read and write blobs against storage nodes with `@unconfirmed/effect-quorum`, erasure coding through `@unconfirmed/effect-walrus/wasm` (our SIMD build of `walrus-core`, §1.7a; `@mysten/walrus-wasm` until then), Move bindings from `@unconfirmed/effect-sui-codegen`. Upload relay, quilts and aggregator/publisher HTTP are included as separate modules.
 
 ## 0. References and how to cite them
 
@@ -125,18 +127,18 @@ The two `count_deletable_*` fields are snake_case (`api.rs:111-116` has no renam
 | W6 | **A sliver can be verified with stock `encode`.** Stack up to `n − 2f` fetched primary slivers as the rows of a crafted blob of exactly `primary × secondary × symbolSize` bytes; `encode` then returns each sliver's own Merkle root as `hashes[row].primary_hash`. Likewise place up to `n − f` secondary slivers as columns; column `c` comes back as `hashes[n − 1 − c].secondary_hash`. Both hold for repair slivers too (E8). Tested with corrupted slivers at symbol sizes 2 and 14: exactly the corrupted ones mismatch. | local test, follows from E3 and E8 |
 | W7 | **`n < 4` traps** (`unreachable`, a Rust panic) in `encode` and `compute_metadata`; `new BlobEncoder(n)` itself succeeds. A trap leaves that `BlobEncoder` marked as borrowed: every later call on it, and `free`, throws "attempted to take ownership of Rust value while it was borrowed". Other instances, and the module, keep working. | local test |
 
-### 1.7a `@unconfirmed/walrus-wasm` (our build, replaces 1.7 at run time)
+### 1.7a `@unconfirmed/effect-walrus/wasm` (our build, replaces 1.7 at run time)
 
-`packages/walrus-wasm` builds `walrus-core` 1.62.0 (`2bd352b6`, the revision this document cites) to WebAssembly with `simd128`; see its README for the build, the toolchain and the sources. Facts W2, W4 and W7 still describe the API shape where it was kept; the others are superseded:
+`packages/effect-walrus/wasm` builds `walrus-core` 1.62.0 (`2bd352b6`, the revision this document cites) to WebAssembly with `simd128`; see its README for the build, the toolchain and the sources. Facts W2, W4 and W7 still describe the API shape where it was kept; the others are superseded:
 
 | # | Fact | Source |
 |---|---|---|
-| X1 | Byte-for-byte parity with `@mysten/walrus-wasm` 0.3.1 (built from `walrus-core` 1.40.0): blob ids, root hashes, metadata bytes, every sliver, decoded blobs from systematic and repair slivers, at `n` 4 to 1000. | `test/parity.encoder.test.ts`, `packages/walrus-wasm/test/wasm.test.ts`; `cargo test` against `walrus-core` |
-| X2 | `encode(blob)` returns one buffer, `primary ‖ secondary ‖ BCS metadata ‖ blob id ‖ root hash`; `compute_metadata` returns `blob id ‖ root hash`; `decode(length, slivers)` returns the blob. No `serde` objects cross the boundary (W3 is gone). | `packages/walrus-wasm/src/lib.rs` |
+| X1 | Byte-for-byte parity with `@mysten/walrus-wasm` 0.3.1 (built from `walrus-core` 1.40.0): blob ids, root hashes, metadata bytes, every sliver, decoded blobs from systematic and repair slivers, at `n` 4 to 1000. | `test/parity.encoder.test.ts`, `packages/effect-walrus/test/wasm.test.ts`; `cargo test` against `walrus-core` |
+| X2 | `encode(blob)` returns one buffer, `primary ‖ secondary ‖ BCS metadata ‖ blob id ‖ root hash`; `compute_metadata` returns `blob id ‖ root hash`; `decode(length, slivers)` returns the blob. No `serde` objects cross the boundary (W3 is gone). | `packages/effect-walrus/wasm/src/lib.rs` |
 | X3 | `sliver_roots(primary, slivers)` returns each sliver's Merkle root directly (`SliverData::get_merkle_root`: expand the sliver along the other axis, hash its `n` symbols), any number per call, repair slivers included. This replaces the crafted-blob method (W6); parity with it is tested. 334 primary slivers at `n = 1000`: 0.11 s instead of one 2.6 s crafted encode per batch. | `src/encode.rs`; `test/parity.encoder.test.ts` |
-| X4 | Speed (W5 superseded), Bun 1.4.4, x64, `n = 1000`, 1 KB to 10 MB: encode 0.50–0.54 s (Mysten 2.57–2.62 s), `compute_metadata` 0.49–0.50 s (2.55 s), decode from repair slivers 0.57 s (2.32 s), from systematic slivers 9–15 ms; at `n = 100`, 10 MB: encode 0.11 s (0.67 s). Node is in `packages/walrus-wasm/README.md`. What is left at `n = 1000` is hashing (about `3n²` BLAKE2b compressions, two at a time in SIMD lanes) and, for repair decodes, `reed-solomon-simd` recomputing the erasure locator for each of the `n − f` columns. | `packages/walrus/scripts/bench-wasm.ts` |
+| X4 | Speed (W5 superseded), Bun 1.4.4, x64, `n = 1000`, 1 KB to 10 MB: encode 0.50–0.54 s (Mysten 2.57–2.62 s), `compute_metadata` 0.49–0.50 s (2.55 s), decode from repair slivers 0.57 s (2.32 s), from systematic slivers 9–15 ms; at `n = 100`, 10 MB: encode 0.11 s (0.67 s). Node is in `packages/effect-walrus/wasm/README.md`. What is left at `n = 1000` is hashing (about `3n²` BLAKE2b compressions, two at a time in SIMD lanes) and, for repair decodes, `reed-solomon-simd` recomputing the erasure locator for each of the `n − f` columns. | `packages/effect-walrus/scripts/bench-wasm.ts` |
 | X5 | `n < 4` throws in the constructor instead of trapping later (W7); `walrus-core` panics would still trap, and `Encoder` still drops a trapped instance. | `src/lib.rs` |
-| X6 | Loading (W2 otherwise unchanged): Bun and Node load `nodejs/walrus_wasm_bg.wasm` (267 KB, SIMD) synchronously on import. Browsers fetch `web/walrus_wasm_bg.wasm` (267 KB, SIMD) or, when `WebAssembly.validate` rejects a SIMD instruction, `web/walrus_wasm_nosimd_bg.wasm` (254 KB); `Encoder`'s `wasmUrl` / `wasmFallbackUrl` say where they are served. Mysten's web build is 358 KB. | `packages/walrus-wasm/{index,web}.js` |
+| X6 | Loading (W2 otherwise unchanged): Bun and Node load `nodejs/walrus_wasm_bg.wasm` (267 KB, SIMD) synchronously on import. Browsers fetch `web/walrus_wasm_bg.wasm` (267 KB, SIMD) or, when `WebAssembly.validate` rejects a SIMD instruction, `web/walrus_wasm_nosimd_bg.wasm` (254 KB); `Encoder`'s `wasmUrl` / `wasmFallbackUrl` say where they are served. Mysten's web build is 358 KB. | `packages/effect-walrus/wasm/{index,web}.js` |
 
 ### 1.8 Where the Rust client and `@mysten/walrus` disagree
 
@@ -181,12 +183,13 @@ Line numbers are in `walrus/dist/`. Items 1–5 are the ones `EXPLORATION.md` §
 ## 3. Package layout
 
 ```
-packages/walrus/
-  package.json     @unconfirmed/walrus; exports { ".": "./src/index.ts", "./*": "./src/*.ts" }
-                   dependencies: effect 4.1.6, @unconfirmed/bcs, @unconfirmed/sui, @unconfirmed/quorum (workspace:*; added by W5, it does not exist yet at W1),
-                                 @unconfirmed/walrus-wasm (workspace:*; @mysten/walrus-wasm 0.3.1 before §1.7a), @noble/hashes ^2.3.0
+packages/effect-walrus/
+  package.json     @unconfirmed/effect-walrus; exports { ".": "./src/index.ts", "./wasm": { types, browser: web.js, default: index.js }, "./wasm/{web,nodejs}/*.wasm", "./*": "./src/*.ts" }
+                   dependencies: @noble/hashes ^2.3.0; peers: effect ^4.1.6, @unconfirmed/effect-bcs, @unconfirmed/effect-sui, @unconfirmed/effect-quorum
+                   (as built; the plan had them as workspace:* dependencies, and the WASM was @mysten/walrus-wasm 0.3.1 before §1.7a)
                    devDependencies: @noble/curves ^2.3.0 (tests sign as fake nodes; added by W3)
-  sui-codegen.config.ts, scripts/codegen.ts
+  sui-codegen.config.ts, scripts/codegen.ts, scripts/build-wasm.ts
+  wasm/            our walrus-core build (§1.7a): the Rust crate, and the committed nodejs/ and web/ artifacts with their glue
   src/
     BlobId.ts  Bft.ts  Encoding.ts  Merkle.ts  Messages.ts  Certificate.ts  Cost.ts  Status.ts  Errors.ts   pure
     generated/walrus/*.ts, generated/deps/**                                                     codegen output (committed)
@@ -201,11 +204,11 @@ packages/walrus/
   test/            see §6
 ```
 
-Rules: namespace subpath imports only; every module-level value is a `/* @__PURE__ */` call or a function; only `Encoder.ts` imports the WASM (`@unconfirmed/walrus-wasm`); only `Read.ts` and `Write.ts` import `@unconfirmed/quorum` (`QuiltRead.ts` reaches it through `Read.ts`). A program that only uses `Aggregator` or the pure modules ships neither the WASM glue nor the quorum code.
+Rules: namespace subpath imports only; every module-level value is a `/* @__PURE__ */` call or a function; only `Encoder.ts` imports the WASM (`@unconfirmed/effect-walrus/wasm`); only `Read.ts` and `Write.ts` import `@unconfirmed/effect-quorum` (`QuiltRead.ts` reaches it through `Read.ts`). A program that only uses `Aggregator` or the pure modules ships neither the WASM glue nor the quorum code.
 
 ## 4. Public API
 
-`Address` is `@unconfirmed/sui/Address`. Errors are `Schema.TaggedError`. `R` types name exactly what a function touches.
+`Address` is `@unconfirmed/effect-sui/Address`. Errors are `Schema.TaggedError`. `R` types name exactly what a function touches.
 
 ### 4.1 Pure core (no services)
 
@@ -247,7 +250,7 @@ export const rotationOffset: (blobId: BlobId, n: number) => number
 export const root: (leaves: ReadonlyArray<Uint8Array>) => Uint8Array      // E5; [] -> 32 zero bytes
 export const leafHash, innerHash, rootOfLeafHashes, empty
 
-// Messages.ts — BCS schemas built with @unconfirmed/bcs, and their checks
+// Messages.ts — BCS schemas built with @unconfirmed/effect-bcs, and their checks
 export const BlobMetadata, BlobMetadataWithId, SliverData, Confirmation, Certificate   // E9, M1, M2; TS field names camelCase
 export const MerkleNode, EncodingType /* RedStuffRaptorQ | RS2 */, SliverPairMetadata, Symbols, Intent, PersistenceBcs, BLOB_CERT_INTENT
 export interface VerifiedMetadata { readonly blobId: BlobId; readonly unencodedLength: number; readonly nShards: number
@@ -295,7 +298,7 @@ export const certifiedEpoch: (s: BlobStatus) => number | undefined
 ```ts
 // Config.ts
 export interface WalrusConfigService { readonly systemObjectId: Address; readonly stakingObjectId: Address }
-export class WalrusConfig extends Context.Service<WalrusConfig, WalrusConfigService>()("@unconfirmed/walrus/WalrusConfig") {}
+export class WalrusConfig extends Context.Service<WalrusConfig, WalrusConfigService>()("@unconfirmed/effect-walrus/WalrusConfig") {}
 export const testnet: WalrusConfigService
 export const mainnet: WalrusConfigService
 export const layer: (config: WalrusConfigService) => Layer.Layer<WalrusConfig>
@@ -315,7 +318,7 @@ export class System extends Context.Service<System, {
   readonly refresh: Effect.Effect<SystemState, SystemError>
   /** `Coin<T>`'s `T` in `system::reserve_space`'s `payment` parameter; cached for the layer's life. */
   readonly walType: Effect.Effect<string, SystemError>
-}>()("@unconfirmed/walrus/System") {}
+}>()("@unconfirmed/effect-walrus/System") {}
 export const layer: Layer.Layer<System, never, WalrusConfig | Objects.Objects | Packages.Packages>
 export const layerFromState: (state: SystemState, walType: string) => Layer.Layer<System>   // tests, offline builds
 export type SystemError = RpcError | ObjectNotFound | ObjectDecodeError | UnsupportedSystemVersion
@@ -329,7 +332,7 @@ export interface ActiveCommittees { readonly current: Committee; readonly previo
 export class Committees extends Context.Service<Committees, {
   readonly get: Effect.Effect<ActiveCommittees, CommitteeError>
   readonly refresh: Effect.Effect<ActiveCommittees, CommitteeError>
-}>()("@unconfirmed/walrus/Committees") {}
+}>()("@unconfirmed/effect-walrus/Committees") {}
 export const layer: (options?: { readonly scheme?: "https" | "http"; readonly ttl?: Duration.Input /* default 1 minute */ })
   => Layer.Layer<Committees, never, WalrusConfig | Objects.Objects>
 /** C6. */
@@ -339,7 +342,7 @@ export const checkAgainstSystem: (committee: Committee, system: SystemState) => 
 export type CommitteeError = RpcError | ObjectNotFound | ObjectDecodeError | UnsupportedSystemVersion
 ```
 
-`walType` needs the type argument of `Coin<WAL>`, so `@unconfirmed/sui`'s `Packages.Parameter` gained an optional `typeArguments` (closed type strings; gRPC and GraphQL). `Committees` reads only the staking side (it does not need the system object). `readCommittee` with no certified epoch, or with no previous committee, gives the current one.
+`walType` needs the type argument of `Coin<WAL>`, so `@unconfirmed/effect-sui`'s `Packages.Parameter` gained an optional `typeArguments` (closed type strings; gRPC and GraphQL). `Committees` reads only the staking side (it does not need the system object). `readCommittee` with no certified epoch, or with no previous committee, gives the current one.
 
 Reading: the inner states are dynamic fields; compute their ids with `DynamicFields.deriveId(parent, "u64", bcs(version))` and read through the batched `Objects.get`, so loading a committee is three batched requests: the system and staking objects, then both inner fields (their ids depend on `version`), then every `StakingPool` of the current and previous committees. Decode with the generated schemas (`Move.Field(Bcs.u64, SystemStateInnerV1)`). A `version` whose inner type is not `…InnerV1` is `UnsupportedSystemVersion`.
 
@@ -369,7 +372,7 @@ export interface EncoderService {
   readonly blsAggregate: (signatures: ReadonlyArray<Uint8Array>) => Effect.Effect<Uint8Array, EncoderError>
   readonly blsVerifyAggregate: (publicKeys: ReadonlyArray<Uint8Array>, message: Uint8Array, signature: Uint8Array) => Effect.Effect<boolean, EncoderError>
 }
-export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/walrus/Encoder") {}
+export class Encoder extends Context.Service<Encoder, EncoderService>()("@unconfirmed/effect-walrus/Encoder") {}
 export interface EncoderOptions { readonly wasmUrl?: string | URL; readonly wasmFallbackUrl?: string | URL }   // browsers only (X6)
 /** The in-thread service; its `BlobEncoder`s are freed when the scope closes, and later calls fail with EncoderError. */
 export const make: (options?: EncoderOptions) => Effect.Effect<EncoderService, EncoderError, Scope.Scope>
@@ -379,15 +382,15 @@ export const layer: (options?: EncoderOptions) => Layer.Layer<Encoder, EncoderEr
 
 Every WASM call sits in `Effect.try`, so a thrown `JsError` (or a trap) is a typed `EncoderError { operation, message }`, never a defect; a failed load is `EncoderError { operation: "init" }`. Arguments that would trap or throw `RangeError` (`nShards` outside `[4, 65535]`, a length above `maxBlobSize`) are rejected before the call. One `BlobEncoder` per `nShards` is kept in the service; one that traps is dropped from the cache (W7). All calls are synchronous and slow (W5); the service passes only numbers and `Uint8Array`s, so a worker-backed layer can replace this one later (open question 5).
 
-As built (§1.7a): the service interface is unchanged; it now runs on `@unconfirmed/walrus-wasm`, slices the slivers out of `encode`'s single buffer (views, no copies), and `sliverRoots` is one direct call with no batch limit, so `Read`'s blame pass and `QuiltRead`'s column check make one call each.
+As built (§1.7a): the service interface is unchanged; it now runs on `@unconfirmed/effect-walrus/wasm`, slices the slivers out of `encode`'s single buffer (views, no copies), and `sliverRoots` is one direct call with no batch limit, so `Read`'s blame pass and `QuiltRead`'s column check make one call each.
 
 The WASM module is imported with a dynamic `import()` when the layer is built, not at module load, so importing `Encoder.ts` or the package index reads no `.wasm` until an `Encoder` is needed, and bundlers split the glue (about 17–23 KB) into its own chunk. What an app must do (W2):
 
 | Runtime | What to do |
 |---|---|
 | Bun, Node, unbundled | Nothing. |
-| Server bundle (any bundler) | Keep `@unconfirmed/walrus-wasm` external, or copy `packages/walrus-wasm/nodejs/walrus_wasm_bg.wasm` next to the output and emit CJS (esbuild's ESM output has no `__dirname`). A Bun bundle runs only on the machine that built it. |
-| Browser, Vite / webpack 5 | Nothing (both builds are emitted, one is fetched), or pass `wasmUrl` / `wasmFallbackUrl` from `import url from "@unconfirmed/walrus-wasm/web/walrus_wasm_bg.wasm?url"` and `…/web/walrus_wasm_nosimd_bg.wasm?url` (Vite). |
+| Server bundle (any bundler) | Keep `@unconfirmed/effect-walrus/wasm` external, or copy `packages/effect-walrus/wasm/nodejs/walrus_wasm_bg.wasm` next to the output and emit CJS (esbuild's ESM output has no `__dirname`). A Bun bundle runs only on the machine that built it. |
+| Browser, Vite / webpack 5 | Nothing (both builds are emitted, one is fetched), or pass `wasmUrl` / `wasmFallbackUrl` from `import url from "@unconfirmed/effect-walrus/wasm/web/walrus_wasm_bg.wasm?url"` and `…/web/walrus_wasm_nosimd_bg.wasm?url` (Vite). |
 | Browser, esbuild / Rolldown / Bun | Serve `web/walrus_wasm_bg.wasm` and `web/walrus_wasm_nosimd_bg.wasm` and pass their URLs as `wasmUrl` / `wasmFallbackUrl`, or copy them next to the chunk that holds the glue. |
 
 ### 4.4 Storage nodes
@@ -421,7 +424,7 @@ export class StorageNodes extends Context.Service<StorageNodes, {
   readonly sliverStatus: (node: Node, blobId: BlobId, pairIndex: number, axis: "primary" | "secondary") => Effect.Effect<"nonexistent" | "buffered" | "stored", NodeError>
   /** The raw signed confirmation; the caller verifies it. */
   readonly confirmation: (node: Node, blobId: BlobId, persistence: Persistence) => Effect.Effect<{ readonly serializedMessage: Uint8Array; readonly signature: Uint8Array }, NodeError>
-}>()("@unconfirmed/walrus/StorageNodes") {}
+}>()("@unconfirmed/effect-walrus/StorageNodes") {}
 export const layer: (options?: StorageNodesOptions) => Layer.Layer<StorageNodes, never, HttpClient.HttpClient>
 ```
 
@@ -525,7 +528,7 @@ export const Step = Schema.TaggedUnion({
 })
 export type Step = typeof Step.Type
 
-/** How transactions are sent. The package depends on neither `Tx.run` nor `sui-lifecycle`; the caller picks. */
+/** How transactions are sent. The package depends on neither `Tx.run` nor `Lifecycle.run`; the caller picks. */
 export interface Executor<E, R> {
   readonly sender: Address
   readonly execute: <A, E1, R1>(recipe: Effect.Effect<A, E1, R1>) => Effect.Effect<Transactions.Effects, E | E1, R | Exclude<R1, Ptb.PtbBuilder>>
@@ -633,7 +636,7 @@ export class UploadRelay extends Context.Service<UploadRelay, {
   readonly tipConfig: Effect.Effect<TipConfig, RelayError>                     // cached
   readonly upload: (o: { readonly blob: Uint8Array; readonly blobId: BlobId; readonly nonce?: Uint8Array; readonly txDigest?: string; readonly deletableBlobObject?: Address })
     => Effect.Effect<Certificate, RelayError>
-}>()("@unconfirmed/walrus/UploadRelay") {}
+}>()("@unconfirmed/effect-walrus/UploadRelay") {}
 export const layer: (o: { readonly url: string; readonly maxTip: bigint; readonly tipAddress?: string; readonly requestTimeout?: Duration.Input; readonly minUploadRate?: number; readonly headers?: Readonly<Record<string, string>>; readonly tracerPropagation?: boolean }) => Layer.Layer<UploadRelay, never, HttpClient.HttpClient>
 export const tipAmount: (config: TipConfig, unencodedLength: number, nShards: number) => bigint                      // R1
 /** Must be the first thing the register recipe does: the relay reads input 0 (R3). Then pays the tip in SUI. */
@@ -677,7 +680,7 @@ export interface QuiltReadOptions extends ReadOptions {
 }
 ```
 
-The format is `walrus/dist/utils/quilts.mjs` and `crates/walrus-core/src/encoding/quilt_encoding.rs` (version byte 1, `u32` index length, BCS index; per patch a 6-byte header, `u16` identifier length, optional `u16` tags length and BCS map; data written column by column). Entries are sorted by identifier; identifiers are unique and at most 65,535 bytes; the index uses at most 10 columns. A BCS map is a vector of key/value pairs sorted by the **BCS bytes of the key** (length prefix first, so `"b"` sorts before `"aa"`; this is the BCS canonical order the Rust `bcs` crate writes for `BTreeMap` and `@mysten/bcs` `map` uses) (`@unconfirmed/bcs` has no `map`: use `Bcs.vector(Bcs.tuple([Bcs.string, Bcs.string]))` and sort).
+The format is `walrus/dist/utils/quilts.mjs` and `crates/walrus-core/src/encoding/quilt_encoding.rs` (version byte 1, `u32` index length, BCS index; per patch a 6-byte header, `u16` identifier length, optional `u16` tags length and BCS map; data written column by column). Entries are sorted by identifier; identifiers are unique and at most 65,535 bytes; the index uses at most 10 columns. A BCS map is a vector of key/value pairs sorted by the **BCS bytes of the key** (length prefix first, so `"b"` sorts before `"aa"`; this is the BCS canonical order the Rust `bcs` crate writes for `BTreeMap` and `@mysten/bcs` `map` uses) (`@unconfirmed/effect-bcs` has no `map`: use `Bcs.vector(Bcs.tuple([Bcs.string, Bcs.string]))` and sort).
 
 Reading from slivers: get verified metadata; fetch each needed secondary sliver from the node holding shard `shardOfPair(pairOfSecondary(s))` in the **read** committee; `checkSliver`; then verify all fetched columns with one `Encoder.sliverRoots(…, "secondary", …)` call against `metadata.hashes[pair].secondary` (W6). A column that fails or cannot be fetched falls back to `from: "blob"` (a verified full read, sliced). Nothing unverified is returned unless the caller passes `verify: false` (closes item 9). The verification call costs one `encode` of a blob the quilt's size (W5), with no download beyond the columns; `verify: false` exists for very large quilts where that is too much. Writing a quilt is `Write.run(Quilt.encode(…).quilt, { attributes: Quilt.ATTRIBUTE, … })`.
 
@@ -745,10 +748,10 @@ All of these live in `Errors.ts` (W1), so that the flows share one set of classe
 
 ## 5. Codegen
 
-- `packages/walrus/sui-codegen.config.ts`: `{ output: "./src/generated", packages: [{ id: "<System.package_id on testnet>", network: "testnet", name: "walrus" }] }`, run by `packages/walrus/scripts/codegen.ts` (`Generate.run`). The output is committed.
+- `packages/effect-walrus/sui-codegen.config.ts`: `{ output: "./src/generated", packages: [{ id: "<System.package_id on testnet>", network: "testnet", name: "walrus" }] }`, run by `packages/effect-walrus/scripts/codegen.ts` (`Generate.run`). The output is committed.
 - Used schemas: `System`, `SystemStateInnerV1`, `Staking`, `StakingInnerV1`, `StakingPool` (with `StorageNodeInfo`), `Blob`, `Storage`, `Metadata`, `events::{BlobRegistered, BlobCertified}`. Used calls: `system::{reserve_space, register_blob, certify_blob, delete_blob, extend_blob}`, `blob::{burn, add_metadata, insert_or_update_metadata_pair}`, `metadata::new`, `storage_resource::destroy`. Everything else tree-shakes. All modules are generated (unused ones cost nothing); parameters are positional (`arg0`, ...) because on-chain bytecode has no parameter names. The generator needed no changes for this package. `scripts/record-fixtures.ts` records the objects `System` and `Committees` read (and the `reserve_space` signature) for testnet and mainnet into `test/fixtures/<network>.json`; `test/fixtures.ts` serves them as `Objects` / `Packages` layers.
 - The generated `Package` default is the testnet id. **Library code never relies on it**: every call is wrapped with `Effect.provideService(Package, state.packageId)`. Generated `.type()` strings default to testnet's defining ids (they follow `Origins` when it is provided), so library code builds `Blob`'s type from `state.typeOrigin`.
-- If the generator cannot express a Walrus type (candidates: `ExtendedField`, `group_ops::Element<UncompressedG1>`, the positional `Committee` struct, `EpochState`), fix the generator in `packages/sui-codegen` with a fixture; do not hand-write the binding.
+- If the generator cannot express a Walrus type (candidates: `ExtendedField`, `group_ops::Element<UncompressedG1>`, the positional `Committee` struct, `EpochState`), fix the generator in `packages/effect-sui-codegen` with a fixture; do not hand-write the binding.
 
 ## 6. Test plan
 
@@ -762,7 +765,7 @@ Conventions as in the other packages: `bun:test`; offline tests always run; live
 | `messages.test.ts` | `verifyMetadata` accepts a real metadata fixture and rejects a flipped hash, a wrong id, a wrong hash count, encoding type 0, an oversized length; `checkSliver`; `confirmationMessage` equals the live sample in M1. |
 | `status.test.ts` | Decoding every `BlobStatus` shape including snake_case counts; `order` against a table transcribed from `api.rs:138-200`; `canonical` is insensitive to key order. |
 | `encoder.test.ts` | Round trip for lengths 0, 1, 32, 100 kB (and `n` 4 and 7); `nShards` below 4 and lengths above the maximum rejected before the WASM; a trapped instance is replaced; every `BlobEncoder` freed on scope close; `decode` with too few or duplicate slivers is a typed `EncoderError`; `sliverRoots` equals the metadata hashes for random primary and secondary slivers (systematic and repair) and differs exactly for corrupted ones; BLS verify with 48- and 96-byte keys; aggregate equals `@noble/curves`. Slow (about 2.5 s per WASM call): keep `n = 1000` cases few and use `n = 10` elsewhere. |
-| `storage-node.test.ts` | A scripted `HttpClient` (pattern of `packages/sui-enoki/test/support.ts`): request method, path, headers and body for every endpoint; every row of the error mapping in §4.4 from recorded bodies (`fixtures/storage-node/recorded.json`, GETs against a testnet node; `PUT`, `451`, `429` and `5xx` bodies, which reads cannot produce on demand, are built from the Rust node's messages in `synthesized.json`); timeout → `Timeout` under `TestClock`. |
+| `storage-node.test.ts` | A scripted `HttpClient` (pattern of `packages/effect-sui/test/enoki/support.ts`): request method, path, headers and body for every endpoint; every row of the error mapping in §4.4 from recorded bodies (`fixtures/storage-node/recorded.json`, GETs against a testnet node; `PUT`, `451`, `429` and `5xx` bodies, which reads cannot produce on demand, are built from the Rust node's messages in `synthesized.json`); timeout → `Timeout` under `TestClock`. |
 | `committee.test.ts` | Building committees from recorded testnet objects (fixtures under `test/fixtures/`, written by `scripts/record-fixtures.ts`); `readCommittee` for the four cases of C6; `checkAgainstSystem` mismatches; cache and `refresh`. |
 | `read.test.ts` | An in-memory network of fake nodes over a small committee (`n = 10`, real WASM): happy path; exactly `n − 2f` nodes answer; one node returns a corrupted sliver → blamed, replaced, read succeeds; a wrongly encoded blob → `InconsistentBlob`; quorum of 404 → `BlobNotFound`; quorum of 451 → `BlobBlocked`; mixed failures → `NotEnoughSlivers` with every node's failure; metadata from a lying node is rejected and another node's is used; previous committee during `EpochChangeSync`; `maxSize`. With `TestClock`: a hung node does not delay the result; retries follow the schedule. |
 | `write.test.ts` | Fake nodes that sign with `@noble/curves` keys: certificate at exactly `n − f` weight by shards (few heavy nodes; many light nodes are not enough: item 5); linger collects late confirmations and the result's virtual time is `1.5t + 500 ms`; `NotRegistered` then success; a node signing the wrong message or epoch is a failure; fail fast above `f` failed weight; the global semaphore bounds in-flight `PUT`s; status check skips stored slivers. Steps: resume from each saved step; register reuses an existing uncertified `Blob`; a stale certificate goes back to upload; an already certified blob is not certified twice; `ResumeMismatch`. |
@@ -819,7 +822,7 @@ The address holds about 1.15 SUI (in its address balance; gas resolves through `
 
 Add to `scripts/bundle-report.ts`: "walrus: read via aggregator", "walrus: read a blob", "walrus: write a blob", and `@mysten/walrus` `readBlob` / `writeBlob` under Rolldown for comparison. Report JS only, and state the WASM asset size (358 KB) separately. Add the rows to the README table.
 
-As built (W10): rows for the aggregator, `Bft` + `Encoding` only, read, write through the nodes and through the relay, and both `@mysten/walrus` programs (under all three bundlers). Sizes now sum every JS chunk, because Rolldown splits the WASM glue into its own chunk. Each Walrus row says whether the bundle contains the WASM glue (`walrus_wasm_bg.wasm`) or the quorum code (`QuorumFailed`). Since §1.7a the Walrus rows count `@unconfirmed/walrus-wasm`'s glue, and the report prints its WASM asset sizes (SIMD build 261 KB / 98 KB gzip, scalar fallback 248 KB) next to `@mysten/walrus-wasm`'s (349 KB / 182 KB gzip).
+As built (W10): rows for the aggregator, `Bft` + `Encoding` only, read, write through the nodes and through the relay, and both `@mysten/walrus` programs (under all three bundlers). Sizes now sum every JS chunk, because Rolldown splits the WASM glue into its own chunk. Each Walrus row says whether the bundle contains the WASM glue (`walrus_wasm_bg.wasm`) or the quorum code (`QuorumFailed`). Since §1.7a the Walrus rows count `@unconfirmed/effect-walrus/wasm`'s glue, and the report prints its WASM asset sizes (SIMD build 261 KB / 98 KB gzip, scalar fallback 248 KB) next to `@mysten/walrus-wasm`'s (349 KB / 182 KB gzip).
 
 Findings, KB minified / gzip:
 
@@ -849,8 +852,8 @@ One agent each. "Parallel" lists what can run at the same time.
 
 | # | Scope | Depends on | Files | Acceptance |
 |---|---|---|---|---|
-| W1 | Scaffold and pure core: `BlobId`, `Bft`, `Encoding`, `Merkle`, `Messages`, `Certificate`, `Cost`, `Status`, the pure error classes. | — | `packages/walrus/{package.json,tsconfig.json}`, `src/{BlobId,Bft,Encoding,Merkle,Messages,Certificate,Cost,Status,Errors,index}.ts`, `test/{core,messages,status}.test.ts`, `test/parity.core.test.ts`, `test/oracle.ts` (typed handles on `@mysten/walrus` internals and a raw-WASM `wasmEncode` for real metadata and slivers; reuse it in later tests); root devDependency | Unit and parity tests of §6.1–6.2 for these modules pass; no service in any signature; typecheck clean. |
-| W2 | Codegen and chain state: config, generated bindings, `Config`, `System`, `Committee`; fixture recorder. | W1 | `sui-codegen.config.ts`, `scripts/{codegen,record-fixtures}.ts`, `src/generated/**`, `src/{Config,System,Committee}.ts`, `test/committee.test.ts`, `test/fixtures/*`, `test/live.chain.test.ts`; generator fixes in `packages/sui-codegen` if needed | Generated schemas decode live testnet System, Staking, both inner states and a `StakingPool`; values equal `@mysten/walrus`'s (live parity); mainnet objects decode too; C5 check passes live; offline fixture tests pass. |
+| W1 | Scaffold and pure core: `BlobId`, `Bft`, `Encoding`, `Merkle`, `Messages`, `Certificate`, `Cost`, `Status`, the pure error classes. | — | `packages/effect-walrus/{package.json,tsconfig.json}`, `src/{BlobId,Bft,Encoding,Merkle,Messages,Certificate,Cost,Status,Errors,index}.ts`, `test/{core,messages,status}.test.ts`, `test/parity.core.test.ts`, `test/oracle.ts` (typed handles on `@mysten/walrus` internals and a raw-WASM `wasmEncode` for real metadata and slivers; reuse it in later tests); root devDependency | Unit and parity tests of §6.1–6.2 for these modules pass; no service in any signature; typecheck clean. |
+| W2 | Codegen and chain state: config, generated bindings, `Config`, `System`, `Committee`; fixture recorder. | W1 | `sui-codegen.config.ts`, `scripts/{codegen,record-fixtures}.ts`, `src/generated/**`, `src/{Config,System,Committee}.ts`, `test/committee.test.ts`, `test/fixtures/*`, `test/live.chain.test.ts`; generator fixes in `packages/effect-sui-codegen` if needed | Generated schemas decode live testnet System, Staking, both inner states and a `StakingPool`; values equal `@mysten/walrus`'s (live parity); mainnet objects decode too; C5 check passes live; offline fixture tests pass. |
 | W3 | `Encoder`. | W1 | `src/Encoder.ts`, `test/encoder.test.ts`, `test/parity.encoder.test.ts` | §6.1 encoder tests and the encode parity test pass; thrown WASM errors are typed; instances are freed on scope close. |
 | W4 | `StorageNodes`. | W1 | `src/StorageNode.ts`, `test/storage-node.test.ts`, `test/support.ts` (scripted client, fake node) | Every endpoint and every error-mapping row is tested from recorded bodies; live smoke test (`SUI_LIVE=1`) reads a status and a metadata from one node. |
 | W5 | Read path. | Q1, Q2, W2, W3, W4 | `src/Read.ts`, `test/read.test.ts`, `test/live.read.test.ts` | §6.1 read tests including blame and the `TestClock` cases; §6.3 passes on testnet. |

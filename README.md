@@ -4,27 +4,35 @@ Ground-up Effect implementations of the Mysten SDKs. Sui first. See [EXPLORATION
 
 ## Packages
 
-| Package | What | Extra deps |
+Six packages. Every module is its own subpath (`"./*"` in `exports`), so an app ships only the modules it imports: keeping signers, clients and the lifecycle in one package doesn't change what a program bundles (`bun scripts/bundle-report.ts`). The package names changed on 2026-11-28: [Migrating from the old package names](#migrating-from-the-old-package-names) maps every old import.
+
+| Package | What | Install-time deps |
 |---|---|---|
-| `@unconfirmed/effect-bcs` | BCS declared as Effect Schemas | `@scure/base` |
-| `@unconfirmed/effect-sui` | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`). `Testing`: all of them in memory, for tests | `@noble/hashes`, `@noble/curves` (ed25519 only), `@scure/base` |
-| `@unconfirmed/effect-sui/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
-| `@unconfirmed/effect-sui/graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
-| `@unconfirmed/effect-sui/lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / any KeyValueStore, plus IndexedDB and OPFS stores), sender lock (in-process or Web Locks) | — |
-| `@unconfirmed/effect-sui/Secp256k1` | Secp256k1 scheme and signers | `@noble/curves` |
-| `@unconfirmed/effect-sui/Secp256r1` | Secp256r1 scheme and signers | `@noble/curves` |
-| `@unconfirmed/effect-sui/MlDsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
-| `@unconfirmed/effect-sui/MultiSig` | Multisig scheme, `signer`, `combine` | — |
-| `@unconfirmed/effect-sui/Passkey` | Passkey (WebAuthn) scheme (also as a multisig member), signer over a pluggable authenticator (browser `navigator.credentials`, or in-memory for tests and servers), public-key recovery for returning users | `@noble/curves`, `@noble/hashes`, `@scure/base` |
-| `@unconfirmed/effect-sui/Mnemonic` | BIP39 mnemonics; Ed25519 / ML-DSA-65 (SLIP-0010) and Secp256k1 / r1 (BIP32) derivation on Sui's paths | `@scure/bip39`, `@scure/bip32` |
-| `@unconfirmed/effect-sui/zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite`, `@scure/base` |
-| `@unconfirmed/effect-sui/enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
-| `@unconfirmed/effect-sui/wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app`, `@scure/base` (+ types from `@wallet-standard/base`) |
+| `@unconfirmed/effect-bcs` | BCS declared as Effect Schemas | — |
+| `@unconfirmed/effect-sui` | Sui: core types, transactions, signers and every signature scheme, mnemonics, gRPC and GraphQL clients, crash-safe submission, wallets, zkLogin, Enoki (modules below) | `@noble/curves`, `@noble/hashes`, `@noble/post-quantum`, `@scure/base`, `@scure/bip32`, `@scure/bip39`, `@wallet-standard/app`, `@wallet-standard/base`, `poseidon-lite` |
 | `@unconfirmed/effect-quorum` | Weighted first-threshold-of-n: `Quorum.run` (stop once enough weight succeeded) and `Quorum.agree` (stop once enough weight agrees on one answer), with per-member retry, a concurrency cap, (weighted) shuffled start order, an optional linger window and an optional early give-up. Knows nothing about Sui; used by Walrus and Seal | — |
-| `@unconfirmed/effect-sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI. Generated code needs only `effect`, `@unconfirmed/effect-bcs` and `@unconfirmed/effect-sui` (runtime: `@unconfirmed/effect-sui/Move`) | — (dev-time) |
-| `@unconfirmed/effect-walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS through `@unconfirmed/effect-walrus/wasm`, loaded on first use | `@noble/hashes` |
-| `@unconfirmed/effect-walrus/wasm` | Our WebAssembly build of `walrus-core` 1.62.0 with SIMD: RS2 encode/decode, direct per-sliver Merkle roots, BLS12-381; byte-identical to `@mysten/walrus-wasm` 0.3.1 and about 5× faster. Built artifacts committed; `bun run build` reproduces them | — |
+| `@unconfirmed/effect-walrus` | Walrus: read blobs from the storage nodes (verified, bad slivers blamed and replaced), write them (certified at `n − f` shards, resumable steps), the upload relay, aggregator and publisher gateways, quilts. Erasure coding and BLS in our WebAssembly build of `walrus-core` 1.62.0 with SIMD (`@unconfirmed/effect-walrus/wasm`, loaded on first use): RS2 encode/decode, direct per-sliver Merkle roots, BLS12-381; byte-identical to `@mysten/walrus-wasm` 0.3.1 and about 5× faster. Built artifacts committed; `bun run build:wasm` reproduces them | `@noble/hashes` |
 | `@unconfirmed/effect-seal` | Seal: threshold identity-based encryption to key servers registered on Sui (independent and committee), session keys (key or wallet signer, one prompt), `seal_approve` approvals, key fetching over `Quorum` with every key verified, decryption. The crypto core (BLS12-381, Shamir, KDF, DEMs, the encrypted object) is pure and usable offline | `@noble/curves`, `@noble/hashes`, `@scure/base` |
+| `@unconfirmed/effect-sui-codegen` | Move codegen: typed BCS schemas and call builders from `sui move summary` output or an on-chain package (gRPC); a config file and a CLI (`sui-codegen`). Generated code needs only `effect`, `@unconfirmed/effect-bcs` and `@unconfirmed/effect-sui` (runtime: `@unconfirmed/effect-sui/Move`) | — (dev-time) |
+
+`effect` (`^4.1.6`) is a peer dependency of every package; `effect-walrus`, `effect-seal` and `effect-sui-codegen` also take `effect-sui`, `effect-bcs` and (Walrus, Seal) `effect-quorum` as peers.
+
+**`@unconfirmed/effect-sui` modules.** Top-level modules are `@unconfirmed/effect-sui/<Module>`. Larger areas are folders: `@unconfirmed/effect-sui/<folder>` is the folder's barrel and `@unconfirmed/effect-sui/<folder>/<Module>` one module in it.
+
+| Path | What | Uses |
+|---|---|---|
+| `@unconfirmed/effect-sui` (`/Address`, `/Tx`, `/Ptb`, …) | Core: addresses, type tags, transaction data, PTB builder (incl. address-balance withdrawals, deposits and coin/balance intents), resolver (address-balance gas by default), `TransactionJson` (Mysten `toJSON()` / `Transaction.from` interop), `Signer` / `TransactionSigner`, the signature-scheme registry, Ed25519, `PrivateKey` (`suiprivkey`, `sui.keystore`). Capability services: Chain, Objects, Coins, Packages, Transactions (+ `waitFor`), Checkpoints, DynamicFields, Events, CheckpointData (+ `follow`). `Testing`: all of them in memory, for tests | `@noble/hashes`, `@noble/curves` (ed25519 only), `@scure/base` |
+| `/grpc` | Every capability over gRPC-web (`HttpClient` + `effect/protobuf`) | — |
+| `/graphql` | Every capability over Sui GraphQL (`effect/graphql`), including SSE subscriptions; mixable with gRPC per service | — |
+| `/lifecycle` | Crash-safe submission: outcomes (applied / not_applied / unknown), identical-bytes resubmission, reconcile from on-chain evidence (`Evidence` over gRPC or GraphQL for the expiry rule), versioned journal (memory / any KeyValueStore, plus IndexedDB and OPFS stores), sender lock (in-process or Web Locks) | — |
+| `/Secp256k1`, `/Secp256r1` | Secp256k1 and Secp256r1 schemes and signers | `@noble/curves` |
+| `/MlDsa65` | ML-DSA-65 (post-quantum) scheme and signers; works as a multisig member | `@noble/post-quantum` |
+| `/MultiSig` | Multisig scheme, `signer`, `combine` | — |
+| `/Passkey` | Passkey (WebAuthn) scheme (also as a multisig member), signer over a pluggable authenticator (browser `navigator.credentials`, or in-memory for tests and servers), public-key recovery for returning users | `@noble/curves`, `@noble/hashes`, `@scure/base` |
+| `/Mnemonic`, `/Bip32` | BIP39 mnemonics; Ed25519 / ML-DSA-65 (SLIP-0010) derivation in `Mnemonic`, Secp256k1 / r1 (BIP32) in `Bip32`, on Sui's paths | `@scure/bip39`; `@scure/bip32` (`Bip32` only) |
+| `/zklogin` | zkLogin scheme (verification needs a `ZkLoginVerifier`; gRPC layer provided), signer, addresses, nonce, JWT | `poseidon-lite`, `@scure/base` |
+| `/enoki` | Enoki client, sponsored transactions (verifies sponsor bytes before signing), zkLogin flow | — |
+| `/wallet` | Wallet-standard Sui wallets: discovery, connect, accounts and chains, a wallet `TransactionSigner` for `Tx.run` / `Tx.execute`, `signAndExecuteTransaction`, `signPersonalMessage` | `@wallet-standard/app`, `@scure/base` (+ types from `@wallet-standard/base`) |
 
 ### BCS
 
@@ -101,7 +109,7 @@ const certified = yield* Write.run(bytes, { epochs: 5, deletable: true, executor
 
 - **Reads** verify the metadata against the blob id before using it, check each sliver's shape, decode from `n − 2f` shards and re-derive the blob id (`consistency: "strict"`, the default). If the bytes don't match, the slivers are checked one by one: a node that served a bad one is blamed and replaced. Only a blob the writer encoded wrongly is `InconsistentBlob`. A blob unknown to `2f + 1` shards is `BlobNotFound` (`BlobBlocked` for blocked blobs), typically within seconds; a read that fails while the nodes call the blob `Nonexistent` (deleted meanwhile) is `BlobNotFound` too. During an epoch change the read committee is chosen per blob from its certified epoch (the current one when no status gathers enough agreement). `consistency: "skip"` drops the final check, and slivers are then only header-checked: any one node that served a sliver can change the bytes, so use it only when the bytes are verified another way. Reads prefer asking another node to retrying a slow one, and a body larger than the expected size is refused.
 - **Writes** count weight in shards, as the chain does. The certificate is built at `n − f` (`@mysten/walrus` counts nodes, so it can refuse a valid certificate or build one the chain rejects). Each confirmation's signature is checked. In-flight sliver bytes are capped (12.5 MB), retries are per request, and the write lingers `0.5 × elapsed + 500 ms` after the quorum for stragglers, as the Rust client does. Upload timeouts grow with the bytes in flight (`requestTimeout + bytes / minUploadRate`, default 1 Mbit/s), so a slow uplink delays a large write instead of timing it out. `owner` (default: the executor's sender) receives the `Blob` in the certify transaction: the sender holds it until then, since only an object's owner can certify it. The system state (prices, package id) is cached for a minute, and a register transaction that aborts because the prices or the package moved is rebuilt once. [docs/design/walrus.md](docs/design/walrus.md) §1.8 and §2 list what differs from `@mysten/walrus` and why.
-- **Steps are resumable.** `onStep` receives each `Write.Step` (with `Uint8Array` fields, so not JSON as is): persist `Schema.encodeSync(Write.Step)(step)`, which is plain JSON, and pass `Schema.decodeSync(Write.Step)(saved)` as `resume` to continue in another process. Each step checks the chain before acting, so a crash between register and persist reuses the registration rather than paying again. For the transactions themselves, any `Executor` works: `Write.viaTx(signer)` (a key or a wallet), or `sui-lifecycle`'s `Lifecycle.run` for a journal.
+- **Steps are resumable.** `onStep` receives each `Write.Step` (with `Uint8Array` fields, so not JSON as is): persist `Schema.encodeSync(Write.Step)(step)`, which is plain JSON, and pass `Schema.decodeSync(Write.Step)(saved)` as `resume` to continue in another process. Each step checks the chain before acting, so a crash between register and persist reuses the registration rather than paying again. For the transactions themselves, any `Executor` works: `Write.viaTx(signer)` (a key or a wallet), or `@unconfirmed/effect-sui/lifecycle`'s `Lifecycle.run` for a journal.
 - **Through the upload relay** the blob goes to a relay that encodes and stores it for a tip in SUI. The relay's certificate is verified before the certify transaction is built. The tip amount and address come from the relay, so `maxTip` (MIST per blob) is required: a higher tip is `TipTooHigh` before anything is signed, and `tipAddress` optionally pins the recipient. Only relay writes need the relay layer (`via: "relay"` adds `UploadRelay` to the requirements):
 
   ```ts
@@ -424,7 +432,7 @@ const program = Effect.gen(function*() {
 
 ## Keys
 
-**Import and export** use the `suiprivkey1…` strings the Sui CLI and wallets exchange. The core can't build a signer for a scheme it doesn't ship, so decoding gives bytes and the scheme package makes the signer:
+**Import and export** use the `suiprivkey1…` strings the Sui CLI and wallets exchange. The core can't build a signer for a scheme it doesn't ship, so decoding gives bytes and the scheme module makes the signer:
 
 ```ts
 import * as PrivateKey from "@unconfirmed/effect-sui/PrivateKey"
@@ -441,7 +449,7 @@ const exported = yield* PrivateKey.encode({ flag: Ed25519.FLAG, secretKey: sk })
 const keys = yield* PrivateKey.decodeKeystore(json)                       // and encodeKeystore(keys)
 ```
 
-**Mnemonics** live in `@unconfirmed/effect-sui/Mnemonic`, so the BIP39 wordlist never reaches the core. Derivation gives secret keys (the package doesn't depend on the scheme packages), plus an Ed25519 `Signer` shortcut:
+**Mnemonics** live in `@unconfirmed/effect-sui/Mnemonic`, so the BIP39 wordlist never reaches the core. Derivation gives secret keys (it doesn't import the scheme modules), plus an Ed25519 `Signer` shortcut:
 
 ```ts
 import * as Mnemonic from "@unconfirmed/effect-sui/Mnemonic"
@@ -454,7 +462,7 @@ const seed = yield* Mnemonic.toSeed(m)                                      // d
 const pq = yield* MlDsa65.fromSecretKey(yield* Mnemonic.mldsa65SecretKey(seed, "m/94'/784'/0'/0'/3'"))
 ```
 
-Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`. Ed25519 and ML-DSA-65 (SLIP-0010) are in `Mnemonic`, which never imports `@scure/bip32`; Secp256k1/r1 (BIP32) are in `Bip32`. The package root re-exports both, so importing it loads BIP32 in an unbundled runtime (bundlers drop it either way).
+Errors are typed: `InvalidMnemonic` (word count, unknown word, checksum, seed length) and `InvalidPath` (each scheme accepts only its own purpose and hardening). Every scheme derives the same keys as `@mysten/sui`. Ed25519 and ML-DSA-65 (SLIP-0010) are in `Mnemonic`, which never imports `@scure/bip32`; Secp256k1/r1 (BIP32) are in `Bip32`. No module re-exports both, so an Ed25519 program never loads BIP32, bundled or not.
 
 **Without Effect.** Derivations that can't wait on anything also come as `…Result`: the same checks, returning Effect's `Result` instead of an `Effect`, for code that only derives keys and addresses. The Effect versions stay (`fromSecretKey` is `Effect.fromResult(fromSecretKeyResult(sk))`); a `…Sync` name, as in `Bcs.encodeSync`, throws instead.
 
@@ -573,7 +581,7 @@ import * as ObjectsGrpc from "@unconfirmed/effect-sui/grpc/ObjectsGrpc"
 
 The barrels (`import { Address } from "@unconfirmed/effect-sui"`) exist for convenience. Only bundlers with deep scope analysis (Rolldown, Rollup, Webpack 5+; Bun in practice) shake them well. esbuild doesn't.
 
-**One copy of Effect.** `effect` is a peer dependency (`^4.1.6`) of every package, and so are the `@unconfirmed/*` packages whose services, schemas and errors cross package boundaries (`bcs`, `sui`, `quorum`, `sui-graphql`, `sui-zklogin`): a second copy would make `Context` services and tagged errors from one copy invisible to the other. The app installs them once.
+**One copy of Effect.** `effect` is a peer dependency (`^4.1.6`) of every package, and so are the `@unconfirmed/*` packages whose services, schemas and errors cross package boundaries (`effect-bcs`, `effect-sui`, `effect-quorum`): a second copy would make `Context` services and tagged errors from one copy invisible to the other. The app installs them once.
 
 **Strict consumers.** The packages ship their `.ts` sources, so they compile under the consumer's flags. `bun run typecheck:strict` (in CI) checks every package's `src/` with `noUnusedLocals` and `noUnusedParameters` on top of the base config's `strict`, `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`.
 
@@ -672,7 +680,248 @@ export const scheme: SignatureScheme.SignatureScheme</* services it needs */> = 
 export const fromSecretKey = (sk: Uint8Array): Effect.Effect<Signer.Signer, Signer.InvalidKey> => ...
 ```
 
-`packages/effect-sui/src/Ecdsa.ts` is a complete example (~100 lines; `sui-secp256k1` and `sui-secp256r1` are that module over their noble curve).
+`packages/effect-sui/src/Ecdsa.ts` is a complete example (~100 lines; `Secp256k1.ts` and `Secp256r1.ts` are that module over their noble curve).
+
+## Migrating from the old package names
+
+The 17 packages became six on 2026-11-28 (nothing had been published under the old names). Two find-and-replace passes: dependencies, then import specifiers. Every row below is a whole specifier, so match it including its closing quote (`"@unconfirmed/sui"` must not match `"@unconfirmed/sui-zklogin"`). The import table is generated from the file moves; only the old `@unconfirmed/sui-mnemonic` root has no one-to-one replacement.
+
+**Dependencies** (`package.json`):
+
+| Old dependency | New dependency |
+|---|---|
+| `@unconfirmed/sui`, `@unconfirmed/sui-secp256k1`, `@unconfirmed/sui-secp256r1`, `@unconfirmed/sui-mldsa65`, `@unconfirmed/sui-multisig`, `@unconfirmed/sui-passkey`, `@unconfirmed/sui-mnemonic`, `@unconfirmed/sui-zklogin`, `@unconfirmed/sui-enoki`, `@unconfirmed/sui-wallet`, `@unconfirmed/sui-graphql`, `@unconfirmed/sui-lifecycle` | `@unconfirmed/effect-sui` (one entry) |
+| `@unconfirmed/bcs` | `@unconfirmed/effect-bcs` |
+| `@unconfirmed/quorum` | `@unconfirmed/effect-quorum` |
+| `@unconfirmed/walrus`, `@unconfirmed/walrus-wasm` | `@unconfirmed/effect-walrus` (one entry) |
+| `@unconfirmed/seal` | `@unconfirmed/effect-seal` |
+| `@unconfirmed/sui-codegen` | `@unconfirmed/effect-sui-codegen` |
+
+**Imports.** A former single-module package (`sui-secp256k1`, `sui-secp256r1`, `sui-mldsa65`, `sui-multisig`, `sui-passkey`) is one top-level module; `sui-mnemonic`'s two modules are top-level `Mnemonic` and `Bip32`; `sui-zklogin`, `sui-enoki`, `sui-wallet`, `sui-graphql` and `sui-lifecycle` are folders (`zklogin/`, `enoki/`, `wallet/`, `graphql/`, `lifecycle/`) whose barrel is the folder's path; the other packages only change name.
+
+<details>
+<summary>Every old import specifier and its replacement (208 rows)</summary>
+
+| Old specifier | New specifier |
+|---|---|
+| `@unconfirmed/sui` | `@unconfirmed/effect-sui` |
+| `@unconfirmed/sui/Address` | `@unconfirmed/effect-sui/Address` |
+| `@unconfirmed/sui/AddressAlias` | `@unconfirmed/effect-sui/AddressAlias` |
+| `@unconfirmed/sui/Chain` | `@unconfirmed/effect-sui/Chain` |
+| `@unconfirmed/sui/CheckpointData` | `@unconfirmed/effect-sui/CheckpointData` |
+| `@unconfirmed/sui/Checkpoints` | `@unconfirmed/effect-sui/Checkpoints` |
+| `@unconfirmed/sui/CoinReservation` | `@unconfirmed/effect-sui/CoinReservation` |
+| `@unconfirmed/sui/Coins` | `@unconfirmed/effect-sui/Coins` |
+| `@unconfirmed/sui/DynamicFields` | `@unconfirmed/effect-sui/DynamicFields` |
+| `@unconfirmed/sui/Ecdsa` | `@unconfirmed/effect-sui/Ecdsa` |
+| `@unconfirmed/sui/Ed25519` | `@unconfirmed/effect-sui/Ed25519` |
+| `@unconfirmed/sui/Events` | `@unconfirmed/effect-sui/Events` |
+| `@unconfirmed/sui/Hash` | `@unconfirmed/effect-sui/Hash` |
+| `@unconfirmed/sui/Move` | `@unconfirmed/effect-sui/Move` |
+| `@unconfirmed/sui/Objects` | `@unconfirmed/effect-sui/Objects` |
+| `@unconfirmed/sui/Packages` | `@unconfirmed/effect-sui/Packages` |
+| `@unconfirmed/sui/PrivateKey` | `@unconfirmed/effect-sui/PrivateKey` |
+| `@unconfirmed/sui/Ptb` | `@unconfirmed/effect-sui/Ptb` |
+| `@unconfirmed/sui/Resolve` | `@unconfirmed/effect-sui/Resolve` |
+| `@unconfirmed/sui/RpcError` | `@unconfirmed/effect-sui/RpcError` |
+| `@unconfirmed/sui/SignatureScheme` | `@unconfirmed/effect-sui/SignatureScheme` |
+| `@unconfirmed/sui/Signer` | `@unconfirmed/effect-sui/Signer` |
+| `@unconfirmed/sui/Testing` | `@unconfirmed/effect-sui/Testing` |
+| `@unconfirmed/sui/TransactionData` | `@unconfirmed/effect-sui/TransactionData` |
+| `@unconfirmed/sui/TransactionJson` | `@unconfirmed/effect-sui/TransactionJson` |
+| `@unconfirmed/sui/Transactions` | `@unconfirmed/effect-sui/Transactions` |
+| `@unconfirmed/sui/Tx` | `@unconfirmed/effect-sui/Tx` |
+| `@unconfirmed/sui/TypeTag` | `@unconfirmed/effect-sui/TypeTag` |
+| `@unconfirmed/sui/Verify` | `@unconfirmed/effect-sui/Verify` |
+| `@unconfirmed/sui/grpc` | `@unconfirmed/effect-sui/grpc` |
+| `@unconfirmed/sui/grpc/ChainGrpc` | `@unconfirmed/effect-sui/grpc/ChainGrpc` |
+| `@unconfirmed/sui/grpc/CheckpointDataGrpc` | `@unconfirmed/effect-sui/grpc/CheckpointDataGrpc` |
+| `@unconfirmed/sui/grpc/CheckpointsGrpc` | `@unconfirmed/effect-sui/grpc/CheckpointsGrpc` |
+| `@unconfirmed/sui/grpc/CoinsGrpc` | `@unconfirmed/effect-sui/grpc/CoinsGrpc` |
+| `@unconfirmed/sui/grpc/DynamicFieldsGrpc` | `@unconfirmed/effect-sui/grpc/DynamicFieldsGrpc` |
+| `@unconfirmed/sui/grpc/EventsGrpc` | `@unconfirmed/effect-sui/grpc/EventsGrpc` |
+| `@unconfirmed/sui/grpc/GrpcWeb` | `@unconfirmed/effect-sui/grpc/GrpcWeb` |
+| `@unconfirmed/sui/grpc/ObjectsGrpc` | `@unconfirmed/effect-sui/grpc/ObjectsGrpc` |
+| `@unconfirmed/sui/grpc/PackagesGrpc` | `@unconfirmed/effect-sui/grpc/PackagesGrpc` |
+| `@unconfirmed/sui/grpc/Rpc` | `@unconfirmed/effect-sui/grpc/Rpc` |
+| `@unconfirmed/sui/grpc/TransactionsGrpc` | `@unconfirmed/effect-sui/grpc/TransactionsGrpc` |
+| `@unconfirmed/sui/grpc/cache` | `@unconfirmed/effect-sui/grpc/cache` |
+| `@unconfirmed/sui/grpc/convert` | `@unconfirmed/effect-sui/grpc/convert` |
+| `@unconfirmed/sui/grpc/generated/lean` | `@unconfirmed/effect-sui/grpc/generated/lean` |
+| `@unconfirmed/sui/grpc/generated/proto` | `@unconfirmed/effect-sui/grpc/generated/proto` |
+| `@unconfirmed/sui/grpc/generated/rpc` | `@unconfirmed/effect-sui/grpc/generated/rpc` |
+| `@unconfirmed/sui/grpc/scan` | `@unconfirmed/effect-sui/grpc/scan` |
+| `@unconfirmed/sui/grpc/transaction` | `@unconfirmed/effect-sui/grpc/transaction` |
+| `@unconfirmed/sui-secp256k1` | `@unconfirmed/effect-sui/Secp256k1` |
+| `@unconfirmed/sui-secp256r1` | `@unconfirmed/effect-sui/Secp256r1` |
+| `@unconfirmed/sui-mldsa65` | `@unconfirmed/effect-sui/MlDsa65` |
+| `@unconfirmed/sui-multisig` | `@unconfirmed/effect-sui/MultiSig` |
+| `@unconfirmed/sui-passkey` | `@unconfirmed/effect-sui/Passkey` |
+| `@unconfirmed/sui-passkey/BrowserProvider` | `@unconfirmed/effect-sui/Passkey` |
+| `@unconfirmed/sui-passkey/Passkey` | `@unconfirmed/effect-sui/Passkey` |
+| `@unconfirmed/sui-passkey/SoftwareProvider` | `@unconfirmed/effect-sui/Passkey` |
+| `@unconfirmed/sui-mnemonic` | `@unconfirmed/effect-sui/Mnemonic`, plus `@unconfirmed/effect-sui/Bip32` for `secp256k1SecretKey` / `secp256r1SecretKey` (the old root re-exported both; there is no combined module) |
+| `@unconfirmed/sui-mnemonic/Bip32` | `@unconfirmed/effect-sui/Bip32` |
+| `@unconfirmed/sui-mnemonic/Mnemonic` | `@unconfirmed/effect-sui/Mnemonic` |
+| `@unconfirmed/sui-zklogin` | `@unconfirmed/effect-sui/zklogin` |
+| `@unconfirmed/sui-zklogin/AddressSeed` | `@unconfirmed/effect-sui/zklogin/AddressSeed` |
+| `@unconfirmed/sui-zklogin/Errors` | `@unconfirmed/effect-sui/zklogin/Errors` |
+| `@unconfirmed/sui-zklogin/Jwt` | `@unconfirmed/effect-sui/zklogin/Jwt` |
+| `@unconfirmed/sui-zklogin/Nonce` | `@unconfirmed/effect-sui/zklogin/Nonce` |
+| `@unconfirmed/sui-zklogin/Poseidon` | `@unconfirmed/effect-sui/zklogin/Poseidon` |
+| `@unconfirmed/sui-zklogin/PublicIdentifier` | `@unconfirmed/effect-sui/zklogin/PublicIdentifier` |
+| `@unconfirmed/sui-zklogin/Signature` | `@unconfirmed/effect-sui/zklogin/Signature` |
+| `@unconfirmed/sui-zklogin/ZkLogin` | `@unconfirmed/effect-sui/zklogin/ZkLogin` |
+| `@unconfirmed/sui-zklogin/ZkLoginAddress` | `@unconfirmed/effect-sui/zklogin/ZkLoginAddress` |
+| `@unconfirmed/sui-zklogin/ZkLoginVerifier` | `@unconfirmed/effect-sui/zklogin/ZkLoginVerifier` |
+| `@unconfirmed/sui-zklogin/ZkLoginVerifierGrpc` | `@unconfirmed/effect-sui/zklogin/ZkLoginVerifierGrpc` |
+| `@unconfirmed/sui-enoki` | `@unconfirmed/effect-sui/enoki` |
+| `@unconfirmed/sui-enoki/EnokiClient` | `@unconfirmed/effect-sui/enoki/EnokiClient` |
+| `@unconfirmed/sui-enoki/EnokiHttp` | `@unconfirmed/effect-sui/enoki/EnokiHttp` |
+| `@unconfirmed/sui-enoki/Sponsor` | `@unconfirmed/effect-sui/enoki/Sponsor` |
+| `@unconfirmed/sui-enoki/ZkLoginFlow` | `@unconfirmed/effect-sui/enoki/ZkLoginFlow` |
+| `@unconfirmed/sui-wallet` | `@unconfirmed/effect-sui/wallet` |
+| `@unconfirmed/sui-wallet/Features` | `@unconfirmed/effect-sui/wallet/Features` |
+| `@unconfirmed/sui-wallet/Wallet` | `@unconfirmed/effect-sui/wallet/Wallet` |
+| `@unconfirmed/sui-graphql` | `@unconfirmed/effect-sui/graphql` |
+| `@unconfirmed/sui-graphql/ChainGraphQL` | `@unconfirmed/effect-sui/graphql/ChainGraphQL` |
+| `@unconfirmed/sui-graphql/CheckpointDataGraphQL` | `@unconfirmed/effect-sui/graphql/CheckpointDataGraphQL` |
+| `@unconfirmed/sui-graphql/CheckpointsGraphQL` | `@unconfirmed/effect-sui/graphql/CheckpointsGraphQL` |
+| `@unconfirmed/sui-graphql/CoinsGraphQL` | `@unconfirmed/effect-sui/graphql/CoinsGraphQL` |
+| `@unconfirmed/sui-graphql/DynamicFieldsGraphQL` | `@unconfirmed/effect-sui/graphql/DynamicFieldsGraphQL` |
+| `@unconfirmed/sui-graphql/EventsGraphQL` | `@unconfirmed/effect-sui/graphql/EventsGraphQL` |
+| `@unconfirmed/sui-graphql/ObjectsGraphQL` | `@unconfirmed/effect-sui/graphql/ObjectsGraphQL` |
+| `@unconfirmed/sui-graphql/PackagesGraphQL` | `@unconfirmed/effect-sui/graphql/PackagesGraphQL` |
+| `@unconfirmed/sui-graphql/SuiGraphQL` | `@unconfirmed/effect-sui/graphql/SuiGraphQL` |
+| `@unconfirmed/sui-graphql/TransactionsGraphQL` | `@unconfirmed/effect-sui/graphql/TransactionsGraphQL` |
+| `@unconfirmed/sui-graphql/convert` | `@unconfirmed/effect-sui/graphql/convert` |
+| `@unconfirmed/sui-graphql/merge` | `@unconfirmed/effect-sui/graphql/merge` |
+| `@unconfirmed/sui-graphql/paging` | `@unconfirmed/effect-sui/graphql/paging` |
+| `@unconfirmed/sui-graphql/subscription` | `@unconfirmed/effect-sui/graphql/subscription` |
+| `@unconfirmed/sui-graphql/tip` | `@unconfirmed/effect-sui/graphql/tip` |
+| `@unconfirmed/sui-lifecycle` | `@unconfirmed/effect-sui/lifecycle` |
+| `@unconfirmed/sui-lifecycle/Evidence` | `@unconfirmed/effect-sui/lifecycle/Evidence` |
+| `@unconfirmed/sui-lifecycle/EvidenceGraphQL` | `@unconfirmed/effect-sui/lifecycle/EvidenceGraphQL` |
+| `@unconfirmed/sui-lifecycle/EvidenceGrpc` | `@unconfirmed/effect-sui/lifecycle/EvidenceGrpc` |
+| `@unconfirmed/sui-lifecycle/Journal` | `@unconfirmed/effect-sui/lifecycle/Journal` |
+| `@unconfirmed/sui-lifecycle/JournalEntry` | `@unconfirmed/effect-sui/lifecycle/JournalEntry` |
+| `@unconfirmed/sui-lifecycle/JournalKeyValueStore` | `@unconfirmed/effect-sui/lifecycle/JournalKeyValueStore` |
+| `@unconfirmed/sui-lifecycle/KeyValueStoreIndexedDb` | `@unconfirmed/effect-sui/lifecycle/KeyValueStoreIndexedDb` |
+| `@unconfirmed/sui-lifecycle/KeyValueStoreOpfs` | `@unconfirmed/effect-sui/lifecycle/KeyValueStoreOpfs` |
+| `@unconfirmed/sui-lifecycle/Lifecycle` | `@unconfirmed/effect-sui/lifecycle/Lifecycle` |
+| `@unconfirmed/sui-lifecycle/Outcome` | `@unconfirmed/effect-sui/lifecycle/Outcome` |
+| `@unconfirmed/sui-lifecycle/SenderLock` | `@unconfirmed/effect-sui/lifecycle/SenderLock` |
+| `@unconfirmed/sui-lifecycle/SenderLockWebLocks` | `@unconfirmed/effect-sui/lifecycle/SenderLockWebLocks` |
+| `@unconfirmed/sui-lifecycle/SignedTransaction` | `@unconfirmed/effect-sui/lifecycle/SignedTransaction` |
+| `@unconfirmed/sui-lifecycle/SubmitConfig` | `@unconfirmed/effect-sui/lifecycle/SubmitConfig` |
+| `@unconfirmed/bcs` | `@unconfirmed/effect-bcs` |
+| `@unconfirmed/bcs/Bcs` | `@unconfirmed/effect-bcs/Bcs` |
+| `@unconfirmed/bcs/Bytes` | `@unconfirmed/effect-bcs/Bytes` |
+| `@unconfirmed/quorum` | `@unconfirmed/effect-quorum` |
+| `@unconfirmed/quorum/Quorum` | `@unconfirmed/effect-quorum/Quorum` |
+| `@unconfirmed/walrus` | `@unconfirmed/effect-walrus` |
+| `@unconfirmed/walrus/Aggregator` | `@unconfirmed/effect-walrus/Aggregator` |
+| `@unconfirmed/walrus/Bft` | `@unconfirmed/effect-walrus/Bft` |
+| `@unconfirmed/walrus/BlobId` | `@unconfirmed/effect-walrus/BlobId` |
+| `@unconfirmed/walrus/Certificate` | `@unconfirmed/effect-walrus/Certificate` |
+| `@unconfirmed/walrus/Committee` | `@unconfirmed/effect-walrus/Committee` |
+| `@unconfirmed/walrus/Config` | `@unconfirmed/effect-walrus/Config` |
+| `@unconfirmed/walrus/Cost` | `@unconfirmed/effect-walrus/Cost` |
+| `@unconfirmed/walrus/Encoder` | `@unconfirmed/effect-walrus/Encoder` |
+| `@unconfirmed/walrus/Encoding` | `@unconfirmed/effect-walrus/Encoding` |
+| `@unconfirmed/walrus/Errors` | `@unconfirmed/effect-walrus/Errors` |
+| `@unconfirmed/walrus/Merkle` | `@unconfirmed/effect-walrus/Merkle` |
+| `@unconfirmed/walrus/Messages` | `@unconfirmed/effect-walrus/Messages` |
+| `@unconfirmed/walrus/Publisher` | `@unconfirmed/effect-walrus/Publisher` |
+| `@unconfirmed/walrus/Quilt` | `@unconfirmed/effect-walrus/Quilt` |
+| `@unconfirmed/walrus/QuiltRead` | `@unconfirmed/effect-walrus/QuiltRead` |
+| `@unconfirmed/walrus/Read` | `@unconfirmed/effect-walrus/Read` |
+| `@unconfirmed/walrus/Recipes` | `@unconfirmed/effect-walrus/Recipes` |
+| `@unconfirmed/walrus/Status` | `@unconfirmed/effect-walrus/Status` |
+| `@unconfirmed/walrus/StorageNode` | `@unconfirmed/effect-walrus/StorageNode` |
+| `@unconfirmed/walrus/System` | `@unconfirmed/effect-walrus/System` |
+| `@unconfirmed/walrus/UploadRelay` | `@unconfirmed/effect-walrus/UploadRelay` |
+| `@unconfirmed/walrus/Walrus` | `@unconfirmed/effect-walrus/Walrus` |
+| `@unconfirmed/walrus/Write` | `@unconfirmed/effect-walrus/Write` |
+| `@unconfirmed/walrus/generated/deps/std/uq64_64` | `@unconfirmed/effect-walrus/generated/deps/std/uq64_64` |
+| `@unconfirmed/walrus/generated/deps/sui/group_ops` | `@unconfirmed/effect-walrus/generated/deps/sui/group_ops` |
+| `@unconfirmed/walrus/generated/deps/sui/package` | `@unconfirmed/effect-walrus/generated/deps/sui/package` |
+| `@unconfirmed/walrus/generated/walrus/$package` | `@unconfirmed/effect-walrus/generated/walrus/$package` |
+| `@unconfirmed/walrus/generated/walrus/active_set` | `@unconfirmed/effect-walrus/generated/walrus/active_set` |
+| `@unconfirmed/walrus/generated/walrus/apportionment_queue` | `@unconfirmed/effect-walrus/generated/walrus/apportionment_queue` |
+| `@unconfirmed/walrus/generated/walrus/auth` | `@unconfirmed/effect-walrus/generated/walrus/auth` |
+| `@unconfirmed/walrus/generated/walrus/blob` | `@unconfirmed/effect-walrus/generated/walrus/blob` |
+| `@unconfirmed/walrus/generated/walrus/bls_aggregate` | `@unconfirmed/effect-walrus/generated/walrus/bls_aggregate` |
+| `@unconfirmed/walrus/generated/walrus/committee` | `@unconfirmed/effect-walrus/generated/walrus/committee` |
+| `@unconfirmed/walrus/generated/walrus/display` | `@unconfirmed/effect-walrus/generated/walrus/display` |
+| `@unconfirmed/walrus/generated/walrus/encoding` | `@unconfirmed/effect-walrus/generated/walrus/encoding` |
+| `@unconfirmed/walrus/generated/walrus/epoch_parameters` | `@unconfirmed/effect-walrus/generated/walrus/epoch_parameters` |
+| `@unconfirmed/walrus/generated/walrus/event_blob` | `@unconfirmed/effect-walrus/generated/walrus/event_blob` |
+| `@unconfirmed/walrus/generated/walrus/events` | `@unconfirmed/effect-walrus/generated/walrus/events` |
+| `@unconfirmed/walrus/generated/walrus/extended_field` | `@unconfirmed/effect-walrus/generated/walrus/extended_field` |
+| `@unconfirmed/walrus/generated/walrus/init` | `@unconfirmed/effect-walrus/generated/walrus/init` |
+| `@unconfirmed/walrus/generated/walrus/messages` | `@unconfirmed/effect-walrus/generated/walrus/messages` |
+| `@unconfirmed/walrus/generated/walrus/metadata` | `@unconfirmed/effect-walrus/generated/walrus/metadata` |
+| `@unconfirmed/walrus/generated/walrus/node_metadata` | `@unconfirmed/effect-walrus/generated/walrus/node_metadata` |
+| `@unconfirmed/walrus/generated/walrus/pending_values` | `@unconfirmed/effect-walrus/generated/walrus/pending_values` |
+| `@unconfirmed/walrus/generated/walrus/pool_exchange_rate` | `@unconfirmed/effect-walrus/generated/walrus/pool_exchange_rate` |
+| `@unconfirmed/walrus/generated/walrus/shared_blob` | `@unconfirmed/effect-walrus/generated/walrus/shared_blob` |
+| `@unconfirmed/walrus/generated/walrus/slashing` | `@unconfirmed/effect-walrus/generated/walrus/slashing` |
+| `@unconfirmed/walrus/generated/walrus/snapshot_blob` | `@unconfirmed/effect-walrus/generated/walrus/snapshot_blob` |
+| `@unconfirmed/walrus/generated/walrus/staked_wal` | `@unconfirmed/effect-walrus/generated/walrus/staked_wal` |
+| `@unconfirmed/walrus/generated/walrus/staking` | `@unconfirmed/effect-walrus/generated/walrus/staking` |
+| `@unconfirmed/walrus/generated/walrus/staking_inner` | `@unconfirmed/effect-walrus/generated/walrus/staking_inner` |
+| `@unconfirmed/walrus/generated/walrus/staking_pool` | `@unconfirmed/effect-walrus/generated/walrus/staking_pool` |
+| `@unconfirmed/walrus/generated/walrus/storage_accounting` | `@unconfirmed/effect-walrus/generated/walrus/storage_accounting` |
+| `@unconfirmed/walrus/generated/walrus/storage_node` | `@unconfirmed/effect-walrus/generated/walrus/storage_node` |
+| `@unconfirmed/walrus/generated/walrus/storage_pool` | `@unconfirmed/effect-walrus/generated/walrus/storage_pool` |
+| `@unconfirmed/walrus/generated/walrus/storage_resource` | `@unconfirmed/effect-walrus/generated/walrus/storage_resource` |
+| `@unconfirmed/walrus/generated/walrus/system` | `@unconfirmed/effect-walrus/generated/walrus/system` |
+| `@unconfirmed/walrus/generated/walrus/system_state_inner` | `@unconfirmed/effect-walrus/generated/walrus/system_state_inner` |
+| `@unconfirmed/walrus/generated/walrus/upgrade` | `@unconfirmed/effect-walrus/generated/walrus/upgrade` |
+| `@unconfirmed/walrus/generated/walrus/walrus_context` | `@unconfirmed/effect-walrus/generated/walrus/walrus_context` |
+| `@unconfirmed/walrus-wasm` | `@unconfirmed/effect-walrus/wasm` |
+| `@unconfirmed/walrus-wasm/nodejs/walrus_wasm_bg.wasm` | `@unconfirmed/effect-walrus/wasm/nodejs/walrus_wasm_bg.wasm` |
+| `@unconfirmed/walrus-wasm/web/walrus_wasm_bg.wasm` | `@unconfirmed/effect-walrus/wasm/web/walrus_wasm_bg.wasm` |
+| `@unconfirmed/walrus-wasm/web/walrus_wasm_nosimd_bg.wasm` | `@unconfirmed/effect-walrus/wasm/web/walrus_wasm_nosimd_bg.wasm` |
+| `@unconfirmed/seal` | `@unconfirmed/effect-seal` |
+| `@unconfirmed/seal/Approval` | `@unconfirmed/effect-seal/Approval` |
+| `@unconfirmed/seal/Bls` | `@unconfirmed/effect-seal/Bls` |
+| `@unconfirmed/seal/Config` | `@unconfirmed/effect-seal/Config` |
+| `@unconfirmed/seal/Dem` | `@unconfirmed/effect-seal/Dem` |
+| `@unconfirmed/seal/ElGamal` | `@unconfirmed/effect-seal/ElGamal` |
+| `@unconfirmed/seal/EncryptedObject` | `@unconfirmed/effect-seal/EncryptedObject` |
+| `@unconfirmed/seal/Entropy` | `@unconfirmed/effect-seal/Entropy` |
+| `@unconfirmed/seal/Envelope` | `@unconfirmed/effect-seal/Envelope` |
+| `@unconfirmed/seal/Errors` | `@unconfirmed/effect-seal/Errors` |
+| `@unconfirmed/seal/Ibe` | `@unconfirmed/effect-seal/Ibe` |
+| `@unconfirmed/seal/Kdf` | `@unconfirmed/effect-seal/Kdf` |
+| `@unconfirmed/seal/KeyServer` | `@unconfirmed/effect-seal/KeyServer` |
+| `@unconfirmed/seal/KeyServerApi` | `@unconfirmed/effect-seal/KeyServerApi` |
+| `@unconfirmed/seal/Keys` | `@unconfirmed/effect-seal/Keys` |
+| `@unconfirmed/seal/Seal` | `@unconfirmed/effect-seal/Seal` |
+| `@unconfirmed/seal/SealGrpc` | `@unconfirmed/effect-seal/SealGrpc` |
+| `@unconfirmed/seal/SessionKey` | `@unconfirmed/effect-seal/SessionKey` |
+| `@unconfirmed/seal/Shamir` | `@unconfirmed/effect-seal/Shamir` |
+| `@unconfirmed/seal/bytes` | `@unconfirmed/effect-seal/bytes` |
+| `@unconfirmed/seal/ids` | `@unconfirmed/effect-seal/ids` |
+| `@unconfirmed/sui-codegen` | `@unconfirmed/effect-sui-codegen` |
+| `@unconfirmed/sui-codegen/Config` | `@unconfirmed/effect-sui-codegen/Config` |
+| `@unconfirmed/sui-codegen/FromGrpc` | `@unconfirmed/effect-sui-codegen/FromGrpc` |
+| `@unconfirmed/sui-codegen/Generate` | `@unconfirmed/effect-sui-codegen/Generate` |
+| `@unconfirmed/sui-codegen/Model` | `@unconfirmed/effect-sui-codegen/Model` |
+| `@unconfirmed/sui-codegen/Render` | `@unconfirmed/effect-sui-codegen/Render` |
+| `@unconfirmed/sui-codegen/Summary` | `@unconfirmed/effect-sui-codegen/Summary` |
+
+</details>
+
+**Names that changed at run time.**
+
+- Service and reference keys follow the package names (`"@unconfirmed/effect-sui/Objects"`, `"@unconfirmed/effect-sui/lifecycle/Journal"`, …). This only matters to an app that mixes copies, which it must not.
+- Generated bindings key their `Package` / `Origins` references `"@unconfirmed/effect-sui-codegen/<package>/<address>"` and import `@unconfirmed/effect-bcs/Bcs` and `@unconfirmed/effect-sui/Move`: regenerate them. The CLI is still `sui-codegen` and the config file `sui-codegen.config.ts`.
+- `KeyValueStoreIndexedDb.DEFAULT_DATABASE` is now `"@unconfirmed/effect-sui/lifecycle"` (was `"@unconfirmed/sui-lifecycle"`). To keep reading a journal written before, pass `KeyValueStoreIndexedDb.layer({ database: "@unconfirmed/sui-lifecycle" })`. `KeyValueStoreOpfs`'s default directory (`sui-lifecycle`) did not change.
+- `SenderLockWebLocks.DEFAULT_PREFIX` is now `"@unconfirmed/effect-sui/lifecycle/sender/"` (was `"@unconfirmed/sui-lifecycle/sender/"`): tabs running old and new code don't see each other's locks, so roll the change out at once or pass `prefix`.
+- Server bundles keep `@unconfirmed/effect-walrus/wasm` external instead of `@unconfirmed/walrus-wasm`.
 
 ## License
 

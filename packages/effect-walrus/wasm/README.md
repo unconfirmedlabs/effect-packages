@@ -1,6 +1,6 @@
 # `@unconfirmed/effect-walrus/wasm`
 
-Walrus RS2 erasure coding, per-sliver Merkle roots and BLS12-381 min-pk in WebAssembly, for `@unconfirmed/effect-walrus`'s `Encoder`. It replaces `@mysten/walrus-wasm` 0.3.1 and is byte-for-byte compatible with it: the same blob ids, metadata, slivers and decoded blobs (`packages/effect-walrus/test/parity.encoder.test.ts`, `test/wasm.test.ts`).
+Walrus RS2 erasure coding, per-sliver Merkle roots and BLS12-381 min-pk in WebAssembly, for `@unconfirmed/effect-walrus`'s `Encoder`. It replaces `@mysten/walrus-wasm` 0.3.1 and is byte-for-byte compatible with it: the same blob ids, metadata, slivers and decoded blobs (`packages/effect-walrus/test/parity.encoder.test.ts`, `packages/effect-walrus/test/wasm.test.ts`). It is part of `@unconfirmed/effect-walrus` (this directory, `wasm/`, was the `walrus-wasm` package until 2026-11-28), exported as `./wasm` with a `browser` condition for `web.js`.
 
 The built artifacts are committed (`nodejs/`, `web/`), so the repo works without a Rust toolchain. Rebuild them only when `src/`, `Cargo.toml` or `Cargo.lock` changes.
 
@@ -45,10 +45,10 @@ Release profile: `opt-level = 3`, fat LTO, one codegen unit, `panic = "abort"`; 
 ## Building
 
 ```sh
-cd packages/effect-walrus/wasm
-bun run build          # rebuild nodejs/ and web/
-bun run build:check    # rebuild into a temp dir and compare byte for byte with the committed files
-cargo test --release   # the Rust tests (native)
+cd packages/effect-walrus
+bun run build:wasm          # rebuild wasm/nodejs/ and wasm/web/
+bun run build:wasm:check    # rebuild into a temp dir and compare byte for byte with the committed files
+(cd wasm && cargo test --release)   # the Rust tests (native)
 ```
 
 | Tool | Version | Where it comes from |
@@ -58,7 +58,7 @@ cargo test --release   # the Rust tests (native)
 | Binaryen `wasm-opt` | 132 | the root devDependency `binaryen` 132.0.0 (exact), `node_modules/.bin/wasm-opt` |
 | clang | any with the wasm32 target (18.1 here) | system; `blst` (BLS) compiles C for wasm32 |
 
-`scripts/build.ts` builds the crate twice (`RUSTFLAGS=-C target-feature=+simd128` into `target/simd`, plain into `target/nosimd`, both `--locked`), runs `wasm-bindgen --target nodejs` / `--target web` with `--remove-name-section`, checks that the scalar build's web glue equals the SIMD one's, writes `nodejs/package.json` (`"type": "commonjs"`), and runs `wasm-opt -O3` on each `.wasm`. `--remap-path-prefix` maps the cargo home to `/cargo` and the package directory to `/walrus-wasm`, so panic locations embedded in the binary do not depend on the machine; with the same toolchain the output is byte-identical (`build:check`).
+`packages/effect-walrus/scripts/build-wasm.ts` builds the crate twice (`RUSTFLAGS=-C target-feature=+simd128` into `target/simd`, plain into `target/nosimd`, both `--locked`), runs `wasm-bindgen --target nodejs` / `--target web` with `--remove-name-section`, checks that the scalar build's web glue equals the SIMD one's, writes `nodejs/package.json` (`"type": "commonjs"`), and runs `wasm-opt -O3` on each `.wasm`. `--remap-path-prefix` maps the cargo home to `/cargo` and this directory to `/walrus-wasm` (its name when it was a package of its own, kept so the bytes did not change), so panic locations embedded in the binary do not depend on the machine; with the same toolchain the output is byte-identical (`build:check`).
 
 ## Speed
 

@@ -1,8 +1,10 @@
-# `@unconfirmed/seal` — design
+# `@unconfirmed/effect-seal` — design
+
+> **Package names changed on 2026-11-28.** The 17 packages became six; the README's [migration table](../../README.md#migrating-from-the-old-package-names) maps every old import. Import specifiers and paths here use the new names. Where this document plans dependencies between separate packages, read them as modules of `@unconfirmed/effect-sui` (signers, zkLogin, wallet, GraphQL, lifecycle) or as part of `@unconfirmed/effect-walrus` (the WASM, now its `wasm/` directory and `./wasm` export).
 
 Status: design, 2026-11-27. S1 (scaffold, primitives, shared declarations) implemented; see "As built (S1)" in §4.1 and §4.9. S2 (`EncryptedObject`, `Envelope`) implemented; see "As built (S2)" in §4.2. S3 (configuration, key servers) implemented; see "As built (S3)" in §4.3. S4 (`KeyServerApi` layer, recorder, `fakeKeyServers`) implemented; see "As built (S4)" in §4.4 and §6. S5 (`SessionKey`, `Approval`) implemented; see "As built (S5)" in §4.5 and §4.6. S6 (`Keys`) implemented; see "As built (S6)" in §4.7 and §6.1. S7 (`Seal`, live tests, bundle report, README) implemented; see "As built (S7)" in §4.8 and §6. The review (`docs/review/seal.md`, SEAL-1 to SEAL-15) is resolved; see "After review" in §4.2–§4.8 and §6.5. Implementers: read this file, `docs/design/quorum.md` (with §10), `EXPLORATION.md` §6–7, and the README sections "How it composes" and "Importing".
 
-A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
+A ground-up Seal client on `@unconfirmed/effect-sui` and `@unconfirmed/effect-quorum`: threshold identity-based encryption to key servers registered on Sui, session keys, key fetching, decryption. The crypto core is pure and usable offline; services start at I/O (chain reads, key server HTTP).
 
 ## 0. References and how to cite them
 
@@ -10,7 +12,7 @@ A ground-up Seal client on `@unconfirmed/sui` and `@unconfirmed/quorum`: thresho
 |---|---|---|
 | `@mysten/seal` | 2.0.1 (root devDependency, exact) | `node_modules/@mysten/seal/dist/` — cited as `seal/dist/<file>:<line>` |
 | Seal Rust repo | `MystenLabs/seal` at `024b523e` (2026-11-23), workspace version 0.6.16 | cited as `crates/...`, `move/...`, `docs/content/...`, `tests/...` |
-| `@noble/curves` / `@noble/hashes` | 2.4.0 / ^2.3.0 (what `bun.lock` resolves today) | `packages/sui/node_modules/@noble/` |
+| `@noble/curves` / `@noble/hashes` | 2.4.0 / ^2.3.0 (what `bun.lock` resolves today) | `packages/effect-sui/node_modules/@noble/` |
 | Testnet and mainnet, read 2026-11-27 | protocol version 144 on testnet | throwaway scripts (not kept in the repo): chain reads, `/v1/service`, `/v1/fetch_key` with throwaway keys, transaction simulation |
 
 "Live-verified" means I observed it on 2026-11-27. No funds were spent and nothing was signed with the wallet: every key request used a fresh in-memory Ed25519 key.
@@ -189,9 +191,9 @@ Line numbers are in `seal/dist/`. The first column says where the item comes fro
 ## 3. Package layout
 
 ```
-packages/seal/
-  package.json   @unconfirmed/seal; type module; sideEffects false; exports { ".": "./src/index.ts", "./*": "./src/*.ts" }
-                 dependencies: effect 4.1.6, @unconfirmed/bcs, @unconfirmed/sui, @unconfirmed/quorum (workspace:*),
+packages/effect-seal/
+  package.json   @unconfirmed/effect-seal; type module; sideEffects false; exports { ".": "./src/index.ts", "./*": "./src/*.ts" }
+                 dependencies: effect 4.1.6, @unconfirmed/effect-bcs, @unconfirmed/effect-sui, @unconfirmed/effect-quorum (workspace:*),
                                @noble/curves ^2.3.0, @noble/hashes ^2.3.0, @scure/base ^2.3.0
   tsconfig.json  { "extends": "../../tsconfig.base.json", "include": ["src", "test", "scripts"] }
   scripts/record-chain.ts  scripts/record-key-server.ts
@@ -205,11 +207,11 @@ packages/seal/
   test/            see §6
 ```
 
-Rules: namespace subpath imports only (`import * as Effect from "effect/Effect"`), never the `"effect"` barrel; every module-level value is a `/* @__PURE__ */` call or a function (the GF(2⁸) tables are built by a pure call, not written out); only `Bls.ts` imports `@noble/curves/bls12-381.js`; only `Keys.ts` imports `@unconfirmed/quorum`; `Shamir`, `Dem` and `EncryptedObject` import no curve code, so a program that only parses objects ships no BLS. Root `package.json` gains the devDependency `@unconfirmed/seal: workspace:*`.
+Rules: namespace subpath imports only (`import * as Effect from "effect/Effect"`), never the `"effect"` barrel; every module-level value is a `/* @__PURE__ */` call or a function (the GF(2⁸) tables are built by a pure call, not written out); only `Bls.ts` imports `@noble/curves/bls12-381.js`; only `Keys.ts` imports `@unconfirmed/effect-quorum`; `Shamir`, `Dem` and `EncryptedObject` import no curve code, so a program that only parses objects ships no BLS. Root `package.json` gains the devDependency `@unconfirmed/effect-seal: workspace:*`.
 
 ## 4. Public API
 
-`Address` is `@unconfirmed/sui/Address`. Errors are `Schema.TaggedError` (§4.9). Synchronous pure functions return `Result`; `R` names exactly what a function touches.
+`Address` is `@unconfirmed/effect-sui/Address`. Errors are `Schema.TaggedError` (§4.9). Synchronous pure functions return `Result`; `R` names exactly what a function touches.
 
 ### 4.1 Pure primitives
 
@@ -288,7 +290,7 @@ export const hmacCtr: {
 
 // Entropy.ts — the one source of randomness
 /** Default: `crypto.getRandomValues`. Replace with `Effect.provideService(Entropy, seeded)` in tests. Nothing in `R`. */
-export const Entropy: Context.Reference<(length: number) => Uint8Array>   // key "@unconfirmed/seal/Entropy"
+export const Entropy: Context.Reference<(length: number) => Uint8Array>   // key "@unconfirmed/effect-seal/Entropy"
 export const bytes: (length: number) => Effect.Effect<Uint8Array>
 ```
 
@@ -296,7 +298,7 @@ AES-GCM runs on `crypto.subtle` (`Effect.tryPromise`); a runtime without it (a b
 
 **As built (S1).** Differences from the declarations above, each the smallest call that fills a gap:
 
-- `Dem.Ciphertext` is a plain TypeScript union declared in `Dem.ts` (`EncryptedObject` does not exist before S2). S2's BCS `Ciphertext` must decode to exactly this shape (`@unconfirmed/bcs` enum: flattened struct variants, `aad: Option<Uint8Array>`), so `Dem.decrypt(object.ciphertext, key)` type-checks without a conversion.
+- `Dem.Ciphertext` is a plain TypeScript union declared in `Dem.ts` (`EncryptedObject` does not exist before S2). S2's BCS `Ciphertext` must decode to exactly this shape (`@unconfirmed/effect-bcs` enum: flattened struct variants, `aad: Option<Uint8Array>`), so `Dem.decrypt(object.ciphertext, key)` type-checks without a conversion.
 - Because only `Bls.ts` may touch the curve, it also exports `ORDER`, `g1Zero`, `g2Zero` and `g1Multiply` / `g2Multiply`. Use these rather than noble's `point.multiply`: they accept a zero scalar (noble throws) and are otherwise noble's constant-time multiplication. Other point methods (`add`, `subtract`, `equals`, `is0`, `negate`) are used directly on the values.
 - `Bls.pairingsEqual` treats a pair containing the point at infinity as the identity; `Ibe.verifyUserSecretKey` refuses infinity explicitly (C18). `Bls.pairingBytes` needs finite points (the decoders guarantee it).
 - `ElGamal.decrypt` also fails (`InvalidEncoding`, `"point at infinity"`) when the recovered key is the point at infinity.
@@ -370,7 +372,7 @@ export interface ServerConfig {
   readonly aggregatorUrl?: string
 }
 export interface SealConfigService { readonly servers: ReadonlyArray<ServerConfig> }
-export class SealConfig extends Context.Service<SealConfig, SealConfigService>()("@unconfirmed/seal/SealConfig") {}
+export class SealConfig extends Context.Service<SealConfig, SealConfigService>()("@unconfirmed/effect-seal/SealConfig") {}
 export interface ServerInput { readonly objectId: string; readonly weight?: number /* 1 */; readonly apiKeyName?: string
                                readonly apiKey?: string | Redacted.Redacted<string>; readonly aggregatorUrl?: string }
 /** Normalises ids; refuses duplicates, a weight that is not a positive integer, a total above 255, half an API key, a URL that is not http(s). */
@@ -400,7 +402,7 @@ export class KeyServers extends Context.Service<KeyServers, {
   /** Cached. Works for any object id; `url` is set only for configured servers (and independent ones). */
   readonly get: (objectId: Address) => Effect.Effect<KeyServer, KeyServerLoadError>
   readonly refresh: (objectId: Address) => Effect.Effect<KeyServer, KeyServerLoadError>
-}>()("@unconfirmed/seal/KeyServers") {}
+}>()("@unconfirmed/effect-seal/KeyServers") {}
 export const layer: (options?: { readonly ttl?: Duration.Input /* 10 minutes; failures are not cached */ }) => Layer.Layer<KeyServers, never, SealConfig | Objects.Objects>
 /** Also checks each configured independent server's proof of possession on first use (C17, H10); committee servers are skipped. */
 export const layerVerified: (options?: { readonly ttl?: Duration.Input }) => Layer.Layer<KeyServers, never, SealConfig | Objects.Objects | KeyServerApi>
@@ -474,7 +476,7 @@ export interface KeyServerApiOptions {
 export class KeyServerApi extends Context.Service<KeyServerApi, {
   readonly fetchKey: (server: Endpoint, request: FetchKeyRequest) => Effect.Effect<ReadonlyArray<EncryptedKey>, KeyServerError>
   readonly service: (server: Endpoint) => Effect.Effect<{ readonly serviceId: Address; readonly pop: Uint8Array; readonly version: string | undefined }, KeyServerError>
-}>()("@unconfirmed/seal/KeyServerApi") {}
+}>()("@unconfirmed/effect-seal/KeyServerApi") {}
 export const layer: (options?: KeyServerApiOptions) => Layer.Layer<KeyServerApi, never, HttpClient.HttpClient>
 ```
 
@@ -501,7 +503,7 @@ Headers sent: `Content-Type: application/json`, `Request-Id` (a v4 UUID; *after 
 
 ```ts
 // SessionKey.ts
-/** A key signer, or anything that signs personal messages itself: `@unconfirmed/sui-wallet`'s `WalletSigner` fits as it is. */
+/** A key signer, or anything that signs personal messages itself: `@unconfirmed/effect-sui/wallet`'s `WalletSigner` fits as it is. */
 export type MessageSigner =
   | Signer.Signer
   | { readonly address: Address
@@ -558,7 +560,7 @@ export const fromExported: (exported: Exported, options?: { readonly signer?: Me
 ```
 
 - Time comes from `Clock` (`createdAt = now − clockSkew`), so `TestClock` drives expiry.
-- `certificate` is `Effect.cachedInvalidateWithTTL(sign, exit => success ? infinity : zero)` (the pattern in `packages/walrus/src/System.ts:150-160`). A key `Signer` signs through `Signer.signPersonalMessage`; a wallet through its own `signPersonalMessage`. A failure that is not a `SigningError` (a wallet's `UnsupportedFeature`) becomes `SigningError { reason: "unavailable" }`, as `Wallet.signer` already does for transactions. Without signer or signature: `SignatureRequired { message: personalMessage }`.
+- `certificate` is `Effect.cachedInvalidateWithTTL(sign, exit => success ? infinity : zero)` (the pattern in `packages/effect-walrus/src/System.ts:150-160`). A key `Signer` signs through `Signer.signPersonalMessage`; a wallet through its own `signPersonalMessage`. A failure that is not a `SigningError` (a wallet's `UnsupportedFeature`) becomes `SigningError { reason: "unavailable" }`, as `Wallet.signer` already does for transactions. Without signer or signature: `SignatureRequired { message: personalMessage }`.
 - The session secret is a `Redacted<Uint8Array>` held in the closure; it appears only in `toExported`. The request signature is raw Ed25519 over the bytes of R4 (`@noble/curves/ed25519.js` directly: a `Signer` hashes an intent message, which is not what the server verifies).
 - `fromExported` decodes through the schema, normalises ids, rejects a session that is expired, a TTL outside 1–30, or a secret that is not an Ed25519 `suiprivkey`. A session exported by `@mysten/seal` imports here and the reverse.
 - `make` does no I/O. Whether `packageId` is a first version is checked by `Seal.session` (§4.8).
@@ -568,7 +570,7 @@ export const fromExported: (exported: Exported, options?: { readonly signer?: Me
 
 - **Ids are strict.** `packageId` and `address` (in `make` and `fromExported`) must be `0x` followed by exactly 64 hex digits; either case is accepted and normalised to lower case. Short forms (`0x2`) and unprefixed hex are `InvalidSessionKey` (item 14: the server rebuilds the message from the canonical id, so anything else could only fail later). `normalizeId` is exported.
 - **Pure formats are exported**: `personalMessage({ packageName, ttlMin, creationTime, sessionVk })` (R1) and `requestMessage(ptb, encKey, encVerificationKey)` (R4). Both Rust vectors pass through them; the R1 vector's 60-digit id is passed already padded.
-- `MessageSigner = Signer.Signer | PersonalMessageSigner`, the second named and exported. A value with `signPersonalMessage` signs through it, anything else through `Signer.signPersonalMessage`. A failure of the former that is not a `Signer.SigningError` becomes `SigningError { reason: "unavailable", message: "<tag>: <message>" }`. The type test (`test/session-key.test.ts`) checks `Wallet.WalletSigner` and `Signer.Signer` against it through the root devDependency; the wallet case also runs against `packages/sui-wallet/test/FakeWallet.ts`.
+- `MessageSigner = Signer.Signer | PersonalMessageSigner`, the second named and exported. A value with `signPersonalMessage` signs through it, anything else through `Signer.signPersonalMessage`. A failure of the former that is not a `Signer.SigningError` becomes `SigningError { reason: "unavailable", message: "<tag>: <message>" }`. The type test (`test/session-key.test.ts`) checks `Wallet.WalletSigner` and `Signer.Signer` against it through the root devDependency; the wallet case also runs against `packages/effect-sui/test/wallet/FakeWallet.ts`.
 - The certificate signer is `Effect.cachedWithTTL` (success forever, failure zero): ten concurrent `certificate` calls prompt once (tested under `TestClock`). The expiry check runs before the cache on every call. A signature obtained by signing is remembered, so `toExported` includes it.
 - The secret, the signer, the signature and the cache are held in a module-private `WeakMap` keyed by the session value, not as properties: a spread copy (`{ ...session }`) is not a session, and every function that needs the secret, the signer, the signature or the cache dies when given one. `SessionKey.verify` reads only the copied public fields (`certificate`, `personalMessage`, `address`), so it accepts a copy.
 - `isExpired` and every check that a session is live (certificate, `signRequest`, `fromExported`, the cache) use `now ≥ expiresAt − 10 s` (`EXPIRY_MARGIN_MS`).
@@ -604,7 +606,7 @@ export const fromProgrammable: (ptb: T.ProgrammableTransaction) => Result.Result
 export const fromTransactionKindBytes: (bytes: Uint8Array) => Result.Result<Approval, InvalidApproval>
 ```
 
-`InvalidApproval { reason }` reproduces every rule of P1 with the server's wording, so a bad PTB fails before any request. Generated call builders (`@unconfirmed/sui-codegen`) work as recipes too: their first argument is the id.
+`InvalidApproval { reason }` reproduces every rule of P1 with the server's wording, so a bad PTB fails before any request. Generated call builders (`@unconfirmed/effect-sui-codegen`) work as recipes too: their first argument is the id.
 
 **As built (S5).**
 
@@ -617,7 +619,7 @@ export const fromTransactionKindBytes: (bytes: Uint8Array) => Result.Result<Appr
 ### 4.7 Fetching keys
 
 ```ts
-// Keys.ts — the only module that imports @unconfirmed/quorum
+// Keys.ts — the only module that imports @unconfirmed/effect-quorum
 export interface DerivedKey { readonly server: Address; readonly fullId: Uint8Array; readonly key: Uint8Array /* 48-byte G1, verified */ }
 export interface FetchOptions {
   readonly session: SessionKey
@@ -788,7 +790,7 @@ export class ThresholdNotMet extends Schema.TaggedError<ThresholdNotMet>()("Thre
 }
 ```
 
-`SessionKeyExpired { expiresAt, now }`, `InvalidSessionKey { reason }`, `SignatureRequired { message }` (the personal message to sign, base64), `InvalidApproval { reason }`, `ApprovalMismatch { reason }`, `NotFirstVersion { packageId, version }`, `InvalidCiphertext { reason }`, `DecryptionFailed { reason: "tag" | "mac" }`, `NotEnoughKeys { required, available }`, `InvalidEncryption { reason }`, `InvalidShares { reason }`, `CryptoUnavailable { message }`, `InvalidConfig { reason }`, `InvalidKeyServer { objectId, reason }`. From `@unconfirmed/sui`: `Signer.SigningError`, `Objects.ObjectNotFound`, `RpcError`, `Ptb.InvalidPureValue`, `SignatureScheme.VerifyError`.
+`SessionKeyExpired { expiresAt, now }`, `InvalidSessionKey { reason }`, `SignatureRequired { message }` (the personal message to sign, base64), `InvalidApproval { reason }`, `ApprovalMismatch { reason }`, `NotFirstVersion { packageId, version }`, `InvalidCiphertext { reason }`, `DecryptionFailed { reason: "tag" | "mac" }`, `NotEnoughKeys { required, available }`, `InvalidEncryption { reason }`, `InvalidShares { reason }`, `CryptoUnavailable { message }`, `InvalidConfig { reason }`, `InvalidKeyServer { objectId, reason }`. From `@unconfirmed/effect-sui`: `Signer.SigningError`, `Objects.ObjectNotFound`, `RpcError`, `Ptb.InvalidPureValue`, `SignatureScheme.VerifyError`.
 
 No error carries key material, a session secret or an API key. `ThresholdNotMet` is serialisable as it stands (`KeyServerError` is a schema).
 
@@ -828,7 +830,7 @@ Seal does not copy the quorum's reason: `ThresholdNotMet.reason` is derived from
 
 ## 6. Test plan
 
-Conventions as in the other packages: `bun:test`; offline tests always run; `@mysten/seal` is a dev-only oracle loaded from its shipped build (`test/oracle.ts`, the pattern of `packages/walrus/test/oracle.ts`); time is `TestClock`; HTTP is a scripted `HttpClient` (`packages/walrus/test/support.ts` `scripted`).
+Conventions as in the other packages: `bun:test`; offline tests always run; `@mysten/seal` is a dev-only oracle loaded from its shipped build (`test/oracle.ts`, the pattern of `packages/effect-walrus/test/oracle.ts`); time is `TestClock`; HTTP is a scripted `HttpClient` (`packages/effect-walrus/test/support.ts` `scripted`).
 
 `test/support.ts` provides: `seeded(seed)` (a deterministic `Entropy`), and `fakeKeyServers(servers)`: an in-memory world behind a scripted `HttpClient` in which each server has a real master key, an object id, a URL, optional API key, a policy function `(user, ids) => allow | error`, and `intercept` hooks (delay, hang, network error, status and body, wrong key, missing key). It implements H1–H10 with real crypto (`Ibe.extract`, `ElGamal.encrypt`), verifies the certificate text and both signatures the way R1–R4 say, resolves a package to a first version from a table (I1), and answers with the recorded bodies of `test/fixtures/key-server/`. It returns the scripted client and a list of servers shaped like `KeyServer.KeyServer`, ready for `KeyServer.layerFromServers`, so it depends on no chain code. `test/fixtures.ts` serves recorded chain objects as an `Objects` layer.
 
@@ -846,7 +848,7 @@ Conventions as in the other packages: `bun:test`; offline tests always run; `@my
 | `envelope.test.ts` | Decrypt the Rust vector from its three master keys, with and without the consistency check; round trips for the three DEMs, thresholds 1, `n` and in between, repeated servers; every `t`-subset of keys opens, `t − 1` is `NotEnoughKeys`; a key for the wrong id is `InvalidCiphertext`; an object whose shares are not on one polynomial opens without the check and fails with it; little-endian `r` only with `legacyNonce`; limits (255 shares). |
 | `config.test.ts`, `key-server.test.ts` | Every refusal of `Config.make`; decode recorded objects: V1 shared, V1 address-owned, V2 committee (testnet, mainnet), and synthesized V2 independent and V1+V2; version choice; every `InvalidKeyServer` reason; committee URL and API key come from configuration; cache: one read for concurrent `get`s, TTL and `refresh` under `TestClock`, failures not cached; `layerVerified` accepts the recorded live proofs (C17) and rejects a proof for another id. |
 | `key-server-api.test.ts` | Request method, path, headers (exactly those of H3) and body for both endpoints; every row of the mapping in §4.4 from recorded bodies (`recorded.json`: `NoAccess`, `InvalidPTB` ×2, `InvalidPackage`, `InvalidCertificate`, `InvalidSignature`, `MissingRequiredHeader`, `InvalidSDKVersion`, `DeprecatedSDKVersion`, `InvalidSDKType`, the mainnet gateway's `401`, a load balancer's HTML `503`, the aggregator's text `400`; `synthesized.json` for `429`, `Failure`, `InvalidParameter`, `InvalidSessionSignature`, `InvalidMVRName`, `UnsupportedPackageId`, `InvalidServiceId`, built from `errors.rs`); timeout under `TestClock`; missing version header accepted, old version refused; an API key never appears in an error. *As built (S4):* 24 recorded answers (see §4.4 "As built (S4)"; `InvalidParameter`, `InvalidSessionSignature`, `InvalidMVRName` and `InvalidServiceId` turned out recordable) and 5 synthesized (`429` ×3, `Failure`, `UnsupportedPackageId`); a test fails if any fixture is left unmapped; plus the `fakeKeyServers` round trip and each of its refusals. |
-| `session-key.test.ts` | R1 against both Rust vectors (hex id and MVR name); R4 against the Rust request vector; id normalisation (item 14); TTL bounds; `clockSkew`; expiry and the 10 s margin under `TestClock`; ten concurrent `certificate` calls prompt once; a rejected prompt is not remembered and the next call prompts again; key signer and wallet-shaped signer (`packages/sui-wallet/test/FakeWallet.ts`); a non-`SigningError` failure becomes `"unavailable"`; `withSignature`; `SignatureRequired`; `verify` with Ed25519 installed; export → JSON → import; importing an expired or malformed export. |
+| `session-key.test.ts` | R1 against both Rust vectors (hex id and MVR name); R4 against the Rust request vector; id normalisation (item 14); TTL bounds; `clockSkew`; expiry and the 10 s margin under `TestClock`; ten concurrent `certificate` calls prompt once; a rejected prompt is not remembered and the next call prompts again; key signer and wallet-shaped signer (`packages/effect-sui/test/wallet/FakeWallet.ts`); a non-`SigningError` failure becomes `"unavailable"`; `withSignature`; `SignatureRequired`; `verify` with Ed25519 installed; export → JSON → import; importing an expired or malformed export. |
 | `approval.test.ts` | Each rule of P1; `fromTransactionKindBytes` refuses full transaction bytes and a wrong tag; ids extracted in order; `fromRecipe` resolves an owned, a shared and the Clock input from recorded objects; a generated call builder as recipe. |
 | `keys.test.ts` | With `fakeKeyServers` and `TestClock`: returns at the threshold and interrupts stragglers (virtual time asserted); weights; cached keys lower the threshold; everything cached → no request and no prompt; an expired session fails even when everything is cached (item 10); transient failures retried per server (`503` then `200`, `InvalidParameter` then `200`, `429`), `Timeout` and definitive errors not; a server returning a key for another id, or a key from another master key, is `InvalidKey` and the others are used (item 9); a missing id is `MissingKey`, never `undefined` (item 7); `ThresholdNotMet` lists every server's error and `kinds`, and its `reason` follows the table of cases in §4.7 step 6; `insufficientWeight` sends nothing; early stop: 1 of 3 with two `NoAccess` and one hung server fails at the grace, not at the timeout; a lagging denial followed by an approval inside the grace succeeds; 2 of 3 is unaffected; committee server: aggregator URL, API key header; an unloadable key server object is `Unresolved` and does not sink the fetch. *As built (S6):* 23 tests; each runs the fetch in a fiber and asserts the virtual time it ended at. The harness gives four real macrotasks between clock moves, because the fake servers read response bodies through real promises that `TestClock.adjust` does not wait for, and then jumps `TestClock` to the next scheduled wake-up (10 ms when none is scheduled); the whole file runs in about 2.5 s real (it stepped 10 ms at a time before, 12 s). Also: retry delays 250/500/1000 ms then final; a retryable `RpcError` while loading a key server is retried; `forget`; `SignatureRequired` before any request; the "Requests" parity test (below). |
 | `seal.test.ts` | Encrypt then decrypt through the layer against `fakeKeyServers`; share order and multiplicity follow configuration; `NotFirstVersion`; `ApprovalMismatch` for another package and for an id the approval lacks; a second decrypt makes no request; `fetchKeys` over objects with two different server sets; `derivedKeys`; `checkShareConsistency` with an unconfigured committee server in the object (item 12). |
@@ -894,7 +896,7 @@ Budget: about 25 `fetch_key` requests per run, spaced to stay under Mysten's 10 
 
 ### 6.4 Live, with funds (`SEAL_LIVE=1` in addition to `SUI_LIVE=1`)
 
-`live.owned.test.ts`. The signer is `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key, decoded with `PrivateKey.decode` and the scheme's `fromSecretKey` by `@unconfirmed/test-support/funded`, as in `packages/walrus/test/live.write.test.ts`); any error while loading becomes one fixed message; the key is never printed, logged or written. The test reads the balance first and skips below 0.05 SUI.
+`live.owned.test.ts`. The signer is `SUI_LIVE_PRIVATE_KEY` (a `suiprivkey1…` key, decoded with `PrivateKey.decode` and the scheme's `fromSecretKey` by `@unconfirmed/test-support/funded`, as in `packages/effect-walrus/test/live.write.test.ts`); any error while loading becomes one fixed message; the key is never printed, logged or written. The test reads the balance first and skips below 0.05 SUI.
 
 1. `private_data::store_entry(nonce, data)` on the canary package creates an object owned by the wallet whose key id is `bcs(sender) ‖ nonce` (`move/patterns/sources/private_data.move:30-34`; the on-chain module has the same functions, but confirm the id format with the first run). Encrypt 32 bytes under that id, then at once decrypt with `private_data::seal_approve(id, &PrivateData)`: an owned-object input, the wallet's key signing the session's personal message, and, because the object is seconds old, the `InvalidParameter`-then-success path on servers whose fullnode lags.
 
@@ -923,17 +925,17 @@ Add to `scripts/bundle-report.ts`, for Bun, esbuild and Rolldown: "seal: parse a
 
 ## 8. Work packages
 
-One agent each. Files are under `packages/seal/` unless a path says otherwise.
+One agent each. Files are under `packages/effect-seal/` unless a path says otherwise.
 
 | # | Scope | Depends on | Files | Acceptance |
 |---|---|---|---|---|
-| Q3 | `giveUp` for `Quorum.run` (§5); update `docs/design/quorum.md` §2, §3.2, §3.7, §10 and the README's Quorum section. | — | `packages/quorum/src/Quorum.ts`, `packages/quorum/test/run.test.ts`, `docs/design/quorum.md`, `README.md` | New tests under `TestClock`: fails at once without grace when matching failures reach the weight; non-matching failures do not count; a retrying member counts only when final; with grace, a threshold reached inside the window succeeds and the result's virtual time is asserted; the window ends in `gaveUp` at the exact time; "unreachable" still wins when it comes first; invalid `weight` or `grace` dies. Existing tests unchanged and green. Package size stays within 0.3 KB gzip of today's. |
+| Q3 | `giveUp` for `Quorum.run` (§5); update `docs/design/quorum.md` §2, §3.2, §3.7, §10 and the README's Quorum section. | — | `packages/effect-quorum/src/Quorum.ts`, `packages/effect-quorum/test/run.test.ts`, `docs/design/quorum.md`, `README.md` | New tests under `TestClock`: fails at once without grace when matching failures reach the weight; non-matching failures do not count; a retrying member counts only when final; with grace, a threshold reached inside the window succeeds and the result's virtual time is asserted; the window ends in `gaveUp` at the exact time; "unreachable" still wins when it comes first; invalid `weight` or `grace` dies. Existing tests unchanged and green. Package size stays within 0.3 KB gzip of today's. |
 | S1 | Scaffold and primitives: `Bls`, `Shamir`, `Kdf`, `Ibe`, `ElGamal`, `Dem`, `Entropy`. Also the declarations the later packages share, so that they can run in parallel: every error class of §4.9 in `Errors`, and in `KeyServerApi.ts` the types, `KeyServerError` with its two getters, and the service class (no `layer`, `requestBody` or `fromResponse` yet). | — | `package.json`, `tsconfig.json`, `src/{Bls,Shamir,Kdf,Ibe,ElGamal,Dem,Entropy,Errors,KeyServerApi,index}.ts`, `test/{bls,shamir,kdf,ibe,elgamal,dem}.test.ts`, `test/oracle.ts`, `test/support.ts` (`seeded`), `test/parity.primitives.test.ts`; root `package.json` devDependency | §6.1 rows for these modules and the "Primitives" parity bullet pass, including every Rust vector of §1.2; no service in any signature; only `Bls.ts` imports the curve; typecheck clean; no import from the `"effect"` barrel. |
 | S2 | `EncryptedObject`, `Envelope`. | S1 | `src/{EncryptedObject,Envelope}.ts`, `test/{encrypted-object,envelope}.test.ts`, `test/parity.envelope.test.ts` | §6.1 rows; parity bullets "BCS" (encrypted object), "Encryption" (byte for byte under recorded randomness) and "Decryption"; the Rust TS-vector decrypts. |
 | S3 | `Config`, `KeyServer` (BCS, `read`, `KeyServers` layers); a recorder for the objects of §0.1 and each reachable server's `/v1/service` answer. | S1 (`layerVerified` is written against S1's `KeyServerApi` class and tested with a stub) | `src/{Config,KeyServer}.ts`, `scripts/record-chain.ts`, `test/fixtures/{testnet,mainnet}.json`, `test/fixtures.ts`, `test/{config,key-server}.test.ts`, `test/live.chain.test.ts` | §6.1 rows; BCS parity for the three on-chain types; live: twelve objects decode and equal `@mysten/seal`'s view. |
 | S4 | `KeyServerApi` (`layer`, `requestBody`, `fromResponse`); a recorder for error bodies (throwaway keys, as in §0); synthesized bodies; the fake key servers. | S1 | `src/KeyServerApi.ts`, `scripts/record-key-server.ts`, `test/key-server-api.test.ts`, `test/fixtures/key-server/{recorded,synthesized}.json`, `test/support.ts` (`fakeKeyServers`) | §6.1 row; every mapping row tested; `fakeKeyServers` round-trips a hand-built request (certificate and both signatures checked as R1–R4 say); live smoke (`SUI_LIVE=1`): `/v1/service` of one Mysten server. |
-| S5 | `SessionKey` (including the per-session key cache that S6 fills), `Approval`. | S1 (declarations only) | `src/{SessionKey,Approval}.ts`, `test/{session-key,approval}.test.ts`, `test/parity.session.test.ts` | §6.1 rows including the Rust vectors of R1 and R4; "Session" parity bullet; one prompt for concurrent callers; `WalletSigner` from `@unconfirmed/sui-wallet` type-checks as a `MessageSigner` (a type test through the root devDependency; the package itself gains no dependency on `sui-wallet`). |
-| S6 | `Keys`. | Q3, S3, S4, S5 | `src/Keys.ts`, `test/keys.test.ts` | §6.1 row, every case with virtual time asserted; the "Requests" parity bullet; only this file imports `@unconfirmed/quorum`. |
+| S5 | `SessionKey` (including the per-session key cache that S6 fills), `Approval`. | S1 (declarations only) | `src/{SessionKey,Approval}.ts`, `test/{session-key,approval}.test.ts`, `test/parity.session.test.ts` | §6.1 rows including the Rust vectors of R1 and R4; "Session" parity bullet; one prompt for concurrent callers; `WalletSigner` from `@unconfirmed/effect-sui/wallet` type-checks as a `MessageSigner` (a type test through the root devDependency; the package itself gains no dependency on `sui-wallet`). |
+| S6 | `Keys`. | Q3, S3, S4, S5 | `src/Keys.ts`, `test/keys.test.ts` | §6.1 row, every case with virtual time asserted; the "Requests" parity bullet; only this file imports `@unconfirmed/effect-quorum`. |
 | S7 | `Seal` (encrypt, decrypt, `fetchKeys`, `derivedKeys`, `session`, layer); live tests; bundle report; README. | S2, S6 | `src/Seal.ts`, `test/seal.test.ts`, `test/parity.e2e.test.ts`, `test/live.decrypt.test.ts`, `test/live.owned.test.ts`, `scripts/bundle-report.ts`, `README.md` | §6.1 row; "End to end" parity; §6.3 passes on testnet; §6.4 passes once with `SEAL_LIVE=1` and its measured cost is recorded in the file header; bundle rows for three bundlers with the two containment checks of §6.5; README package row, a short section, and "Next:" updated. |
 
 Order and parallelism:
@@ -961,6 +963,6 @@ Q3 and S1 start together. After S1: S2, S3, S4 and S5 run in parallel (four agen
 9. **Sharing identical in-flight fetches.** Two concurrent `decrypt` calls for the same id both send requests (the wallet is still prompted once). *Recommendation: not in v1*; `Seal.fetchKeys` first is the documented way to batch. A `Cache` keyed by the request could be added later without an API change.
 10. **`Plain` mode.** *Recommendation: support it in `Dem` and `Envelope` (Rust and `seal-cli` have it), do not offer it in `Seal.encrypt`.* Note that unverified keys in `Plain` mode yield a wrong key silently, which is why `Envelope.open` documents the assumption.
 11. **Should the session be a scoped resource (as `EXPLORATION.md` §6 suggests)?** *Recommendation: a plain value.* The cache needs no scope, and wiping a `Uint8Array` on scope close is not a guarantee worth an extra `Scope` in every caller's `R` (risk 6). `Keys.forget` drops the derived keys on demand.
-12. **A core type for personal-message signers.** `MessageSigner` (§4.5) is structural so that Seal does not depend on `sui-wallet`. *Recommendation: keep it in Seal for now*; if Enoki or another package needs the same shape, move it to `@unconfirmed/sui/Signer` as `PersonalMessageSigner`.
+12. **A core type for personal-message signers.** `MessageSigner` (§4.5) is structural so that Seal does not depend on `sui-wallet`. *Recommendation: keep it in Seal for now*; if Enoki or another package needs the same shape, move it to `@unconfirmed/effect-sui/Signer` as `PersonalMessageSigner`.
 13. **Proof-of-possession verification by default?** *Recommendation: off* (`layerVerified` opts in), as the reference SDK since 1.3.0. It adds a request per server and protects only applications that take key server ids from users; derived keys are verified against the on-chain public key regardless.
 14. **Left out of v1:** MVR name resolution or validation on the client (the server validates), building the on-chain decryption transaction (`bf_hmac_encryption`; `Seal.derivedKeys` supplies its inputs), key-server registration and committee operations, a worker for pairings, streaming DEMs for large payloads (use envelope encryption: seal a symmetric key). *Recommendation: leave out.*
