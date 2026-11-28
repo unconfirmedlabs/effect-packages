@@ -41,15 +41,15 @@
     "packages/bcs": {
       "name": "@unconfirmed/bcs",
       "version": "0.0.0",
-      "dependencies": {
-        "effect": "4.1.6",
+      "peerDependencies": {
+        "effect": "^4.1.6",
       },
     },
     "packages/quorum": {
       "name": "@unconfirmed/quorum",
       "version": "0.0.0",
-      "dependencies": {
-        "effect": "4.1.6",
+      "peerDependencies": {
+        "effect": "^4.1.6",
       },
     },
     "packages/seal": {
@@ -59,16 +59,18 @@
         "@noble/curves": "^2.3.0",
         "@noble/hashes": "^2.3.0",
         "@scure/base": "^2.3.0",
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/quorum": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/seal": "2.0.1",
         "@mysten/sui": "3.0.1",
         "@unconfirmed/sui-wallet": "workspace:*",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/quorum": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui": {
@@ -78,12 +80,14 @@
         "@noble/curves": "^2.3.0",
         "@noble/hashes": "^2.3.0",
         "@scure/base": "^2.3.0",
-        "@unconfirmed/bcs": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-codegen": {
@@ -92,57 +96,57 @@
       "bin": {
         "sui-codegen": "./src/bin.ts",
       },
-      "dependencies": {
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
-      },
       "devDependencies": {
         "@mysten/codegen": "0.12.26",
         "@mysten/sui": "3.0.1",
         "@unconfirmed/test-support": "workspace:*",
       },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
+      },
     },
     "packages/sui-enoki": {
       "name": "@unconfirmed/sui-enoki",
       "version": "0.0.0",
-      "dependencies": {
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "@unconfirmed/sui-zklogin": "workspace:*",
-        "effect": "4.1.6",
-      },
       "devDependencies": {
         "@mysten/enoki": "2.0.1",
         "@mysten/sui": "3.0.1",
         "@unconfirmed/test-support": "workspace:*",
       },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "@unconfirmed/sui-zklogin": "workspace:^",
+        "effect": "^4.1.6",
+      },
     },
     "packages/sui-graphql": {
       "name": "@unconfirmed/sui-graphql",
       "version": "0.0.0",
-      "dependencies": {
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
-      },
       "devDependencies": {
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-lifecycle": {
       "name": "@unconfirmed/sui-lifecycle",
       "version": "0.0.0",
-      "dependencies": {
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "@unconfirmed/sui-graphql": "workspace:*",
-        "effect": "4.1.6",
-      },
       "devDependencies": {
         "@unconfirmed/test-support": "workspace:*",
         "fake-indexeddb": "6.2.8",
         "playwright-core": "1.65.1",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "@unconfirmed/sui-graphql": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-mldsa65": {
@@ -150,13 +154,15 @@
       "version": "0.0.0",
       "dependencies": {
         "@noble/post-quantum": "^0.7.1",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
         "@unconfirmed/sui-multisig": "workspace:*",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-mnemonic": {
@@ -166,8 +172,6 @@
         "@noble/hashes": "^2.3.0",
         "@scure/bip32": "^2.3.0",
         "@scure/bip39": "^2.3.0",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
@@ -175,19 +179,23 @@
         "@unconfirmed/sui-secp256k1": "workspace:*",
         "@unconfirmed/sui-secp256r1": "workspace:*",
       },
+      "peerDependencies": {
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
+      },
     },
     "packages/sui-multisig": {
       "name": "@unconfirmed/sui-multisig",
       "version": "0.0.0",
-      "dependencies": {
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
-      },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
         "@unconfirmed/sui-secp256k1": "workspace:*",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-passkey": {
@@ -197,14 +205,16 @@
         "@noble/curves": "^2.3.0",
         "@noble/hashes": "^2.3.0",
         "@scure/base": "^2.3.0",
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
         "@unconfirmed/sui-multisig": "workspace:*",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-secp256k1": {
@@ -212,11 +222,13 @@
       "version": "0.0.0",
       "dependencies": {
         "@noble/curves": "^2.3.0",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
+      },
+      "peerDependencies": {
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-secp256r1": {
@@ -224,11 +236,13 @@
       "version": "0.0.0",
       "dependencies": {
         "@noble/curves": "^2.3.0",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
+      },
+      "peerDependencies": {
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-wallet": {
@@ -236,14 +250,16 @@
       "version": "0.0.0",
       "dependencies": {
         "@scure/base": "^2.3.0",
-        "@unconfirmed/sui": "workspace:*",
         "@wallet-standard/app": "^1.1.1",
         "@wallet-standard/base": "^1.1.1",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/sui-zklogin": {
@@ -251,15 +267,17 @@
       "version": "0.0.0",
       "dependencies": {
         "@scure/base": "^2.3.0",
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
-        "effect": "4.1.6",
         "poseidon-lite": "0.3.0",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
         "@unconfirmed/sui-multisig": "workspace:*",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/test-support": {
@@ -272,7 +290,9 @@
         "@unconfirmed/sui-secp256r1": "workspace:*",
         "@unconfirmed/sui-wallet": "workspace:*",
         "@wallet-standard/base": "^1.1.1",
-        "effect": "4.1.6",
+      },
+      "peerDependencies": {
+        "effect": "^4.1.6",
       },
     },
     "packages/walrus": {
@@ -280,11 +300,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@noble/hashes": "^2.3.0",
-        "@unconfirmed/bcs": "workspace:*",
-        "@unconfirmed/quorum": "workspace:*",
-        "@unconfirmed/sui": "workspace:*",
         "@unconfirmed/walrus-wasm": "workspace:*",
-        "effect": "4.1.6",
       },
       "devDependencies": {
         "@mysten/sui": "3.0.1",
@@ -293,6 +309,12 @@
         "@noble/curves": "^2.3.0",
         "@unconfirmed/sui-codegen": "workspace:*",
         "@unconfirmed/test-support": "workspace:*",
+      },
+      "peerDependencies": {
+        "@unconfirmed/bcs": "workspace:^",
+        "@unconfirmed/quorum": "workspace:^",
+        "@unconfirmed/sui": "workspace:^",
+        "effect": "^4.1.6",
       },
     },
     "packages/walrus-wasm": {

@@ -8,9 +8,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@noble/curves": "^2.3.0",
-    "@unconfirmed/sui": "workspace:*",
-    "effect": "4.1.6"
+    "@noble/curves": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/sui": "3.0.1"

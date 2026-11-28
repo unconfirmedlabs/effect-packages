@@ -10,9 +10,11 @@
   "dependencies": {
     "@noble/hashes": "^2.3.0",
     "@scure/bip32": "^2.3.0",
-    "@scure/bip39": "^2.3.0",
-    "@unconfirmed/sui": "workspace:*",
-    "effect": "4.1.6"
+    "@scure/bip39": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/sui": "3.0.1",

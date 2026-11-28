@@ -16,6 +16,9 @@ jobs:
       - run: bun install --frozen-lockfile
       # Also compiles examples/ and scripts/ (README blocks are checked against examples/ by the tests).
       - run: bun run typecheck
+      # Package sources alone under the flags consumers add (noUnusedLocals, noUnusedParameters):
+      # vendored workspaces compile the raw .ts, so these must stay clean.
+      - run: bun run typecheck:strict
       # Offline only: no SUI_LIVE, WALRUS_LIVE or SEAL_LIVE.
       - run: bun test packages/
       # Fails on a Seal containment violation (seal.md §6.5).

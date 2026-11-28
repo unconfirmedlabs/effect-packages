@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "@scure/base": "^2.3.0",
-    "@unconfirmed/sui": "workspace:*",
     "@wallet-standard/app": "^1.1.1",
-    "@wallet-standard/base": "^1.1.1",
-    "effect": "4.1.6"
+    "@wallet-standard/base": "^1.1.1"
+  },
+  "peerDependencies": {
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/sui": "3.0.1",

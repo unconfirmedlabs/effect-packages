@@ -451,6 +451,10 @@ import * as ObjectsGrpc from "@unconfirmed/sui/grpc/ObjectsGrpc"
 
 The barrels (`import { Address } from "@unconfirmed/sui"`) exist for convenience. Only bundlers with deep scope analysis (Rolldown, Rollup, Webpack 5+; Bun in practice) shake them well. esbuild doesn't.
 
+**One copy of Effect.** `effect` is a peer dependency (`^4.1.6`) of every package, and so are the `@unconfirmed/*` packages whose services, schemas and errors cross package boundaries (`bcs`, `sui`, `quorum`, `sui-graphql`, `sui-zklogin`): a second copy would make `Context` services and tagged errors from one copy invisible to the other. The app installs them once.
+
+**Strict consumers.** The packages ship their `.ts` sources, so they compile under the consumer's flags. `bun run typecheck:strict` (in CI) checks every package's `src/` with `noUnusedLocals` and `noUnusedParameters` on top of the base config's `strict`, `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`.
+
 ## Conventions
 
 Every layer uses the same option names for the same thing. New packages should follow them.
@@ -510,6 +514,7 @@ KB minified / minified+gzip, browser target, the app using namespace imports, co
 ```sh
 bun install
 bun run typecheck     # also compiles examples/: every ```ts README block is checked against them (packages/test-support/test/readme.test.ts)
+bun run typecheck:strict  # package src/ only, under the consumer-strict flags (noUnusedLocals, noUnusedParameters)
 bun run test          # offline: parity with @mysten/sui (BCS, built tx bytes, signatures, multisig)
 bun run test:live     # + testnet reads, devnet Ed25519 / coin-selection / multisig / wallet-standard executions
 bun run codegen       # protoc -> descriptor chunks + types from packages/sui/proto/src (sui-apis)

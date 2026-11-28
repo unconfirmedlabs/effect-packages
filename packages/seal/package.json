@@ -11,11 +11,13 @@
   "dependencies": {
     "@noble/curves": "^2.3.0",
     "@noble/hashes": "^2.3.0",
-    "@scure/base": "^2.3.0",
-    "@unconfirmed/bcs": "workspace:*",
-    "@unconfirmed/quorum": "workspace:*",
-    "@unconfirmed/sui": "workspace:*",
-    "effect": "4.1.6"
+    "@scure/base": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@unconfirmed/bcs": "workspace:^",
+    "@unconfirmed/quorum": "workspace:^",
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/seal": "2.0.1",

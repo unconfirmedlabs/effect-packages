@@ -73,8 +73,7 @@ export interface EncryptedObject {
 
 // Compile-time check: the BCS ciphertext decodes to exactly `Dem.Ciphertext`.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-type Assert<T extends true> = T
-type _SameCiphertext = Assert<Same<Ciphertext, Dem.Ciphertext>>
+true satisfies Same<Ciphertext, Dem.Ciphertext>
 
 const decodeBcs = /* @__PURE__ */ Bcs.decode(EncryptedObjectBcs)
 const encodeBcs = /* @__PURE__ */ Bcs.encodeSync(EncryptedObjectBcs)

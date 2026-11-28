@@ -11,10 +11,10 @@
     ".": "./src/index.ts",
     "./*": "./src/*.ts"
   },
-  "dependencies": {
-    "@unconfirmed/bcs": "workspace:*",
-    "@unconfirmed/sui": "workspace:*",
-    "effect": "4.1.6"
+  "peerDependencies": {
+    "@unconfirmed/bcs": "workspace:^",
+    "@unconfirmed/sui": "workspace:^",
+    "effect": "^4.1.6"
   },
   "devDependencies": {
     "@mysten/codegen": "0.12.26",

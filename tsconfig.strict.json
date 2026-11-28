@@ -1,0 +1,10 @@
+{
+  // Consumers that vendor these packages compile the raw .ts sources under their own flags.
+  // This config holds the package sources to the strictest common set, so they can't regress.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["packages/*/src"]
+}
