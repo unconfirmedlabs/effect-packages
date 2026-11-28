@@ -376,6 +376,7 @@ const coinsLayer = (w: Wallet, calls: Array<string> = []) =>
         const ab = coinType === TypeTag.SUI ? w.addressBalance : 0n
         return { coinType, total: ab + cb, addressBalance: ab, coinBalance: cb }
       }),
+    listBalances: () => Stream.die("unused"),
     list: () =>
       Stream.suspend(() => {
         calls.push("list")
@@ -395,7 +396,7 @@ const chainLayer = (calls: Array<string> = []) =>
   })
 const noObjects = Layer.mergeAll(
   Layer.succeed(Objects.Objects, { get: (id) => Effect.fail(new Objects.ObjectNotFound({ objectId: id })), listOwned: () => Stream.empty }),
-  Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused") })
+  Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused"), getModules: () => Effect.die("unused") })
 )
 const budgetOf = (budget: bigint, calls: Array<string> = []) =>
   Layer.succeed(Transactions.Transactions, {

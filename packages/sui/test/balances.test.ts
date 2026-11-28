@@ -40,6 +40,7 @@ const coinsLayer = (f: Fixture) =>
       const cb = (f.coins[t] ?? []).reduce((s, c) => s + c.balance, 0n)
       return Effect.succeed({ coinType: t, total: ab + cb, addressBalance: ab, coinBalance: cb })
     },
+    listBalances: () => Stream.die("unused"),
     list: (_owner, coinType = TypeTag.SUI) =>
       Stream.fromIterable((f.coins[TypeTag.normalizeString(coinType)] ?? []).map((c) => ({
         ref: coinRef(c),

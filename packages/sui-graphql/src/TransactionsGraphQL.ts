@@ -9,15 +9,29 @@ import { RpcError } from "@unconfirmed/sui/RpcError"
 import { needsGasSelection, toProto } from "@unconfirmed/sui/grpc/transaction"
 import * as Transactions from "@unconfirmed/sui/Transactions"
 import {
+  balanceChange,
   base64,
   Bytes,
   call,
   EFFECTS_FIELDS,
   EffectsNode,
   effects,
-  OBJECT_CHANGES_PAGE
+  OBJECT_CHANGES_PAGE,
+  transactionEvent,
+  U64
 } from "./convert.ts"
-import { GetObjectChanges, rest } from "./paging.ts"
+import {
+  BALANCE_CHANGES_PAGE,
+  BALANCE_CHANGES_PAGE_FIELDS,
+  BalanceChangesPage,
+  EVENTS_PAGE,
+  EVENTS_PAGE_FIELDS,
+  EventsPage,
+  GetBalanceChanges,
+  GetObjectChanges,
+  GetTransactionEvents,
+  rest
+} from "./paging.ts"
 
 const CommandOutput = Schema.Struct({ value: Schema.NullOr(Schema.Struct({ bcs: Schema.NullOr(Bytes) })) })
 
@@ -80,20 +94,52 @@ export const protoJson = (v: unknown): unknown => {
   return out
 }
 
+/** `include`, as `@include` directives: what isn't asked for isn't selected. */
+const INCLUDED_FIELDS = `events(first:${EVENTS_PAGE})@include(if:$events){${EVENTS_PAGE_FIELDS}} ` +
+  `balanceChanges(first:${BALANCE_CHANGES_PAGE})@include(if:$balanceChanges){${BALANCE_CHANGES_PAGE_FIELDS}}`
+
+const IncludedNode = Schema.Struct({
+  ...EffectsNode.fields,
+  events: Schema.optionalKey(Schema.NullOr(EventsPage)),
+  balanceChanges: Schema.optionalKey(Schema.NullOr(BalanceChangesPage))
+})
+type IncludedNode = typeof IncludedNode.Type
+
+const Include = { events: Schema.Boolean, balanceChanges: Schema.Boolean }
+const includeVariables = (include: ReadonlyArray<Transactions.Include> | undefined) => ({
+  events: include?.includes("events") ?? false,
+  balanceChanges: include?.includes("balanceChanges") ?? false
+})
+
 export const ExecuteTransaction = GraphQL.mutation("ExecuteTransaction", {
-  document: "mutation ExecuteTransaction($transactionDataBcs:Base64!,$signatures:[Base64!]!){" +
-    `executeTransaction(transactionDataBcs:$transactionDataBcs,signatures:$signatures){effects{${EFFECTS_FIELDS}}}}`,
-  variables: { transactionDataBcs: Schema.String, signatures: Schema.Array(Schema.String) },
-  result: Schema.Struct({ executeTransaction: Schema.Struct({ effects: Schema.NullOr(EffectsNode) }) })
+  document: "mutation ExecuteTransaction($transactionDataBcs:Base64!,$signatures:[Base64!]!,$events:Boolean!,$balanceChanges:Boolean!){" +
+    `executeTransaction(transactionDataBcs:$transactionDataBcs,signatures:$signatures){effects{${EFFECTS_FIELDS} ${INCLUDED_FIELDS}}}}`,
+  variables: { transactionDataBcs: Schema.String, signatures: Schema.Array(Schema.String), ...Include },
+  result: Schema.Struct({ executeTransaction: Schema.Struct({ effects: Schema.NullOr(IncludedNode) }) })
 })
 
 export const GetTransactionEffects = GraphQL.query("GetTransactionEffects", {
-  document: `query GetTransactionEffects($digest:String!){transactionEffects(digest:$digest){${EFFECTS_FIELDS}}}`,
-  variables: { digest: Schema.String },
-  result: Schema.Struct({ transactionEffects: Schema.NullOr(EffectsNode) })
+  document: "query GetTransactionEffects($digest:String!,$events:Boolean!,$balanceChanges:Boolean!){transactionEffects(digest:$digest){" +
+    `${EFFECTS_FIELDS} checkpoint{sequenceNumber} timestamp ${INCLUDED_FIELDS}}}`,
+  variables: { digest: Schema.String, ...Include },
+  result: Schema.Struct({
+    transactionEffects: Schema.NullOr(Schema.Struct({
+      ...IncludedNode.fields,
+      checkpoint: Schema.NullOr(Schema.Struct({ sequenceNumber: U64 })),
+      timestamp: Schema.NullOr(Schema.String)
+    }))
+  })
 })
 
-export const group = GraphQLGroup.make(SimulateTransaction, ResolveTransaction, ExecuteTransaction, GetTransactionEffects, GetObjectChanges)
+export const group = GraphQLGroup.make(
+  SimulateTransaction,
+  ResolveTransaction,
+  ExecuteTransaction,
+  GetTransactionEffects,
+  GetObjectChanges,
+  GetTransactionEvents,
+  GetBalanceChanges
+)
 
 const incomplete = (method: string) =>
   Effect.fail(
@@ -114,16 +160,39 @@ export const layer: Layer.Layer<Transactions.Transactions, never, GraphQLProtoco
     const client = yield* GraphQLClient.make(group)
 
     /**
-     * Every object change: the first page came with the effects, the rest are
-     * read by digest. After `execute` the transaction may not be indexed yet,
-     * so a missing transaction is retried for a while (`waitForIndex`).
+     * Every object change (and event and balance change, when included): the
+     * first page came with the effects, the rest are read by digest. After
+     * `execute` the transaction may not be indexed yet, so a missing
+     * transaction is retried for a while (`waitForIndex`).
      */
-    const allChanges = (method: string, e: EffectsNode, waitForIndex: boolean): Effect.Effect<Transactions.Effects, RpcError> =>
-      Effect.map(
-        rest(method, "object changes", e.objectChanges, (after) =>
-          Effect.map(client.GetObjectChanges({ digest: e.digest, after }), (r) => r.transactionEffects?.objectChanges ?? null), waitForIndex),
-        (changes) => effects(e, changes)
+    const complete = (
+      method: string,
+      e: IncludedNode,
+      include: ReadonlyArray<Transactions.Include> | undefined,
+      waitForIndex: boolean
+    ): Effect.Effect<Transactions.Effects, RpcError> => {
+      const digest = e.digest
+      const none = Effect.succeed(undefined)
+      return Effect.map(
+        Effect.all([
+          rest(method, "object changes", e.objectChanges, (after) =>
+            Effect.map(client.GetObjectChanges({ digest, after }), (r) => r.transactionEffects?.objectChanges ?? null), waitForIndex),
+          include?.includes("events")
+            ? rest(method, "events", e.events ?? null, (after) =>
+              Effect.map(client.GetTransactionEvents({ digest, after }), (r) => r.transactionEffects?.events ?? null), waitForIndex)
+            : none,
+          include?.includes("balanceChanges")
+            ? rest(method, "balance changes", e.balanceChanges ?? null, (after) =>
+              Effect.map(client.GetBalanceChanges({ digest, after }), (r) => r.transactionEffects?.balanceChanges ?? null), waitForIndex)
+            : none
+        ], { concurrency: "unbounded" }),
+        ([changes, events, balanceChanges]) => ({
+          ...effects(e, changes),
+          ...(events && { events: events.map((ev) => transactionEvent(ev, digest)) }),
+          ...(balanceChanges && { balanceChanges: balanceChanges.map(balanceChange) })
+        })
       )
+    }
 
     return Transactions.Transactions.of({
       simulate: (txBytes, options) =>
@@ -172,21 +241,21 @@ export const layer: Layer.Layer<Transactions.Transactions, never, GraphQLProtoco
             }),
             Effect.withSpan("Transactions.resolve")
           ),
-      execute: (txBytes, signatures) =>
+      execute: (txBytes, signatures, options) =>
         client
-          .ExecuteTransaction({ transactionDataBcs: base64(txBytes), signatures: signatures.map(base64) })
+          .ExecuteTransaction({ transactionDataBcs: base64(txBytes), signatures: signatures.map(base64), ...includeVariables(options?.include) })
           .pipe(
             call,
             Effect.flatMap(({ executeTransaction: r }) =>
-              r.effects === null ? noEffects("ExecuteTransaction") : allChanges("ExecuteTransaction", r.effects, true).pipe(
+              r.effects === null ? noEffects("ExecuteTransaction") : complete("ExecuteTransaction", r.effects, options?.include, true).pipe(
                 // The transaction executed; only reading the rest of its object
-                // changes failed. Say so, with the digest, so the caller can
-                // reconcile instead of reading it as a failed submission.
+                // changes (or events) failed. Say so, with the digest, so the
+                // caller can reconcile instead of reading it as a failed submission.
                 Effect.mapError((e) =>
                   new RpcError({
                     method: e.method,
                     code: e.code,
-                    message: `transaction ${r.effects!.digest} executed, but its object changes could not be read: ${e.message}`
+                    message: `transaction ${r.effects!.digest} executed, but its effects could not be read in full: ${e.message}`
                   })
                 )
               )
@@ -198,14 +267,24 @@ export const layer: Layer.Layer<Transactions.Transactions, never, GraphQLProtoco
       // base58) is rejected by the server's scalar parser and surfaces as
       // `RpcError` INVALID_ARGUMENT; gRPC reports that case as NOT_FOUND ->
       // `TransactionNotFound` instead.
-      get: (digest) =>
-        client.GetTransactionEffects({ digest }).pipe(
+      get: (digest, options) =>
+        client.GetTransactionEffects({ digest, ...includeVariables(options?.include) }).pipe(
           call,
-          Effect.flatMap((r): Effect.Effect<Transactions.Effects, RpcError | Transactions.TransactionNotFound> =>
-            r.transactionEffects === null
-              ? Effect.fail(new Transactions.TransactionNotFound({ digest }))
-              : allChanges("GetTransactionEffects", r.transactionEffects, false)
-          ),
+          Effect.flatMap((r): Effect.Effect<Transactions.Effects, RpcError | Transactions.TransactionNotFound> => {
+            const e = r.transactionEffects
+            if (e === null) return Effect.fail(new Transactions.TransactionNotFound({ digest }))
+            const timestampMs = e.timestamp === null ? undefined : Date.parse(e.timestamp)
+            if (timestampMs !== undefined && !Number.isFinite(timestampMs)) {
+              return Effect.fail(
+                new RpcError({ method: "GetTransactionEffects", code: "DATA_LOSS", message: `unreadable timestamp ${JSON.stringify(e.timestamp)}` })
+              )
+            }
+            return Effect.map(complete("GetTransactionEffects", e, options?.include, false), (fx) => ({
+              ...fx,
+              ...(e.checkpoint !== null && { checkpoint: e.checkpoint.sequenceNumber }),
+              ...(timestampMs !== undefined && { timestampMs: BigInt(timestampMs) })
+            }))
+          }),
           Effect.withSpan("Transactions.get", { attributes: { digest } })
         )
     })

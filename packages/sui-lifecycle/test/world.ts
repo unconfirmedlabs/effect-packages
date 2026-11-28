@@ -235,10 +235,11 @@ export const layer = (world: World) =>
       })),
       referenceGasPrice: Effect.succeed(1000n)
     }),
-    Layer.succeed(Packages, { getFunction: () => Effect.die("no packages in the stub") }),
+    Layer.succeed(Packages, { getFunction: () => Effect.die("no packages in the stub"), getModules: () => Effect.die("no packages in the stub") }),
     Layer.succeed(Coins, {
       getBalance: (_owner, coinType = "0x2::sui::SUI") =>
         Effect.sync(() => ({ coinType, total: world.addressBalance, addressBalance: world.addressBalance, coinBalance: 0n })),
+      listBalances: () => Stream.empty,
       list: () => Stream.empty
     })
   )

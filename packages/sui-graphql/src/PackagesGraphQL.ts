@@ -7,11 +7,13 @@ import * as GraphQLClient from "effect/graphql/GraphQLClient"
 import * as GraphQLGroup from "effect/graphql/GraphQLGroup"
 import type * as GraphQLProtocol from "effect/graphql/GraphQLProtocol"
 import * as Layer from "effect/Layer"
+import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
+import * as Bcs from "@unconfirmed/bcs/Bcs"
 import * as Address from "@unconfirmed/sui/Address"
 import * as Packages from "@unconfirmed/sui/Packages"
 import { RpcError } from "@unconfirmed/sui/RpcError"
-import { call } from "./convert.ts"
+import { Bytes, call } from "./convert.ts"
 
 /**
  * The parts of an `OpenMoveTypeSignature` (a JSON scalar) that `Parameter`
@@ -51,7 +53,16 @@ export const ObjectExists = GraphQL.query("ObjectExists", {
   result: Schema.Struct({ object: Schema.NullOr(Schema.Struct({ address: Schema.String })) })
 })
 
-export const group = GraphQLGroup.make(GetMoveFunction, ObjectExists)
+/** `moduleBcs`: the modules as BCS `(name, bytes)` pairs, in one field instead of a paged `modules` connection. */
+export const GetPackageModules = GraphQL.query("GetPackageModules", {
+  document: "query GetPackageModules($package:SuiAddress!){package(address:$package){moduleBcs}}",
+  variables: { package: Schema.String },
+  result: Schema.Struct({ package: Schema.NullOr(Schema.Struct({ moduleBcs: Schema.NullOr(Bytes) })) })
+})
+
+const decodeModules = /* @__PURE__ */ Bcs.decode(/* @__PURE__ */ Bcs.vector(/* @__PURE__ */ Bcs.tuple([Bcs.string, Bcs.byteVector])))
+
+export const group = GraphQLGroup.make(GetMoveFunction, ObjectExists, GetPackageModules)
 
 const PRIMITIVES = new Set(["address", "bool", "u8", "u16", "u32", "u64", "u128", "u256"])
 
@@ -133,7 +144,30 @@ export const layer: Layer.Layer<Packages.Packages, never, GraphQLProtocol.GraphQ
     })
 
     return Packages.Packages.of({
-      getFunction: (target) => Cache.get(cache, `${target.package}::${target.module}::${target.function}`)
+      getFunction: (target) => Cache.get(cache, `${target.package}::${target.module}::${target.function}`),
+      getModules: (packageId) =>
+        client.GetPackageModules({ package: packageId }).pipe(
+          call,
+          Effect.flatMap((r): Effect.Effect<ReadonlyMap<string, Uint8Array>, Packages.PackageNotFound | RpcError> => {
+            const method = "GetPackageModules"
+            if (r.package === null) {
+              return client.ObjectExists({ address: packageId }).pipe(
+                call,
+                Effect.flatMap((o): Effect.Effect<never, Packages.PackageNotFound | RpcError> =>
+                  o.object === null
+                    ? Effect.fail(new Packages.PackageNotFound({ packageId }))
+                    : Effect.fail(new RpcError({ method, code: "INVALID_ARGUMENT", message: `${packageId} is not a package` }))
+                )
+              )
+            }
+            if (r.package.moduleBcs === null) return Effect.fail(new RpcError({ method, code: "DATA_LOSS", message: "no moduleBcs" }))
+            return Result.match(decodeModules(r.package.moduleBcs), {
+              onSuccess: (pairs) => Effect.succeed(new Map(pairs)),
+              onFailure: (e) => Effect.fail(new RpcError({ method, code: "DATA_LOSS", message: `malformed moduleBcs: ${e.message}` }))
+            })
+          }),
+          Effect.withSpan("Packages.getModules", { attributes: { packageId } })
+        )
     })
   })
 )

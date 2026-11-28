@@ -90,7 +90,8 @@ const ourLayer = Layer.mergeAll(
           reference: p.reference,
           typeName: p.typeName ?? (p.reference === "Value" ? undefined : "0x99::game::Thing")
         }))
-      })
+      }),
+    getModules: () => Effect.die("unused")
   }),
   Layer.succeed(Coins.Coins, {
     getBalance: (_owner, coinType = TypeTag.SUI) => {
@@ -99,6 +100,7 @@ const ourLayer = Layer.mergeAll(
       const cb = (fixture.coins[t] ?? []).reduce((s, c) => s + c.balance, 0n)
       return Effect.succeed({ coinType: t, total: ab + cb, addressBalance: ab, coinBalance: cb })
     },
+    listBalances: () => Stream.die("unused"),
     list: (_owner, coinType = TypeTag.SUI) =>
       Stream.fromIterable((fixture.coins[TypeTag.normalizeString(coinType)] ?? []).map((c) => ({
         ref: { objectId: A(c.id), version: c.version, digest: D(Number(c.version)) },

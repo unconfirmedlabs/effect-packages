@@ -20,7 +20,8 @@ import {
   Ptb,
   Resolve,
   Transactions,
-  Tx
+  Tx,
+  TypeTag
 } from "@unconfirmed/sui"
 import * as SuiGrpc from "../../sui/src/grpc/index.ts"
 import { DEVNET, faucet, grpcLayer, live, TESTNET } from "@unconfirmed/test-support/live"
@@ -121,16 +122,28 @@ suite("testnet parity with gRPC", () => {
     expect(noTransaction).toEqual(g[3])
   })
 
-  test("coins: balance and listing", async () => {
+  test("coins: balance, every balance, listing of one type and of every type", async () => {
+    // A testnet address holding a few coins of several types and no SUI.
+    const holder = A("0x1ec5bb8b9a471ec237579999a61f2f172135ad662e2e685bed94202fa24f1812")
+    const byType = (bs: ReadonlyArray<Coins.Balance>) => [...bs].sort((a, b) => a.coinType.localeCompare(b.coinType))
     const [g, q] = await both(
       Effect.flatMap(Effect.service(Coins.Coins), (c) =>
         Effect.all([
           c.getBalance(A("0x1")),
-          c.list(A("0x1")).pipe(Stream.take(120), Stream.runCollect, Effect.map((cs) => cs.map((c) => c.ref.objectId).sort()))
+          c.listBalances(A("0x1")).pipe(Stream.runCollect, Effect.map(byType)),
+          c.list(A("0x1"), "0x2::sui::SUI").pipe(Stream.take(120), Stream.runCollect, Effect.map((cs) => cs.map((c) => c.ref.objectId).sort())),
+          c.listBalances(holder).pipe(Stream.runCollect, Effect.map(byType)),
+          c.list(holder).pipe(Stream.runCollect, Effect.map((cs) => [...cs].sort((a, b) => a.ref.objectId.localeCompare(b.ref.objectId))))
         ]))
     )
     expect(q).toEqual(g)
-  })
+    const [sui, balances, , held, coins] = g
+    expect(balances).toContainEqual(sui)
+    // An omitted coin type lists every coin, each under its own type, summing to the balances.
+    expect(new Set(coins.map((c) => c.coinType)).size).toBeGreaterThan(1)
+    const sum = (t: string) => coins.filter((c) => c.coinType === t).reduce((s, c) => s + c.balance, 0n)
+    expect(held.map((b) => [b.coinType, sum(b.coinType)])).toEqual(held.map((b) => [b.coinType, b.coinBalance]))
+  }, 30_000)
 
   test("chain info and gas price", async () => {
     const [g, q] = await both(
@@ -259,6 +272,40 @@ suite("testnet parity with gRPC: new services", () => {
     expect(q[1]).toEqual(g[1])
     expect(q[2]).toEqual(g[2])
     console.log("events compared:", q[0].length, q[1].length, q[2].length)
+  }, 60_000)
+
+  test("Transactions.get with include: events, balance changes, checkpoint and timestamp agree", async () => {
+    const tip = await tipOf(grpcLayer(TESTNET).layer)
+    const start = tip.checkpointHeight - 500n
+    const [sample] = await Effect.runPromise(
+      Effect.flatMap(Effect.service(Events.Events), (e) => e.list({ start, end: start + 50n }).pipe(Stream.take(1), Stream.runCollect)).pipe(
+        Effect.provide(grpcLayer(TESTNET).layer)
+      )
+    )
+    const [g, q] = await both(
+      Effect.flatMap(Effect.service(Transactions.Transactions), (t) =>
+        t.get(sample!.transactionDigest, { include: ["events", "balanceChanges"] }))
+    )
+    const included = (fx: Transactions.Effects) => [fx.checkpoint, fx.timestampMs, fx.events, fx.balanceChanges]
+    expect(included(q)).toEqual(included(g))
+    expect(g.checkpoint).toBe(sample!.checkpoint)
+    const { checkpoint: _, transactionIndex: __, ...asEmitted } = sample!
+    expect(g.events).toContainEqual(asEmitted)
+    expect(g.balanceChanges!.length).toBeGreaterThan(0)
+  }, 60_000)
+
+  test("Packages.getModules: 0x2 agrees; a missing id is PackageNotFound, an object INVALID_ARGUMENT", async () => {
+    const [g, q] = await both(
+      Effect.flatMap(Effect.service(Packages.Packages), (p) =>
+        Effect.all([p.getModules(A("0x2")), Effect.flip(p.getModules(A("0xabcdef"))), Effect.flip(p.getModules(A("0x6")))]))
+    )
+    expect(q[0]).toEqual(g[0])
+    expect(g[0].size).toBeGreaterThan(50)
+    expect([...g[0].get("coin")!.subarray(0, 4)]).toEqual([0xa1, 0x1c, 0xeb, 0x0b])
+    expect(q[1]).toEqual(g[1])
+    expect(g[1]._tag).toBe("PackageNotFound")
+    const code = (e: { readonly _tag: string; readonly code?: string }) => e._tag === "RpcError" && e.code
+    expect([code(q[2]), code(g[2])]).toEqual(["INVALID_ARGUMENT", "INVALID_ARGUMENT"])
   }, 60_000)
 
   test("CheckpointData.get and list for fixed checkpoints", async () => {
@@ -436,7 +483,7 @@ suite("devnet over GraphQL only", () => {
 
   test("faucet -> Tx.run with coin gas selection -> Transactions.get", async () => {
     const { layer, requests } = graphqlLayer(GQL_DEVNET)
-    const { effects, again } = await Effect.runPromise(
+    const { effects, again, sender } = await Effect.runPromise(
       Effect.gen(function*() {
         const signer = yield* Ed25519.generate
         yield* faucet(signer.address)
@@ -445,13 +492,13 @@ suite("devnet over GraphQL only", () => {
             const [coin] = yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(1_000n)])
             yield* Ptb.transferObjects([coin!], yield* Ptb.address(signer.address))
           }),
-          { signer, payment: Resolve.coins }
+          { signer, payment: Resolve.coins, include: ["events", "balanceChanges"] }
         )
         // The indexer trails execution; retry exactly the typed "not yet indexed" case.
         const again = yield* Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get(effects.digest)).pipe(
           Effect.retry({ while: (e) => e._tag === "TransactionNotFound", schedule: Schedule.spaced("500 millis"), times: 40 })
         )
-        return { effects, again }
+        return { effects, again, sender: signer.address }
       }).pipe(Effect.provide(layer))
     )
     expect(effects.status._tag).toBe("Success")
@@ -463,12 +510,16 @@ suite("devnet over GraphQL only", () => {
     expect(requests).toContain("graphql ExecuteTransaction")
     // The same transaction read back over gRPC.
     const viaGrpc = await Effect.runPromise(
-      Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get(effects.digest)).pipe(
+      Effect.flatMap(Effect.service(Transactions.Transactions), (t) => t.get(effects.digest, { include: ["events", "balanceChanges"] })).pipe(
         Effect.retry({ while: (e) => e._tag === "TransactionNotFound", schedule: Schedule.spaced("500 millis"), times: 20 }),
         Effect.provide(grpcLayer(DEVNET).layer)
       )
     )
     const byId = (cs: ReadonlyArray<Transactions.ChangedObject>) => [...cs].sort((a, b) => a.objectId.localeCompare(b.objectId))
+    // Executed with `include` over GraphQL, read back with it over gRPC: the gas is the one balance change.
+    expect([effects.events, effects.balanceChanges]).toEqual([viaGrpc.events, viaGrpc.balanceChanges])
+    const gas = viaGrpc.gasUsed.computationCost + viaGrpc.gasUsed.storageCost - viaGrpc.gasUsed.storageRebate
+    expect(viaGrpc.balanceChanges).toEqual([{ address: sender, coinType: TypeTag.SUI, amount: -gas }])
     expect(effects.status).toEqual(viaGrpc.status)
     expect(effects.gasUsed).toEqual(viaGrpc.gasUsed)
     expect(byId(effects.changedObjects)).toEqual(byId(viaGrpc.changedObjects))

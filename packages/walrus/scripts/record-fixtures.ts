@@ -42,7 +42,8 @@ for (const [network, { config, url }] of Object.entries(networks) as Array<[keyo
     Effect.map(Effect.service(Packages.Packages), (p) =>
       Packages.Packages.of({
         getFunction: (t) =>
-          Effect.tap(p.getFunction(t), (f) => Effect.sync(() => (functions[`${t.package}::${t.module}::${t.function}`] = f)))
+          Effect.tap(p.getFunction(t), (f) => Effect.sync(() => (functions[`${t.package}::${t.module}::${t.function}`] = f))),
+        getModules: p.getModules
       }))
   )
   const chain = SuiGrpc.layer({ url }).pipe(Layer.provide(FetchHttpClient.layer))

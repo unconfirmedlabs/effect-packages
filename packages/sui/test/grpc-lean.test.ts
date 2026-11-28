@@ -152,6 +152,19 @@ const responses: Record<string, ReadonlyArray<object>> = {
   BatchGetObjects: [{ objects: [{ result: { _tag: "object", value: object(0x5) } }, { result: { _tag: "error", value: { code: 5, message: "not found" } } }] }],
   ListOwnedObjects: [{ objects: [object(0x5), object(0x6)], next_page_token: new Uint8Array() }],
   GetBalance: [{ balance: { coin_type: "0x2::sui::SUI", balance: 3000n, address_balance: 1000n, coin_balance: 2000n } }],
+  ListBalances: [{ balances: [{ coin_type: "0x2::sui::SUI", balance: 3000n, address_balance: 1000n, coin_balance: 2000n }], next_page_token: new Uint8Array() }],
+  GetObject: [{
+    object: {
+      ...object(2),
+      package: {
+        storage_id: A(2),
+        original_id: A(2),
+        version: 1n,
+        modules: [{ name: "coin", contents: bytes(0xa1, 0x1c, 0xeb, 0x0b), datatypes: [{ type_name: "0x2::coin::Coin", module: "coin", name: "Coin" }], functions: [{ name: "split", is_entry: false }] }],
+        linkage: [{ original_id: A(1), upgraded_id: A(1), upgraded_version: 1n }]
+      }
+    }
+  }],
   GetFunction: [{
     function: {
       name: "transfer",
@@ -217,6 +230,8 @@ const services = Layer.mergeAll(
   Layer.mergeAll(SuiGrpc.CoinsGrpc.layer, SuiGrpc.DynamicFieldsGrpc.layer).pipe(Layer.provideMerge(SuiGrpc.ObjectsGrpc.layer))
 )
 
+const include = ["events", "balanceChanges"] as const
+
 const everyCall = Effect.gen(function*() {
   const chain = yield* Chain
   const objects = yield* Objects
@@ -234,12 +249,14 @@ const everyCall = Effect.gen(function*() {
     objects: yield* Effect.all([objects.get(A(0x5)), Effect.flip(objects.get(A(0x6)))], { concurrency: "unbounded" }),
     owned: yield* all(objects.listOwned(A(0xa11ce))),
     balance: yield* coins.getBalance(A(0xa11ce)),
+    balances: yield* all(coins.listBalances(A(0xa11ce))),
     coinList: yield* all(coins.list(A(0xa11ce))),
     fn: yield* packages.getFunction({ package: A(2), module: "pay", function: "transfer" }),
+    modules: yield* packages.getModules(A(2)),
     simulate: yield* transactions.simulate(bytes(1, 2, 3)),
     dryRun: yield* transactions.simulate(bytes(1, 2, 3), { checks: false }),
-    execute: yield* transactions.execute(bytes(1, 2, 3), [bytes(4, 5)]),
-    get: yield* transactions.get("8YvJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"),
+    execute: yield* transactions.execute(bytes(1, 2, 3), [bytes(4, 5)], { include }),
+    get: yield* transactions.get("8YvJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi", { include }),
     checkpoint: yield* data.get(42n),
     checkpointList: yield* all(data.list({ start: 42n, end: 43n })),
     checkpointSubscribe: yield* Stream.runCollect(Stream.take(data.subscribe, 1)),
@@ -266,6 +283,8 @@ describe("pruned gRPC handles", () => {
     expect(lean.r.info.checkpointHeight > 0n).toBe(true)
     expect(lean.r.execute.changedObjects.length).toBe(2)
     expect(lean.r.checkpoint.transactions.length).toBe(2)
+    expect([lean.r.get.checkpoint, lean.r.get.events?.[0]?.type, lean.r.get.balanceChanges?.[0]?.amount]).toEqual([42n, "0x2::coin::Minted", -1000n])
+    expect(lean.r.modules.get("coin")).toEqual(bytes(0xa1, 0x1c, 0xeb, 0x0b))
     // Every pruned handle was called.
     expect([...lean.seen].sort()).toEqual(Object.keys(Lean).map((k) => k.split("_").pop()!).sort())
   })

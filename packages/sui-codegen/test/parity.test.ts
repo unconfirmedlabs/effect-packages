@@ -194,7 +194,8 @@ const packagesLayer = Layer.succeed(Packages.Packages, {
         reference: p.type._tag === "Reference" ? (p.type.mutable ? "Mutable" : "Immutable") : "Value",
         typeName: typeName(p.type)
       }))
-    } satisfies Packages.MoveFunction)
+    } satisfies Packages.MoveFunction),
+  getModules: () => Effect.die("unused")
 })
 
 const mystenClient = {

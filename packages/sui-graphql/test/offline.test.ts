@@ -493,7 +493,9 @@ describe("objectChanges paging", () => {
     status: "SUCCESS",
     executionError: null,
     gasEffects: null,
-    objectChanges: { pageInfo: { hasNextPage, endCursor: hasNextPage ? "p1" : null }, nodes: [change(1), change(2)] }
+    objectChanges: { pageInfo: { hasNextPage, endCursor: hasNextPage ? "p1" : null }, nodes: [change(1), change(2)] },
+    checkpoint: null,
+    timestamp: null
   })
 
   test("Transactions.get reads every page", async () => {
@@ -516,6 +518,44 @@ describe("objectChanges paging", () => {
       ["GetObjectChanges", "p1"],
       ["GetObjectChanges", "p2"]
     ])
+  })
+
+  test("Transactions.get with include: every event page, balance changes, checkpoint and timestamp", async () => {
+    const ev = (n: number) => ({
+      sequenceNumber: n,
+      sender: { address: "0x1" },
+      transactionModule: { package: { address: "0x2" }, name: "coin" },
+      contents: { type: { repr: "0x2::coin::Minted" }, bcs: "AQ==" }
+    })
+    const { layer, requests } = scripted((req) =>
+      Effect.succeed({
+        body: {
+          data: req.operationName === "GetTransactionEffects"
+            ? {
+              transactionEffects: {
+                ...effectsJson(false),
+                checkpoint: { sequenceNumber: 42 },
+                timestamp: "2023-11-14T22:13:20.123Z",
+                events: { pageInfo: { hasNextPage: true, endCursor: "e1" }, nodes: [ev(0)] },
+                balanceChanges: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ owner: { address: "0x1" }, coinType: { repr: "0x2::sui::SUI" }, amount: "-1000" }] }
+              }
+            }
+            : { transactionEffects: { events: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [ev(1)] } } }
+        }
+      })
+    )
+    const fx = await run(
+      Effect.flatMap(Effect.service(Transactions.Transactions), (t) =>
+        t.get("11111111111111111111111111111111", { include: ["events", "balanceChanges"] })),
+      layer
+    )
+    expect(requests.map((r) => [r.operationName, r.variables])).toEqual([
+      ["GetTransactionEffects", { digest: "11111111111111111111111111111111", events: true, balanceChanges: true }],
+      ["GetTransactionEvents", { digest: "11111111111111111111111111111111", after: "e1" }]
+    ])
+    expect(fx.events?.map((e) => [e.eventIndex, e.transactionDigest])).toEqual([[0, "11111111111111111111111111111111"], [1, "11111111111111111111111111111111"]])
+    expect(fx.balanceChanges).toEqual([{ address: A("0x1"), coinType: "0x2::sui::SUI", amount: -1000n }])
+    expect([fx.checkpoint, fx.timestampMs]).toEqual([42n, 1_700_000_000_123n])
   })
 
   test("simulate fails loudly instead of truncating", async () => {

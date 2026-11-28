@@ -3,6 +3,7 @@
  */
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 import type { Address } from "./Address.ts"
 import type { RpcError } from "./RpcError.ts"
 
@@ -31,6 +32,21 @@ export interface FunctionTarget {
   readonly function: string
 }
 
+/** No object at the id. (An object that isn't a package is `RpcError` `INVALID_ARGUMENT`.) */
+export class PackageNotFound extends /* @__PURE__ */ Schema.TaggedError<PackageNotFound>()("PackageNotFound", {
+  packageId: Schema.String
+}) {
+  override get message(): string {
+    return `package ${this.packageId} not found`
+  }
+}
+
 export class Packages extends /* @__PURE__ */ Context.Service<Packages, {
   readonly getFunction: (target: FunctionTarget) => Effect.Effect<MoveFunction, RpcError>
+  /**
+   * The package's stored modules: name -> compiled module bytes.
+   * Read from the object, so it works when the publish transaction is pruned.
+   * Not cached (a package can be hundreds of KB).
+   */
+  readonly getModules: (packageId: Address) => Effect.Effect<ReadonlyMap<string, Uint8Array>, PackageNotFound | RpcError>
 }>()("@unconfirmed/sui/Packages") {}

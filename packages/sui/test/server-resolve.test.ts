@@ -313,7 +313,8 @@ const services = (resolve: Transactions.Transactions["Service"]["resolve"], call
       ...(resolve && { resolve: (tx: Transactions.UnresolvedTransaction) => Effect.suspend(() => (calls.push("resolve"), resolve(tx))) })
     }),
     Layer.succeed(Packages.Packages, {
-      getFunction: () => Effect.sync(() => (calls.push("getFunction"), functions.get(0)!))
+      getFunction: () => Effect.sync(() => (calls.push("getFunction"), functions.get(0)!)),
+      getModules: () => Effect.die("unused")
     }),
     Layer.succeed(Objects.Objects, {
       get: (id) =>
@@ -330,6 +331,7 @@ const services = (resolve: Transactions.Transactions["Service"]["resolve"], call
     Layer.succeed(Coins.Coins, {
       getBalance: (_o, coinType = TypeTag.SUI) =>
         Effect.sync(() => (calls.push("getBalance"), { coinType, total: 10n ** 12n, addressBalance: 10n ** 12n, coinBalance: 0n })),
+      listBalances: () => Stream.die("unused"),
       list: () => Stream.empty
     })
   )
