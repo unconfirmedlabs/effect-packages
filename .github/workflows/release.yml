@@ -1,0 +1,51 @@
+name: release
+
+# Publishes every package whose version in packages/effect-*/package.json is not on npm yet.
+# Bump versions, merge to main, and this job runs the checks and publishes what's new.
+# Authentication is npm trusted publishing (OIDC): no npm token is stored anywhere, and each
+# package's trusted publisher names this file and the `npm` environment. npm attaches provenance.
+on:
+  push:
+    branches: [main]
+    paths: ["packages/effect-*/package.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@^11.15.0
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run typecheck:strict
+      - run: bun test packages/
+      - run: bun run pack
+      # Dependencies first: bcs and quorum, then sui, then the packages built on it.
+      - name: Publish versions not yet on npm
+        run: |
+          for p in effect-bcs effect-quorum effect-sui effect-walrus effect-seal effect-sui-codegen; do
+            name=$(node -p "require('./.publish/$p/package.json').name")
+            version=$(node -p "require('./.publish/$p/package.json').version")
+            if [ -n "$(npm view "$name@$version" version 2>/dev/null)" ]; then
+              echo "$name@$version is already on npm"
+            else
+              npm publish ".publish/$p"
+            fi
+          done

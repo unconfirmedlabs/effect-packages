@@ -64,7 +64,8 @@ const manifest = (m: Manifest, dir: string): Manifest => {
     bugs: `${repo}/issues`,
     type: m.type,
     sideEffects: m.sideEffects,
-    ...(m.bin && { bin: Object.fromEntries(Object.entries(m.bin).map(([k, v]) => [k, (target(v) as any).default])) }),
+    // npm wants bin paths without the leading ./ (it rewrites them, and warns, on publish)
+    ...(m.bin && { bin: Object.fromEntries(Object.entries(m.bin).map(([k, v]) => [k, (target(v) as any).default.slice(2)])) }),
     exports: Object.fromEntries(Object.entries(m.exports).map(([k, v]) => [k, target(v)])),
     files: ["dist", "src", ...files],
     ...(m.dependencies && { dependencies: m.dependencies }),

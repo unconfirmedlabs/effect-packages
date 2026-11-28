@@ -672,7 +672,7 @@ Tests read their settings from environment variables only; nothing reads the Sui
 - a `package.json` whose exports name `dist/`, with `workspace:^` replaced by the real version;
 - a README and the LICENSE.
 
-Bump `version` in `packages/effect-*/package.json`, run `bun run pack`, then `npm publish .publish/<package>` for each package: `effect-bcs` and `effect-quorum` first, then `effect-sui`, then the rest.
+To release, bump `version` in `packages/effect-*/package.json` and merge to `main`. `.github/workflows/release.yml` then runs the checks and publishes every package whose version isn't on npm yet: `effect-bcs` and `effect-quorum` first, then `effect-sui`, then the rest. It authenticates with npm trusted publishing (OIDC) in the `npm` environment, so no npm token exists, and npm attaches provenance. To publish by hand instead, run `npm publish .publish/<package>` after `bun run pack`.
 
 ## Writing a scheme extension
 
