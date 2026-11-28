@@ -151,7 +151,7 @@ describe("Seal.encrypt / decrypt", () => {
       const e = failure(await w.run(Seal.encrypt({ packageId: PKG, id: ID, data, threshold: 2, ...c })))
       expect(e._tag).toBe("InvalidEncryption")
     }
-    expect(w.objects.gets.size).toBe(0)
+    expect(w.objects.gets().size).toBe(0)
   })
 
   test("NotFirstVersion for an upgraded package (encrypt and session); checkPackage: false skips; reads are cached", async () => {
@@ -174,8 +174,8 @@ describe("Seal.encrypt / decrypt", () => {
     expect(failure(notAPackage)._tag).toBe("ObjectNotFound")
     expect(failure(malformed)._tag).toBe("InvalidSessionKey")
     expect(Result.getOrThrow(EncryptedObject.parse(unchecked.encryptedObject)).packageId as string).toBe(PKG_V2)
-    expect(w.objects.gets.get(PKG_V2)).toBe(1)
-    expect(w.objects.gets.get(PKG)).toBe(1)
+    expect(w.objects.gets().get(PKG_V2)).toBe(1)
+    expect(w.objects.gets().get(PKG)).toBe(1)
   })
 
   test("ApprovalMismatch for another package and for an id the approval lacks; nothing is sent", async () => {
@@ -339,7 +339,7 @@ describe("Seal.decrypt: share consistency (C10)", () => {
     })))
     expect(r).toEqual(data)
     expect(w.to(2)).toBe(0)
-    expect(w.objects.gets.get(w.ids[2]!)).toBe(1)
+    expect(w.objects.gets().get(w.ids[2]!)).toBe(1)
   })
 
 })

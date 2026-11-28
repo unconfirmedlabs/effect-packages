@@ -22,7 +22,6 @@ import {
   Address,
   AddressAlias,
   Chain,
-  Coins,
   Ed25519,
   Events,
   Move,
@@ -33,10 +32,10 @@ import {
   TransactionData as T,
   TransactionJson,
   Transactions,
-  Tx,
-  TypeTag
+  Tx
 } from "../src/index.ts"
 import { RpcError } from "../src/RpcError.ts"
+import * as Testing from "../src/Testing.ts"
 import { type GrpcScript, fakeGrpc } from "./support.ts"
 
 const A = Address.normalize
@@ -368,54 +367,12 @@ interface Wallet {
   readonly coins: ReadonlyArray<bigint>
 }
 const coinRef = (i: number) => ({ objectId: A(`0xc0${i}`), version: 1n, digest: D(i + 1) })
-const coinsLayer = (w: Wallet, calls: Array<string> = []) =>
-  Layer.succeed(Coins.Coins, {
-    getBalance: (_owner, coinType = TypeTag.SUI) =>
-      Effect.sync(() => {
-        calls.push("getBalance")
-        const cb = coinType === TypeTag.SUI ? w.coins.reduce((s, c) => s + c, 0n) : 0n
-        const ab = coinType === TypeTag.SUI ? w.addressBalance : 0n
-        return { coinType, total: ab + cb, addressBalance: ab, coinBalance: cb }
-      }),
-    listBalances: () => Stream.die("unused"),
-    list: () =>
-      Stream.suspend(() => {
-        calls.push("list")
-        return Stream.fromIterable(w.coins.map((balance, i) => ({ ref: coinRef(i), coinType: TypeTag.SUI, balance })))
-      })
-  })
-const chainLayer = (calls: Array<string> = []) =>
-  Layer.succeed(Chain.Chain, {
-    info: Effect.sync(() => {
-      calls.push("info")
-      return { chainId: CHAIN, chain: "test", epoch: 812n, checkpointHeight: 1n }
-    }),
-    referenceGasPrice: Effect.sync(() => {
-      calls.push("price")
-      return 1000n
-    })
-  })
-const noObjects = Layer.mergeAll(
-  Layer.succeed(Objects.Objects, { get: (id) => Effect.fail(new Objects.ObjectNotFound({ objectId: id })), listOwned: () => Stream.empty }),
-  Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused"), getModules: () => Effect.die("unused") })
-)
-const budgetOf = (budget: bigint, calls: Array<string> = []) =>
-  Layer.succeed(Transactions.Transactions, {
-    simulate: () =>
-      Effect.sync(() => {
-        calls.push("simulate")
-        return {
-          effects: {
-            digest: "x",
-            status: { _tag: "Success" as const },
-            gasUsed: { computationCost: budget - 1_000_000n, storageCost: 0n, storageRebate: 0n, nonRefundableStorageFee: 0n },
-            changedObjects: []
-          },
-          returnValues: []
-        }
-      }),
-    execute: () => Effect.die("unused"),
-    get: () => Effect.die("unused")
+/** `sender` holds `w`; the dry run reports gas that makes a `budget` budget at the default 1000 MIST price. */
+const nodeFor = (w: Wallet, budget = 2_000_000n) =>
+  Testing.layer({
+    addressBalances: [{ owner: sender, amount: w.addressBalance }],
+    coins: w.coins.map((balance, i) => ({ owner: sender, balance, ...coinRef(i) })),
+    respond: () => ({ gasUsed: { computationCost: budget - 1_000_000n, storageCost: 0n, storageRebate: 0n, nonRefundableStorageFee: 0n } })
   })
 
 const SUI = 1_000_000_000n
@@ -425,19 +382,20 @@ const pay8Sui = Effect.gen(function*() {
 })
 
 describe("gas payment (CORE-1)", () => {
-  const build = (w: Wallet, recipe: Effect.Effect<unknown, Ptb.InvalidPureValue, Ptb.PtbBuilder>, calls: Array<string> = []) =>
-    Effect.runPromiseExit(
-      Tx.build(recipe, { sender }).pipe(Effect.provide(Layer.mergeAll(coinsLayer(w, calls), chainLayer(calls), noObjects, budgetOf(2_000_000n, calls))))
-    )
+  const build = (w: Wallet, recipe: Effect.Effect<unknown, Ptb.InvalidPureValue, Ptb.PtbBuilder>) =>
+    Effect.runPromise(Effect.gen(function*() {
+      const exit = yield* Effect.exit(Tx.build(recipe, { sender }))
+      return { exit, methods: (yield* Testing.Node.use((n) => n.requests)).map((r) => r.method) }
+    }).pipe(Effect.provide(nodeFor(w))))
 
   test("the devnet case: 8 SUI from the gas coin with coins of 6 + 3.998 SUI pays with both coins", async () => {
-    const exit = await build({ addressBalance: 0n, coins: [6n * SUI, 3_998_000_000n] }, pay8Sui)
+    const { exit } = await build({ addressBalance: 0n, coins: [6n * SUI, 3_998_000_000n] }, pay8Sui)
     if (exit._tag !== "Success") throw new Error(String(failureOf(exit)))
     expect(exit.value.gasData.payment.map((r) => r.objectId)).toEqual([coinRef(0).objectId, coinRef(1).objectId])
   })
 
   test("more than the wallet holds is InsufficientBalance before signing", async () => {
-    const exit = await build({ addressBalance: 0n, coins: [1n * SUI] }, pay8Sui)
+    const { exit } = await build({ addressBalance: 0n, coins: [1n * SUI] }, pay8Sui)
     expect(failureOf(exit)).toMatchObject({ _tag: "InsufficientBalance", required: 8n * SUI, available: 1n * SUI })
   })
 
@@ -446,17 +404,16 @@ describe("gas payment (CORE-1)", () => {
       const [c] = yield* Ptb.splitCoins(Ptb.gas, [yield* Ptb.u64(5n * SUI)])
       yield* Ptb.transferObjects([c!], yield* Ptb.address(recipient))
     })
-    const exit = await build({ addressBalance: 0n, coins: [5n * SUI] }, split)
+    const { exit } = await build({ addressBalance: 0n, coins: [5n * SUI] }, split)
     expect(failureOf(exit)).toMatchObject({ _tag: "InsufficientGas", required: 5n * SUI + 2_000_000n, available: 5n * SUI })
   })
 
   test("CORE-9: the SUI balance is read once, and price/info/balance/coins in one phase before the dry run", async () => {
-    const calls: Array<string> = []
-    const exit = await build({ addressBalance: 0n, coins: [6n * SUI, 3_998_000_000n] }, pay8Sui, calls)
+    const { exit, methods } = await build({ addressBalance: 0n, coins: [6n * SUI, 3_998_000_000n] }, pay8Sui)
     expect(exit._tag).toBe("Success")
-    expect(calls.filter((c) => c === "getBalance")).toHaveLength(1)
-    expect(calls.filter((c) => c === "list")).toHaveLength(1)
-    expect(calls.indexOf("simulate")).toBe(calls.length - 1)
+    expect(methods.filter((m) => m === "Coins.getBalance")).toHaveLength(1)
+    expect(methods.filter((m) => m === "Coins.list")).toHaveLength(1)
+    expect(methods.indexOf("Transactions.simulate")).toBe(methods.length - 1)
   })
 })
 
@@ -477,7 +434,7 @@ describe("typed failures in place of defects (CORE-7, CORE-8, CT-21)", () => {
     for (const r of bad) expect(failureOf(await recipe(r))).toMatchObject({ _tag: "InvalidPureValue" })
   })
 
-  const layers = Layer.mergeAll(coinsLayer({ addressBalance: 10n * SUI, coins: [] }), chainLayer(), noObjects, budgetOf(2_000_000n))
+  const layers = nodeFor({ addressBalance: 10n * SUI, coins: [] })
 
   test("Ptb.nested(intent, 1) is InvalidBalanceIntent", async () => {
     const r = Effect.gen(function*() {

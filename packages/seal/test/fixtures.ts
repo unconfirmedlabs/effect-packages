@@ -68,7 +68,7 @@ export const loadFixture = (network: "testnet" | "mainnet"): Fixture =>
 // Layers
 // -----------------------------------------------------------------------------
 
-/** `Objects` over fixtures and extra objects; `gets` counts reads by id (to test caching). */
+/** An in-memory node over fixtures and extra objects; `gets()` counts reads by id (to test caching). */
 export const objectsLayer = (fixtures: ReadonlyArray<Fixture>, overrides: ReadonlyArray<Objects.SuiObject> = []) =>
   Recorded.objectsLayer(fixtures.flatMap((f) => f.objects), overrides)
 

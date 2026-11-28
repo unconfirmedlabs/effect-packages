@@ -25,6 +25,7 @@ import {
   Verify
 } from "../src/index.ts"
 import { RpcError } from "../src/RpcError.ts"
+import * as Testing from "../src/Testing.ts"
 import { fakeGrpc, type GrpcScript } from "./support.ts"
 
 const A = Address.normalize
@@ -168,13 +169,8 @@ describe("CheckpointData.follow (review A6)", () => {
 
 describe("Transactions.waitFor (review A7)", () => {
   test("an exhausted schedule reports TransactionNotFound, not a timeout that never elapsed", async () => {
-    const svc = Transactions.Transactions.of({
-      simulate: () => Effect.die("no"),
-      execute: () => Effect.die("no"),
-      get: (digest) => Effect.fail(new Transactions.TransactionNotFound({ digest }))
-    })
     const e = await Effect.runPromise(
-      Transactions.waitFor("D", { retry: Schedule.recurs(2), timeout: "10 seconds" }).pipe(Effect.flip, Effect.provideService(Transactions.Transactions, svc))
+      Transactions.waitFor("D", { retry: Schedule.recurs(2), timeout: "10 seconds" }).pipe(Effect.flip, Effect.provide(Testing.layer()))
     )
     expect(e._tag).toBe("TransactionNotFound")
   })

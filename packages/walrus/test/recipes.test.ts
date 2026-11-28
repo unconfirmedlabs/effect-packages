@@ -20,7 +20,7 @@ import * as Encoding from "../src/Encoding.ts"
 import * as Messages from "../src/Messages.ts"
 import * as Recipes from "../src/Recipes.ts"
 import * as System from "../src/System.ts"
-import { loadFixture, objectsLayer, packagesLayer } from "./fixtures.ts"
+import { loadFixture, objectsLayer } from "./fixtures.ts"
 
 const fixture = loadFixture("testnet")
 /** Not the generated default: proves calls take the id from the system object. */
@@ -32,7 +32,7 @@ beforeAll(async () => {
   const live = await Effect.runPromise(
     Effect.flatMap(Effect.service(System.System), (s) => Effect.zip(s.state, s.walType)).pipe(
       Effect.provide(System.layer.pipe(
-        Layer.provide(Layer.mergeAll(objectsLayer(fixture).layer, packagesLayer(fixture), Config.layer(fixture.config)))
+        Layer.provide(Layer.mergeAll(objectsLayer(fixture).layer, Config.layer(fixture.config)))
       ))
     )
   )

@@ -1,11 +1,12 @@
 /**
  * Recorded chain objects: a JSON form of `Objects.SuiObject` (bigints as
- * strings, contents as base64) and an `Objects` layer over a set of them, so
+ * strings, contents as base64) and an in-memory node holding a set of them, so
  * chain-state code runs offline against real testnet and mainnet bytes.
  */
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Stream from "effect/Stream"
+import * as Testing from "@unconfirmed/sui/Testing"
 import type { Address } from "@unconfirmed/sui/Address"
 import * as Objects from "@unconfirmed/sui/Objects"
 import type { ObjectDigest } from "@unconfirmed/sui/TransactionData"
@@ -50,23 +51,18 @@ export const restoreObject = (r: RecordedObject): Objects.SuiObject => {
   }
 }
 
-/** `Objects` over recorded objects plus live overrides (later wins); `gets` counts reads by id (to test caching). */
-export const objectsLayer = (recorded: Iterable<RecordedObject>, overrides: ReadonlyArray<Objects.SuiObject> = []) => {
-  const byId = new Map<string, Objects.SuiObject>()
-  for (const r of recorded) byId.set(r.objectId, restoreObject(r))
-  for (const o of overrides) byId.set(o.objectId, o)
-  const gets = new Map<string, number>()
-  const layer = Layer.succeed(
-    Objects.Objects,
-    Objects.Objects.of({
-      get: (objectId) =>
-        Effect.suspend(() => {
-          gets.set(objectId, (gets.get(objectId) ?? 0) + 1)
-          const o = byId.get(objectId)
-          return o === undefined ? Effect.fail(new Objects.ObjectNotFound({ objectId })) : Effect.succeed(o)
-        }),
-      listOwned: () => Stream.empty
-    })
-  )
-  return { layer, gets, byId }
+/**
+ * An in-memory node (`@unconfirmed/sui/Testing`) holding recorded objects plus
+ * overrides (later wins), shared by every run of `layer`. `gets()` counts
+ * `Objects.get` calls by id so far (to test caching), `requests()` is the log.
+ */
+export const objectsLayer = (recorded: Iterable<RecordedObject>, overrides: ReadonlyArray<Objects.SuiObject> = [], seed: Testing.Seed = {}) => {
+  const context = Effect.runSync(Testing.make({ ...seed, objects: [...[...recorded].map(restoreObject), ...overrides] }))
+  const requests = () => Effect.runSync(Context.get(context, Testing.Node).requests)
+  const gets = () => {
+    const counts = new Map<string, number>()
+    for (const r of requests()) if (r.method === "Objects.get") for (const id of r.args as ReadonlyArray<string>) counts.set(id, (counts.get(id) ?? 0) + 1)
+    return counts
+  }
+  return { layer: Layer.succeedContext(context), gets, requests }
 }

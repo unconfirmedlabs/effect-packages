@@ -10,9 +10,8 @@ import { Transaction } from "@mysten/sui/transactions"
 import { base58 } from "@scure/base"
 import { describe, expect, test } from "bun:test"
 import * as Effect from "effect/Effect"
-import * as Layer from "effect/Layer"
-import * as Stream from "effect/Stream"
-import { Address, Coins, Objects, Packages, Ptb, Resolve, TransactionData as T, TransactionJson, TypeTag } from "../src/index.ts"
+import { Address, Objects, Ptb, Resolve, TransactionData as T, TransactionJson, TypeTag } from "../src/index.ts"
+import * as Testing from "../src/Testing.ts"
 import { toB64 } from "./support.ts"
 // Not exported publicly by @mysten/sui; loaded from its shipped build (untyped).
 const coreResolverModule = "../../../node_modules/@mysten/sui/dist/client/core-resolver.mjs"
@@ -127,29 +126,15 @@ const objectsOf = (w: World): Map<string, FakeObject> => {
   return out
 }
 
-/** Our services, scripted. */
-const world = (w: World) => {
-  const objects = objectsOf(w)
-  return Layer.mergeAll(
-    Layer.succeed(Objects.Objects, {
-      get: (objectId) => {
-        const o = objects.get(objectId)
-        return o ? Effect.succeed({ ...o, previousTransaction: undefined }) : Effect.fail(new Objects.ObjectNotFound({ objectId }))
-      },
-      listOwned: () => Stream.empty
-    }),
-    Layer.succeed(Packages.Packages, { getFunction: () => Effect.succeed({ isEntry: false, parameters: [] }), getModules: () => Effect.die("unused") }),
-    Layer.succeed(Coins.Coins, {
-      getBalance: (owner, coinType = TypeTag.SUI) => {
-        const t = TypeTag.normalizeString(coinType)
-        const ab = w.balances[`${owner}|${t}`] ?? 0n
-        return Effect.succeed({ coinType: t, total: ab, addressBalance: ab, coinBalance: 0n })
-      },
-      listBalances: () => Stream.empty,
-      list: () => Stream.empty
+/** Our services: the world on an in-memory node. */
+const world = (w: World) =>
+  Testing.layer({
+    objects: [...objectsOf(w).values()],
+    addressBalances: Object.entries(w.balances).map(([key, amount]) => {
+      const [owner, coinType] = key.split("|") as [string, string]
+      return { owner, coinType, amount }
     })
-  )
-}
+  })
 
 /** The same world as a @mysten/sui client. */
 const mystenClient = (w: World) => {

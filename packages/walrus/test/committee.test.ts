@@ -13,14 +13,14 @@ import * as Address from "@unconfirmed/sui/Address"
 import * as Committee from "../src/Committee.ts"
 import * as Config from "../src/Config.ts"
 import * as System from "../src/System.ts"
-import { type Fixture, loadFixture, objectsLayer, packagesLayer, restoreObject } from "./fixtures.ts"
+import { type Fixture, loadFixture, objectsLayer, restoreObject } from "./fixtures.ts"
 
 const testnet = loadFixture("testnet")
 const mainnet = loadFixture("mainnet")
 
 const layers = (fixture: Fixture, overrides: Parameters<typeof objectsLayer>[1] = []) => {
   const objects = objectsLayer(fixture, overrides)
-  const deps = Layer.mergeAll(objects.layer, packagesLayer(fixture), Config.layer(fixture.config))
+  const deps = Layer.mergeAll(objects.layer, Config.layer(fixture.config))
   return {
     gets: objects.gets,
     layer: Layer.mergeAll(System.layer, Committee.layer()).pipe(Layer.provideMerge(deps))
@@ -68,7 +68,7 @@ describe("System", () => {
 
   test("state is reused for STATE_TTL, then read again (prices and the package id move); refresh reads at once", async () => {
     const { gets, layer } = layers(testnet)
-    const reads = () => gets.get(Config.testnet.systemObjectId)
+    const reads = () => gets().get(Config.testnet.systemObjectId)
     await Effect.runPromise(
       Effect.gen(function*() {
         const system = yield* Effect.service(System.System)
@@ -123,15 +123,15 @@ describe("Committees", () => {
         const committees = yield* Effect.service(Committee.Committees)
         yield* committees.get
         yield* committees.get
-        expect(gets.get(Config.testnet.stakingObjectId)).toBe(1)
+        expect(gets().get(Config.testnet.stakingObjectId)).toBe(1)
         yield* TestClock.adjust("59 seconds")
         yield* committees.get
-        expect(gets.get(Config.testnet.stakingObjectId)).toBe(1)
+        expect(gets().get(Config.testnet.stakingObjectId)).toBe(1)
         yield* TestClock.adjust("2 seconds")
         yield* committees.get
-        expect(gets.get(Config.testnet.stakingObjectId)).toBe(2)
+        expect(gets().get(Config.testnet.stakingObjectId)).toBe(2)
         yield* committees.refresh
-        expect(gets.get(Config.testnet.stakingObjectId)).toBe(3)
+        expect(gets().get(Config.testnet.stakingObjectId)).toBe(3)
       }).pipe(Effect.provide(layer), Effect.provide(TestClock.layer()))
     )
   })

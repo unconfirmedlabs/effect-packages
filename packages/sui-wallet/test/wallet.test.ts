@@ -6,24 +6,20 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { verifyPersonalMessageSignature, verifyTransactionSignature } from "@mysten/sui/verify"
 import { base58 } from "@scure/base"
 import { describe, expect, test } from "bun:test"
-import { Effect, Fiber, Layer, Result, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Result, Stream } from "effect"
 import {
   Address,
-  Chain,
-  Coins,
   Ed25519,
   Hash,
-  Objects,
-  Packages,
   Ptb,
   Resolve,
   SignatureScheme,
   TransactionData as T,
-  Transactions,
   Tx,
   TypeTag,
   Verify
 } from "@unconfirmed/sui"
+import * as Testing from "@unconfirmed/sui/Testing"
 import { Wallet } from "../src/index.ts"
 import { fakeWallet, type FakeWalletOptions } from "@unconfirmed/test-support/wallet"
 
@@ -47,23 +43,16 @@ const connected = (options: Partial<FakeWalletOptions> = {}) =>
     return { fake, wallet }
   })
 
-/** A Transactions service that records what it was asked to execute. */
+/** An in-memory node; `executed()` is what it was asked to execute. */
 const recorder = () => {
-  const executed: Array<{ bytes: Uint8Array; signatures: ReadonlyArray<Uint8Array> }> = []
-  const layer = Layer.succeed(Transactions.Transactions, {
-    simulate: () => Effect.die("no simulation expected"),
-    get: () => Effect.die("no reads expected"),
-    execute: (bytes, signatures) => {
-      executed.push({ bytes, signatures })
-      return Effect.succeed({
-        digest: Hash.transactionDigest(bytes),
-        status: { _tag: "Success" },
-        gasUsed: { computationCost: 1n, storageCost: 0n, storageRebate: 0n, nonRefundableStorageFee: 0n },
-        changedObjects: []
-      })
-    }
-  })
-  return { executed, layer }
+  const node = Effect.runSync(Testing.make())
+  const requests = () => Effect.runSync(Context.get(node, Testing.Node).requests)
+  const executed = () =>
+    requests().filter((r) => r.method === "Transactions.execute").map((r) => ({
+      bytes: r.args[0] as Uint8Array,
+      signatures: r.args[1] as ReadonlyArray<Uint8Array>
+    }))
+  return { layer: Layer.succeedContext(node), requests, executed }
 }
 
 const schemes = SignatureScheme.SignatureSchemes.layer(Ed25519.scheme)
@@ -208,7 +197,7 @@ describe("the wallet as a TransactionSigner", () => {
     }).pipe(Effect.provide(rec.layer)))
     expect(fake.received).toHaveLength(1)
     expect(JSON.parse(fake.received[0]!).digest).toBe(Hash.transactionDigest(T.encode(data)))
-    const [{ bytes, signatures }] = rec.executed as [typeof rec.executed[0]]
+    const [{ bytes, signatures }] = rec.executed() as [ReturnType<typeof rec.executed>[0]]
     expect(bytes).toEqual(T.encode(data))
     // The signature verifies with our registry and with @mysten/sui.
     const verified = await Effect.runPromise(Verify.transaction(bytes, signatures[0]!, { address: signer.address }).pipe(Effect.provide(schemes)))
@@ -218,20 +207,15 @@ describe("the wallet as a TransactionSigner", () => {
 
   test("Tx.run with every gas term fixed looks nothing up; the sender defaults to the wallet account", async () => {
     const rec = recorder()
-    const unused = Layer.mergeAll(
-      Layer.succeed(Objects.Objects, { get: () => Effect.die("unused"), listOwned: () => Stream.die("unused") }),
-      Layer.succeed(Packages.Packages, { getFunction: () => Effect.die("unused"), getModules: () => Effect.die("unused") }),
-      Layer.succeed(Coins.Coins, { getBalance: () => Effect.die("unused"), listBalances: () => Stream.die("unused"), list: () => Stream.die("unused") }),
-      Layer.succeed(Chain.Chain, { info: Effect.die("unused"), referenceGasPrice: Effect.die("unused") })
-    )
     const fixedGas = { gasPrice: 1000n, gasBudget: 5_000_000n, payment: Resolve.fixed([gasRef]), expiration: { _tag: "None" } } as const
     const effects = await run(Effect.gen(function*() {
       const { wallet } = yield* connected({ name: "Runs" })
       const signer = yield* Wallet.signer(wallet, { chain })
       return yield* Tx.run(pay, { signer, ...fixedGas })
-    }).pipe(Effect.provide(Layer.merge(rec.layer, unused))))
+    }).pipe(Effect.provide(rec.layer)))
     expect(effects.status._tag).toBe("Success")
-    expect(Result.getOrThrow(T.decode(rec.executed[0]!.bytes)).sender).toBe(A(keypair.toSuiAddress()))
+    expect(rec.requests().map((r) => r.method)).toEqual(["Transactions.execute"])
+    expect(Result.getOrThrow(T.decode(rec.executed()[0]!.bytes)).sender).toBe(A(keypair.toSuiAddress()))
   })
 
   test("a wallet that changes the transaction: we execute exactly the bytes it signed", async () => {
@@ -243,7 +227,7 @@ describe("the wallet as a TransactionSigner", () => {
       yield* Tx.execute(data, signer)
       return data
     }).pipe(Effect.provide(rec.layer)))
-    const { bytes, signatures } = rec.executed[0]!
+    const { bytes, signatures } = rec.executed()[0]!
     expect(bytes).not.toEqual(T.encode(ours))
     const theirs = Result.getOrThrow(T.decode(bytes))
     expect(theirs.gasData.budget).toBe(7_777_777n)
@@ -259,7 +243,7 @@ describe("the wallet as a TransactionSigner", () => {
       const data = yield* resolvedFor(signer.address, sponsor.address)
       yield* Tx.execute(data, [sponsor, signer])
     }).pipe(Effect.provide(rec.layer)))
-    const { bytes, signatures } = rec.executed[0]!
+    const { bytes, signatures } = rec.executed()[0]!
     const who = await Effect.runPromise(
       Effect.forEach(signatures, (s) => Verify.transaction(bytes, s)).pipe(Effect.provide(schemes))
     )
@@ -275,7 +259,7 @@ describe("the wallet as a TransactionSigner", () => {
         const signer = yield* Wallet.signer(wallet, { chain })
         const data = yield* resolvedFor(signer.address, sponsor.address)
         return yield* Effect.flip(Tx.execute(data, [sponsor, signer]))
-      }).pipe(Effect.provide(rec.layer))).then((e) => ({ e, executed: rec.executed.length }))
+      }).pipe(Effect.provide(rec.layer))).then((e) => ({ e, executed: rec.executed().length }))
     }
     const budget = await attempt("Budget", (tx) => tx.setGasBudget(6_000_000))
     expect(budget.e).toMatchObject({ _tag: "SigningError", reason: "failed" })
@@ -308,7 +292,7 @@ describe("the wallet as a TransactionSigner", () => {
       return yield* Effect.flip(Tx.execute(yield* resolvedFor(signer.address), signer))
     }).pipe(Effect.provide(rec.layer)))
     expect(e).toMatchObject({ _tag: "SigningError", reason: "rejected" })
-    expect(rec.executed).toHaveLength(0)
+    expect(rec.executed()).toHaveLength(0)
   })
 
   test("signer needs sui:signTransaction, a supported chain and a connected account", () =>

@@ -150,10 +150,10 @@ describe("KeyServer.read: recorded objects", () => {
   test("reads the object and both candidate fields in one round, nothing else", async () => {
     const objects = objectsLayer([testnet])
     await Effect.runPromise(KeyServer.read(ID.mysten1).pipe(Effect.provide(objects.layer)))
-    expect(new Set(objects.gets.keys())).toEqual(
-      new Set([ID.mysten1, KeyServer.fieldId(ID.mysten1, 2), KeyServer.fieldId(ID.mysten1, 1)])
-    )
-    for (const n of objects.gets.values()) expect(n).toBe(1)
+    const [batch, ...rest] = objects.requests()
+    expect(rest).toEqual([])
+    expect(batch?.args).toHaveLength(3)
+    expect(new Set(batch?.args)).toEqual(new Set([ID.mysten1, KeyServer.fieldId(ID.mysten1, 2), KeyServer.fieldId(ID.mysten1, 1)]))
   })
 })
 
@@ -249,14 +249,14 @@ describe("KeyServers.layer", () => {
     await Effect.runPromise(
       Effect.all([get(ID.mysten1), get(ID.mysten1.toUpperCase().replace("0X", "0x") as Address)]).pipe(Effect.provide(layer))
     )
-    expect(gets.get(ID.mysten1)).toBe(1)
+    expect(gets().get(ID.mysten1)).toBe(1)
   })
 
   test("concurrent gets make one read", async () => {
     const { gets, layer } = servicesLayer([Config.testnet.mysten1])
     await Effect.runPromise(Effect.all(Array.from({ length: 10 }, () => get(ID.mysten1)), { concurrency: "unbounded" }).pipe(Effect.provide(layer)))
-    expect(gets.get(ID.mysten1)).toBe(1)
-    expect(gets.get(KeyServer.fieldId(ID.mysten1, 1))).toBe(1)
+    expect(gets().get(ID.mysten1)).toBe(1)
+    expect(gets().get(KeyServer.fieldId(ID.mysten1, 1))).toBe(1)
   })
 
   test("TTL and refresh under TestClock", async () => {
@@ -267,14 +267,14 @@ describe("KeyServers.layer", () => {
         yield* ks.get(ID.mysten1)
         yield* TestClock.adjust("59 seconds")
         yield* ks.get(ID.mysten1)
-        expect(gets.get(ID.mysten1)).toBe(1)
+        expect(gets().get(ID.mysten1)).toBe(1)
         yield* TestClock.adjust("2 seconds")
         yield* ks.get(ID.mysten1)
-        expect(gets.get(ID.mysten1)).toBe(2)
+        expect(gets().get(ID.mysten1)).toBe(2)
         yield* ks.refresh(ID.mysten1)
-        expect(gets.get(ID.mysten1)).toBe(3)
+        expect(gets().get(ID.mysten1)).toBe(3)
         yield* ks.get(ID.mysten1)
-        expect(gets.get(ID.mysten1)).toBe(3)
+        expect(gets().get(ID.mysten1)).toBe(3)
       }).pipe(Effect.provide(layer), Effect.provide(TestClock.layer()))
     )
   })
@@ -289,7 +289,7 @@ describe("KeyServers.layer", () => {
         expect(Exit.isFailure(yield* Effect.exit(ks.get(id)))).toBe(true)
       }).pipe(Effect.provide(layer))
     )
-    expect(gets.get(id)).toBe(2)
+    expect(gets().get(id)).toBe(2)
   })
 })
 
@@ -353,7 +353,7 @@ describe("KeyServers.layerVerified", () => {
         yield* Effect.flatMap(Effect.service(KeyServer.KeyServers), (s) => s.refresh(ID.mysten1))
       }).pipe(Effect.provide(layer), Effect.provide(TestClock.layer()))
     )
-    expect(gets.get(ID.mysten1)).toBe(3) // reloaded twice (URLs may change)
+    expect(gets().get(ID.mysten1)).toBe(3) // reloaded twice (URLs may change)
     expect(calls.get(ID.mysten1)).toBe(1) // proved once
   })
 

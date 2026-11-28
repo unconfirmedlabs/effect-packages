@@ -5,11 +5,11 @@
  */
 import { bcs as mysten } from "@mysten/sui/bcs"
 import { deriveDynamicFieldID, deriveObjectID } from "@mysten/sui/utils"
-import { base58 } from "@scure/base"
 import { Bcs } from "@unconfirmed/bcs"
 import { describe, expect, test } from "bun:test"
 import { Effect, Schedule, Stream } from "effect"
-import { Address, AddressAlias, CheckpointData, DynamicFields, Ed25519, Events, Objects, Transactions, TypeTag } from "../src/index.ts"
+import { Address, AddressAlias, CheckpointData, DynamicFields, Ed25519, Events, Transactions, TypeTag } from "../src/index.ts"
+import * as Testing from "../src/Testing.ts"
 
 const A = Address.normalize
 
@@ -61,12 +61,8 @@ describe("derived objects and address aliases", () => {
 
   test("AddressAlias.get decodes the set, an address without one is its own alias, checkedSigner refuses a key outside it", async () => {
     const contents = Bcs.encodeSync(AddressAlias.AddressAliases)({ id: aliasesId, aliases: { contents: [owner, alias] } })
-    const objects = Objects.Objects.of({
-      get: (id) =>
-        id === aliasesId
-          ? Effect.succeed({ objectId: id, version: 2n, digest: base58.encode(new Uint8Array(32)) as any, owner: { _tag: "ConsensusAddressOwner", startVersion: 1n, address: owner }, type: "0x2::address_alias::AddressAliases", contents, previousTransaction: undefined })
-          : Effect.fail(new Objects.ObjectNotFound({ objectId: id })),
-      listOwned: () => Stream.empty
+    const node = Testing.layer({
+      objects: [{ objectId: aliasesId, type: "0x2::address_alias::AddressAliases", owner: { _tag: "ConsensusAddressOwner", startVersion: 1n, address: owner }, contents }]
     })
     const stranger = await Effect.runPromise(Ed25519.fromSecretKey(new Uint8Array(32).fill(5)))
     const [set, none, allowed, refused] = await Effect.runPromise(Effect.all([
@@ -74,7 +70,7 @@ describe("derived objects and address aliases", () => {
       AddressAlias.get(alias),
       AddressAlias.allows(owner, alias),
       Effect.flip(AddressAlias.checkedSigner(owner, stranger))
-    ]).pipe(Effect.provideService(Objects.Objects, objects)))
+    ]).pipe(Effect.provide(node)))
     expect(set).toEqual({ address: owner, enabled: true, aliases: [owner, alias], objectId: aliasesId })
     expect(none).toMatchObject({ enabled: false, aliases: [alias] })
     expect(allowed).toBe(true)
@@ -149,10 +145,7 @@ describe("Transactions.waitFor", () => {
   })
 
   test("times out with a typed error", async () => {
-    const svc = txs((digest) => Effect.fail(new Transactions.TransactionNotFound({ digest })))
-    const e = await Effect.runPromise(
-      Transactions.waitFor("D", { timeout: "300 millis" }).pipe(Effect.flip, Effect.provideService(Transactions.Transactions, svc))
-    )
+    const e = await Effect.runPromise(Transactions.waitFor("D", { timeout: "300 millis" }).pipe(Effect.flip, Effect.provide(Testing.layer())))
     expect(e._tag).toBe("TransactionWaitTimeout")
   })
 
